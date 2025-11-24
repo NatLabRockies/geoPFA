@@ -18,9 +18,9 @@ class GeospatialDataPlotters:
     @staticmethod
     def geo_plot(gdf,col,units,title,area_outline=None,overlay=None,xlabel='default',ylabel='default',\
         cmap='jet',xlim=None,ylim=None,extent=None,basemap=False,markersize=15,figsize=(10, 10),vmin=None,vmax=None):
-        """Plots data using gdf.plot(). Preserves geometry, but does not look 
+        """Plots data using gdf.plot(). Preserves geometry, but does not look
         smoothe.
-        
+
         Parameters
         ----------
         gdf : pandas geodataframe
@@ -42,7 +42,7 @@ class GeospatialDataPlotters:
         xlim, ylim : tuple
             Optional, limits to use for x and y axes.
         extent : list
-            List of length 4 containing the extent (i.e., bounding box) to use in 
+            List of length 4 containing the extent (i.e., bounding box) to use in
             lieau of xlim and ylim, in this order: [x_min, y_min, x_max, y_max].
         basemap : bool
             Option to add a basemap, defaults to False.
@@ -91,7 +91,7 @@ class GeospatialDataPlotters:
         plt.grid(True)
         plt.tight_layout()
         plt.show()
-    
+
     @staticmethod
     def geo_plot_3d(
         gdf, col, units, title,
@@ -373,7 +373,7 @@ class GeospatialDataPlotters:
 
     @staticmethod
     def plot_zoom_in(gdf, col, units, title, xlim, ylim, figsize, markersize, xlabel, ylabel, cmap):
-        """Method to plot zoomed in version of geopfa maps, using xlim and ylim to determine the extent. 
+        """Method to plot zoomed in version of geopfa maps, using xlim and ylim to determine the extent.
         Also adds a basemap."""
         fig, ax = plt.subplots(figsize=figsize)
         if col is None or str(col).lower() == "none":
@@ -395,7 +395,7 @@ class GeospatialDataPlotters:
             ax.set_xlim(xlim)
         if ylim is not None:
             ax.set_ylim(ylim)
-        
+
         plt.xlabel(xlabel)
         plt.ylabel(ylabel)
         plt.title(title)
@@ -406,7 +406,7 @@ class GeospatialDataPlotters:
 
     @staticmethod
     def raster_plot(gdf, col, units, layer):
-        """Plots data using pcolormesh. Creates a smoother plot, but does not 
+        """Plots data using pcolormesh. Creates a smoother plot, but does not
         preserve geometry in plot"""
         x = gdf.geometry.x
         y = gdf.geometry.y
@@ -417,11 +417,11 @@ class GeospatialDataPlotters:
         yi = np.linspace(y.min(), y.max(), 500)
         xi, yi = np.meshgrid(xi, yi)
 
-        # interpolate 
+        # interpolate
         zi = griddata((x, y), z, (xi, yi), method='linear')
 
         fig, ax = plt.subplots(figsize=(10, 10))
-        c = ax.pcolormesh(xi, yi, zi, shading='auto', cmap='jet') 
+        c = ax.pcolormesh(xi, yi, zi, shading='auto', cmap='jet')
         fig.colorbar(c, ax=ax, label=units)
 
         plt.title(f'{layer}: heatmap')
@@ -430,5 +430,3 @@ class GeospatialDataPlotters:
         plt.grid(True)
         plt.tight_layout()
         plt.show()
-
-

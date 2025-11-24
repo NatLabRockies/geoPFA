@@ -6,10 +6,10 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = 'Geothermal Play Fairway Analysis'
-copyright = '2025, Nicole Taverna'
-author = 'Nicole Taverna'
-release = '0.1.0'
+project = "Geothermal Play Fairway Analysis"
+copyright = "2025, Nicole Taverna"
+author = "Nicole Taverna"
+release = "0.1.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -27,12 +27,12 @@ intersphinx_mapping = {
     "matplotlib": ("https://matplotlib.org/stable", None),
 }
 
-templates_path = ['_templates']
+templates_path = ["_templates"]
 exclude_patterns = []
 
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-html_theme = 'alabaster'
-html_static_path = ['_static']
+html_theme = "alabaster"
+html_static_path = ["_static"]
