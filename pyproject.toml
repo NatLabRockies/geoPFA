@@ -93,6 +93,9 @@ repository = "https://github.com/NREL/geoPFA"
 [tool.hatch.build.hooks.vcs]
 version-file = "geopfa/_version.py"
 
+[tool.hatch.build.targets.wheel]
+packages = ["geopfa"]
+
 [tool.hatch.version]
 source = "vcs"
 tag-pattern = "v(?P<version>\\d+\\.\\d+\\.\\d+)"
