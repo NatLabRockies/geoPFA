@@ -14,6 +14,8 @@ import pyproj
 import rasterio
 from itertools import starmap
 
+from geopfa.processing.Processing import convert_z_measurements
+
 
 class GeospatialDataReaders:
     """Read geospatial data in various formats"""
@@ -301,8 +303,12 @@ class GeospatialDataReaders:
                 values = np.concatenate([values, pad])
 
         # Optional vertical conversion (expects point Zs in geometry)
-        if convert_z_after and z_meas is not None and target_z_meas is not None:
-            from geopfa.processing.Processing import convert_z_measurements
+        if (
+            convert_z_after
+            and z_meas is not None
+            and target_z_meas is not None
+        ):
+
             well_gdf = convert_z_measurements(well_gdf, z_meas, target_z_meas)
 
         return well_gdf, values
