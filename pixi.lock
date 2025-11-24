@@ -8365,50 +8365,50 @@ packages:
   timestamp: 1759763364111
 - pypi: ./
   name: geopfa
-  version: 0.0.12.dev0+g7e2d1bf82.d20251030
-  sha256: 1ad9c757f9f38870ad7ed0a5c6ad06c4a9d7bd6fb435f5734607ada9ba595d58
+  version: 0.0.13.dev6+g2d660d6ba.d20251124
+  sha256: 1439e0943d66b3764b521505760b7630336af3aaffa4aac1fd7a30986dd2d8a7
   requires_dist:
+  - contextily>=1.6.2
+  - geopandas>=1.0
+  - geostatspy>=0.0.72,<0.0.73
+  - gpy>=1.13.2
   - iapws>=1.5.4
   - matplotlib>=3.1
   - networkx>=2.3
   - notebook
+  - nrel-rex>=0.2.42
   - numpy>=1.16
   - pandas>=2.0
-  - psutil>=6.1.0
-  - pytest>=5.2
-  - pyarrow>=21.0.0,<22
-  - pooch>=1.8.2,<2
-  - seaborn>=0.13.2
-  - geopandas>=1.0
-  - rasterio>=1.4.2
-  - nrel-rex>=0.2.42
-  - shapely>=2.0.6
-  - scipy>=1.11
-  - contextily>=1.6.2
   - pathos>=0.3.3
+  - pooch>=1.8.2,<2
+  - psutil>=6.1.0
+  - pyarrow>=21.0.0,<22
   - pykrige>=1.7
-  - geostatspy>=0.0.72,<0.0.73
-  - gpy>=1.13.2
+  - pytest>=5.2
+  - rasterio>=1.4.2
+  - scipy>=1.11
+  - seaborn>=0.13.2
+  - shapely>=2.0.6
   - ipython>=8.29.0 ; extra == 'dev'
-  - twine>=5.1 ; extra == 'dev'
   - pre-commit>=4.0 ; extra == 'dev'
+  - twine>=5.1 ; extra == 'dev'
   - ghp-import>=2.1 ; extra == 'doc'
-  - numpydoc>=1.6 ; extra == 'doc'
   - make>=0.1 ; extra == 'doc'
   - myst-parser>=3.0.1 ; extra == 'doc'
+  - numpydoc>=1.6 ; extra == 'doc'
   - pandoc>=2.3 ; extra == 'doc'
   - pydata-sphinx-theme>=0.15 ; extra == 'doc'
-  - sphinx>=8.1.3,<9 ; extra == 'doc'
   - sphinx-click>=5.1 ; extra == 'doc'
   - sphinx-copybutton>=0.5 ; extra == 'doc'
   - sphinx-tabs>=3.4 ; extra == 'doc'
-  - pytest>=7.0 ; extra == 'test'
+  - sphinx>=8.1.3,<9 ; extra == 'doc'
+  - hypothesis>=6.0 ; extra == 'test'
   - pytest-cases>=3.8.6,<4 ; extra == 'test'
   - pytest-cov>=3.0 ; extra == 'test'
   - pytest-profiling>=1.7.0,<2 ; extra == 'test'
   - pytest-xdist>=3.0 ; extra == 'test'
+  - pytest>=7.0 ; extra == 'test'
   - tox>=4.0 ; extra == 'test'
-  - hypothesis>=6.0 ; extra == 'test'
   requires_python: '>=3.10'
   editable: true
 - conda: https://conda.anaconda.org/conda-forge/noarch/geopy-2.4.1-pyhd8ed1ab_2.conda
