@@ -575,6 +575,7 @@ class Exclusions:
 
 class Processing:
     """Class of functions for use in processing data into models"""
+
     @staticmethod
     def interpolate_points_3d(
         pfa,
@@ -662,7 +663,6 @@ class Processing:
 
         return pfa
 
-   
     @staticmethod
     def fast_interpolate_points_3d(
         pfa,
@@ -676,7 +676,7 @@ class Processing:
         method="linear",             # "linear" or "nearest"
         build_gdf=True,              # set False to skip heavy GeoDataFrame creation
         chunk_points=2_000_000,      # max # of grid points per chunk to evaluate
-        use_representative_point=True, # faster/safer than centroid for polygons
+        use_representative_point=True,  # faster/safer than centroid for polygons
         dtype=np.float32,            # memory saver vs float64
     ):
         """
@@ -778,10 +778,9 @@ class Processing:
                 dists, locs = interp_obj.query(pts, k=1, workers=-1)
                 vals = values[locs].astype(dtype, copy=False)
                 return vals
-            else:
-                vals = interp_obj(pts)
-                # interp_obj returns float64 by default; cast down
-                return vals.astype(dtype, copy=False)
+            vals = interp_obj(pts)
+            # interp_obj returns float64 by default; cast down
+            return vals.astype(dtype, copy=False)
 
         # Chunked evaluation to keep peak memory in check
         t2 = time.time()

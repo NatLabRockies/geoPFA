@@ -116,8 +116,6 @@ class GeospatialDataReaders:
             gdf.set_crs(crs, inplace=True)
 
         return gdf
-    
-    
 
     @staticmethod
     def read_raster(path):
@@ -174,7 +172,7 @@ class GeospatialDataReaders:
         gdf.set_crs(crs, inplace=True)
 
         return gdf
-    
+
     @staticmethod
     def read_well_path_csv(
         csv_path,
