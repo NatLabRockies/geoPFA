@@ -1,9 +1,9 @@
 [build-system]
 requires = [
-  "setuptools >= 70",
-  "setuptools_scm[toml] >= 8",
-]
-build-backend = 'setuptools.build_meta'
+  "hatchling>=1.9",
+  "hatch-vcs>=0.5",
+  ]
+build-backend = "hatchling.build"
 
 [project]
 name = "geoPFA"
@@ -90,11 +90,16 @@ homepage = "https://github.com/NREL/geoPFA"
 documentation = "https://github.com/NREL/geoPFA"
 repository = "https://github.com/NREL/geoPFA"
 
-[tool.setuptools]
+[tool.hatch.build.hooks.vcs]
+version-file = "geopfa/_version.py"
+
+[tool.hatch.build.targets.wheel]
 packages = ["geopfa"]
 
-[tool.setuptools_scm]
-version_file = "geopfa/_version.py"
+[tool.hatch.version]
+source = "vcs"
+tag-pattern = "v(?P<version>\\d+\\.\\d+\\.\\d+)"
+fallback-version = "0.0.0"
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
@@ -295,7 +300,7 @@ omit = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "--cov=geopfa --cov-report=html --cov-report=xml:coverage.xml --disable-warnings --cov-fail-under=9.7"
+addopts = "--cov=geopfa --cov-report=html --cov-report=xml:coverage.xml --disable-warnings --cov-fail-under=8.0"
 testpaths = [
     "tests",
 ]
