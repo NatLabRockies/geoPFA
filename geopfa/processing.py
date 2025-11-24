@@ -706,7 +706,7 @@ class Processing:
         y = gdf.geometry.y.to_numpy(dtype=dtype, copy=False)
 
         # --- z extraction (vectorized when Shapely 2 is present) ---
-        geoms = gdf.geometry.values  # a GeometryArray
+        geoms = gdf.geometry.to_numpy()  # a GeometryArray
 
         if _HAS_GET_Z:
             # Shapely 2.x: just pass the array; no ".data"
