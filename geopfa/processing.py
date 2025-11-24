@@ -1282,7 +1282,7 @@ class Processing:
             Global strike azimuth in degrees, clockwise from North.
             If None or used with dip=None, extrusion is vertical.
         dip : float, optional
-            Global dip angle in degrees from horizontal (0–90).
+            Global dip angle in degrees from horizontal (0 to 90).
             If None or dip ~ 90°, extrusion is vertical.
         target_z_meas : any, optional
             Stored in layer_dict["z_meas"] for downstream use.
