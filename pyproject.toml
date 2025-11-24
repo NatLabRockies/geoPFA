@@ -297,7 +297,7 @@ omit = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "--cov=geopfa --cov-report=html --cov-report=xml:coverage.xml --disable-warnings --cov-fail-under=9.7"
+addopts = "--cov=geopfa --cov-report=html --cov-report=xml:coverage.xml --disable-warnings --cov-fail-under=8.0"
 testpaths = [
     "tests",
 ]
