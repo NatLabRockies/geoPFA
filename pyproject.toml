@@ -1,9 +1,9 @@
 [build-system]
 requires = [
-  "setuptools >= 70",
-  "setuptools_scm[toml] >= 8",
-]
-build-backend = 'setuptools.build_meta'
+  "hatchling>=1.9",
+  "hatch-vcs>=0.5"
+  ]
+build-backend = "hatchling.build"
 
 [project]
 name = "geoPFA"
@@ -90,11 +90,13 @@ homepage = "https://github.com/NREL/geoPFA"
 documentation = "https://github.com/NREL/geoPFA"
 repository = "https://github.com/NREL/geoPFA"
 
-[tool.setuptools]
-packages = ["geopfa"]
+[tool.hatch.build.hooks.vcs]
+version-file = "geopfa/_version.py"
 
-[tool.setuptools_scm]
-version_file = "geopfa/_version.py"
+[tool.hatch.version]
+source = "vcs"
+tag-pattern = "v(?P<version>\\d+\\.\\d+\\.\\d+)"
+fallback-version = "0.0.0"
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
