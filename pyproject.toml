@@ -271,7 +271,24 @@ ignore = [
   "PLR0914", # too-many-locals
   "PLR0917", # too-many-positional-arguments
   "PLR1702", # too-many-nested-blocks
+  "PLR0915", # too-many-statements
   "PLW2901", # `for` loop variable `group` overwritten by assignment target
+  "PLR6201", # Use a set literal when testing for membership
+  "FURB118", # Use `operator.itemgetter(0, 1)` instead of defining a function
+  "PLR2004", # Magic value used in comparison, consider using a constant variable
+  "RUF059", # Unpacked variable `dists` is never used
+  "PLR0904",
+  ]
+"geopfa/geopfa3d/plotters.py" = [
+  "F821", # Undefined name `MultiLineString`
+  "S110", # `try`-`except`-`pass` detected, consider logging the exception
+  ]
+"geopfa/data_readers.py" = [
+  "PLR2004", # Magic value used in comparison, consider using a constant variable
+  "PD901", # Avoid using the generic variable name `df` for DataFrames
+  "PLR0912", # Too many branches (15 > 12)
+  "RUF100",
+  "PLR0913", # Too many arguments in function definition (15 > 5)
   ]
 
 [tool.ruff.lint.pycodestyle]
