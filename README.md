@@ -27,7 +27,7 @@ low-temperature and conventional hydrothermal to superhot systems—and to exten
 the methodology to other subsurface applications if desired. geoPFA supports multiple data
 processing approaches, including interpolation, density mapping, distance-based
 scoring, extrapolation, and thermal modeling, while allowing integration of
-expert-derived weightings or analytical hierarchy methods. 
+expert-derived weightings or analytical hierarchy methods.
 
 geoPFA has been successfully demonstrated in diverse contexts: a 3D PFA for
 the Nesjavellir field in Iceland, where results aligned with known subsurface
@@ -36,8 +36,8 @@ conditions and guided scenario-based development strategies (Taverna et al.,
 with greater emphasis on surface constraints (Davalos-Elizondo et al., 2024;
 in work). By making advanced exploration workflows reproducible, transparent,
 and openly accessible, geoPFA enables research teams, developers, and agencies
-to make better-informed decisions through reducing time required for developing 
-workflows, allowing more time to be spent on feature engineering and interpretation 
+to make better-informed decisions through reducing time required for developing
+workflows, allowing more time to be spent on feature engineering and interpretation
 of results.
 
 # NOTICE

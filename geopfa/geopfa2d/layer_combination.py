@@ -28,10 +28,10 @@ class VoterVeto:
         ----------
         w : ndarray
             Array of weights of shape (n,1), where n is the number of input data layers,
-            sorted in order of the input data layers. 
+            sorted in order of the input data layers.
         z : np.array
             Array containing processed, transformed, and scaled 2D data layers rasterized in
-            np.arrays - all of which should be on the same grid. Shape (m,x,y), where m is 
+            np.arrays - all of which should be on the same grid. Shape (m,x,y), where m is
             the number of data layers
         w0 : float
             Value used to incorporate a reference 'favorability' (prior 'favorability') into
@@ -79,14 +79,14 @@ class VoterVeto:
     @staticmethod
     def modified_veto(PrXs,w,veto=True):
         """
-        Combine component 'favorability' grids into a resource 'favorability' model, optionally 
+        Combine component 'favorability' grids into a resource 'favorability' model, optionally
         vetoing areas where any one component is not present (0% 'favorability'). This method
         combines component 'favorability' grids using a weighted sum, and then normalizing.
 
         Parameters
         ----------
         PrXs : np.array
-            Array of rasterized 'favorability' arrays for each required component or 
+            Array of rasterized 'favorability' arrays for each required component or
             criteria of a resource
         w : np.array
             Array of weights for each component or criteria of a resource
@@ -120,16 +120,16 @@ class VoterVeto:
     @classmethod
     def do_voter_veto(cls, pfa, normalize_method, component_veto=False, criteria_veto=True, normalize=True,norm_to=5):
         """
-        Combine individual data layers into a resource 'favorability' model, 
+        Combine individual data layers into a resource 'favorability' model,
         vetoing areas where any one component is not present (0% 'favorability').
-        This method is described in detail in Ito et al., 2017 from the Hawaii 
+        This method is described in detail in Ito et al., 2017 from the Hawaii
         Geothermal PFA project.
 
         Parameters
         ----------
         pfa : dict
             Config specifying criteria, components, and data layers' relationship to one another.
-            Includes data layers' associated GeoDataFrames to weight and combine into 'favorability' 
+            Includes data layers' associated GeoDataFrames to weight and combine into 'favorability'
             models.
         normalize_method : str
             Mathod to use to normalize data layers. Can be one of ['minmax','mad']

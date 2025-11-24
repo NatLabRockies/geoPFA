@@ -1,6 +1,6 @@
 """Set of methods to model geospatial uncertainty in 2D"""
 import numpy as np
-import matplotlib.pyplot as plt  
+import matplotlib.pyplot as plt
 import geostatspy.geostats as geostats
 import geostatspy.GSLIB as GSLIB
 import matplotlib.colors as colors
@@ -14,11 +14,11 @@ class SGS:
     def get_cartesian1(lat=None, lon=None):
         """
         Converts latitude and longitude to Cartesian x-coordinate.
-        
+
         Parameters:
             lat (float): Latitude in degrees.
             lon (float): Longitude in degrees.
-        
+
         Returns:
             float: x-coordinate in Cartesian space.
         """
@@ -31,11 +31,11 @@ class SGS:
     def get_cartesian2(lat=None, lon=None):
         """
         Converts latitude and longitude to Cartesian y-coordinate.
-        
+
         Parameters:
             lat (float): Latitude in degrees.
             lon (float): Longitude in degrees.
-        
+
         Returns:
             float: y-coordinate in Cartesian space.
         """
@@ -57,7 +57,7 @@ class SGS:
             azi1 (float): Azimuth angle for the first structure.
             hmaj1 (float): Major range for the first structure.
             hmin1 (float): Minor range for the first structure.
-        
+
         Returns:
             dict: Variogram parameters.
         """
