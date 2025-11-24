@@ -24,6 +24,7 @@ from scipy.spatial import cKDTree
 try:
     # Shapely 2.0 vectorized accessors (fast path)
     from shapely import get_z
+
     _HAS_GET_Z = True
 except Exception:
     _HAS_GET_Z = False
@@ -589,7 +590,7 @@ class Processing:
         method="linear",
     ):
         """Optimized 3D interpolation using Scipy's griddata (with timing checkpoints)."""
-        import time
+
         start_total = time.time()
 
         t0 = time.time()
