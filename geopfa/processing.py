@@ -594,8 +594,12 @@ class Processing:
         start_total = time.time()
 
         t0 = time.time()
-        gdf = pfa["criteria"][criteria]["components"][component]["layers"][layer]["data"]
-        data_col = pfa["criteria"][criteria]["components"][component]["layers"][layer]["data_col"]
+        gdf = pfa["criteria"][criteria]["components"][component]["layers"][
+            layer
+        ]["data"]
+        data_col = pfa["criteria"][criteria]["components"][component][
+            "layers"
+        ][layer]["data_col"]
         print(f"[Time] Load layer data: {time.time() - t0:.4f} s")
 
         # Convert polygons → centroids if needed
@@ -659,10 +663,17 @@ class Processing:
 
         # Store results
         t7 = time.time()
-        pfa["criteria"][criteria]["components"][component]["layers"][layer]["model"] = interpolated_gdf
-        pfa["criteria"][criteria]["components"][component]["layers"][layer]["model_data_col"] = "value_interpolated"
-        pfa["criteria"][criteria]["components"][component]["layers"][layer]["model_units"] = \
-            pfa["criteria"][criteria]["components"][component]["layers"][layer]["units"]
+        pfa["criteria"][criteria]["components"][component]["layers"][layer][
+            "model"
+        ] = interpolated_gdf
+        pfa["criteria"][criteria]["components"][component]["layers"][layer][
+            "model_data_col"
+        ] = "value_interpolated"
+        pfa["criteria"][criteria]["components"][component]["layers"][layer][
+            "model_units"
+        ] = pfa["criteria"][criteria]["components"][component]["layers"][
+            layer
+        ]["units"]
         print(f"[Time] Update PFA structure: {time.time() - t7:.4f} s")
 
         # Total runtime
@@ -682,11 +693,11 @@ class Processing:
         ny,
         nz,
         extent=None,
-        method="linear",             # "linear" or "nearest"
-        build_gdf=True,              # set False to skip heavy GeoDataFrame creation
-        chunk_points=2_000_000,      # max # of grid points per chunk to evaluate
+        method="linear",  # "linear" or "nearest"
+        build_gdf=True,  # set False to skip heavy GeoDataFrame creation
+        chunk_points=2_000_000,  # max # of grid points per chunk to evaluate
         use_representative_point=True,  # faster/safer than centroid for polygons
-        dtype=np.float32,            # memory saver vs float64
+        dtype=np.float32,  # memory saver vs float64
     ):
         """
         Faster 3D interpolation with lower memory usage.
@@ -1298,7 +1309,9 @@ class Processing:
         # Build XY clipping box
         xy_box = shapely.geometry.box(xmin, ymin, xmax, ymax)
 
-        layer_dict = pfa["criteria"][criteria]["components"][component]["layers"][layer]
+        layer_dict = pfa["criteria"][criteria]["components"][component][
+            "layers"
+        ][layer]
         gdf2 = layer_dict["data"]
 
         # Backup original data
