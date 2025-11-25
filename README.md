@@ -1,6 +1,6 @@
 
 [![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.17316283.svg)](https://doi.org/10.5281/zenodo.17316283)
-[![PyPi](https://img.shields.io/pypi/pyversions/NREL-geoPFA.svg)](https://pypi.org/project/NREL-geoPFA/)
+[![PyPi](https://img.shields.io/pypi/pyversions/geoPFA.svg)](https://pypi.org/project/geoPFA/)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-orange.svg)](https://opensource.org/licenses/BSD-3-Clause)
 ![SWR](https://img.shields.io/badge/SWR--25--73_-blue?label=NREL)
 
