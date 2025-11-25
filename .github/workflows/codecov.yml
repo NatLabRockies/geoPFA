@@ -24,12 +24,12 @@ jobs:
         locked: true
         cache: true
         cache-write: false
-        environments: dev
+        environments: test
 
     - name: Generate coverage report
       run: |
-        pixi reinstall -e dev --locked geoPFA
-        pixi run -e dev --locked tests
+        pixi reinstall -e test --locked geoPFA
+        pixi run -e test --locked tests
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5
