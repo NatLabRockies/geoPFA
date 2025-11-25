@@ -113,7 +113,7 @@ build-wheels = { cmd = "uv build --sdist --wheel --out-dir dist/ ." }
 publish-pypi = { cmd = "uv publish", depends-on = ["build-wheels"] }
 
 [tool.pixi.feature.test.tasks]
-tests = "pytest --durations=20 -rapP -vv --cov=geopfa --cov-report=html --cov-branch --cov-report=xml:coverage.xml --cov-fail-under=8 tests"
+tests = "pytest --durations=20 -rapP -vv --cov=geopfa --cov-report=html --cov-branch --cov-report=xml:coverage.xml --cov-fail-under=10 tests"
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
