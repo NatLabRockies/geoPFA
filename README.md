@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-orange.svg)](https://opensource.org/licenses/BSD-3-Clause)
 ![SWR](https://img.shields.io/badge/SWR--25--73_-blue?label=NREL)
 
-[![PythonV](https://badge.fury.io/py/NREL-geoPFA.svg)](https://pypi.org/project/NREL-geoPFA/)
+[![PythonV](https://badge.fury.io/py/geoPFA.svg)](https://pypi.org/project/geoPFA/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Pixi](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh)
 
