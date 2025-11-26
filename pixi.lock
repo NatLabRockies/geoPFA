@@ -8365,7 +8365,7 @@ packages:
   timestamp: 1759763364111
 - pypi: ./
   name: geopfa
-  version: 0.0.13.dev10+g49464a81a.d20251125
+  version: 0.0.13.dev14+ga5d578b52.d20251126
   sha256: 95e3364b564086817d31279a7eac0299e663f5fbcc6d0b64daa911e1328dd810
   requires_dist:
   - contextily>=1.6.2

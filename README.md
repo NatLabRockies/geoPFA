@@ -1,12 +1,13 @@
 
+[![PyPi](https://badge.fury.io/py/geoPFA.svg)](https://pypi.org/project/geoPFA/)
 [![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.17316283.svg)](https://doi.org/10.5281/zenodo.17316283)
-[![PyPi](https://img.shields.io/pypi/pyversions/geoPFA.svg)](https://pypi.org/project/geoPFA/)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-orange.svg)](https://opensource.org/licenses/BSD-3-Clause)
 ![SWR](https://img.shields.io/badge/SWR--25--73_-blue?label=NREL)
 
-[![PythonV](https://badge.fury.io/py/geoPFA.svg)](https://pypi.org/project/geoPFA/)
+[![PythonV](https://img.shields.io/pypi/pyversions/geoPFA.svg)](https://pypi.org/project/geoPFA/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Pixi](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh)
+[![codecov](https://codecov.io/gh/NREL/geoPFA/graph/badge.svg?token=W2COSPBX4Z)](https://codecov.io/gh/NREL/geoPFA)
 
 # Geothermal PFA
 
