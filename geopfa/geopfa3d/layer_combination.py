@@ -101,7 +101,7 @@ class VoterVeto:
     @classmethod
     def do_voter_veto(cls, pfa, normalize_method, component_veto=False, criteria_veto=True, normalize=True, norm_to=5):
         """
-        Combine individual data layers into a resource 'favorability' model, 
+        Combine individual data layers into a resource 'favorability' model,
         vetoing areas where any one component is not present (0% 'favorability').
 
         Parameters

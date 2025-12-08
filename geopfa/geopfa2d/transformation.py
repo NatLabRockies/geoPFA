@@ -35,7 +35,7 @@ class VoterVetoTransformation:
 
     @staticmethod
     def rasterize_model(gdf, col):
-        """Function to go from a geodataframe to a rasterized 2D numpy array representation for 
+        """Function to go from a geodataframe to a rasterized 2D numpy array representation for
         use in linear algebra functions. Maintains the resolution of the geodataframe
 
         Parameters
@@ -117,7 +117,7 @@ class VoterVetoTransformation:
         rasterized_model : np.ndarray
             Numpy array containing 2D rasterized version of gdf
         gdf_geom : Pandas GeoSeries
-            GeoSeries representing geomtry from original GeoDataFrame to use to transform 
+            GeoSeries representing geomtry from original GeoDataFrame to use to transform
             rasterized array back into a GeoDataFrame.
 
         Returns

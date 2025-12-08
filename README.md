@@ -1,12 +1,13 @@
 
+[![PyPi](https://badge.fury.io/py/geoPFA.svg)](https://pypi.org/project/geoPFA/)
 [![Zenodo](https://zenodo.org/badge/DOI/10.5281/zenodo.17316283.svg)](https://doi.org/10.5281/zenodo.17316283)
-[![PyPi](https://img.shields.io/pypi/pyversions/NREL-geoPFA.svg)](https://pypi.org/project/NREL-geoPFA/)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-orange.svg)](https://opensource.org/licenses/BSD-3-Clause)
 ![SWR](https://img.shields.io/badge/SWR--25--73_-blue?label=NREL)
 
-[![PythonV](https://badge.fury.io/py/NREL-geoPFA.svg)](https://pypi.org/project/NREL-geoPFA/)
+[![PythonV](https://img.shields.io/pypi/pyversions/geoPFA.svg)](https://pypi.org/project/geoPFA/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Pixi](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh)
+[![codecov](https://codecov.io/gh/NREL/geoPFA/graph/badge.svg?token=W2COSPBX4Z)](https://codecov.io/gh/NREL/geoPFA)
 
 # Geothermal PFA
 
@@ -27,7 +28,7 @@ low-temperature and conventional hydrothermal to superhot systems—and to exten
 the methodology to other subsurface applications if desired. geoPFA supports multiple data
 processing approaches, including interpolation, density mapping, distance-based
 scoring, extrapolation, and thermal modeling, while allowing integration of
-expert-derived weightings or analytical hierarchy methods. 
+expert-derived weightings or analytical hierarchy methods.
 
 geoPFA has been successfully demonstrated in diverse contexts: a 3D PFA for
 the Nesjavellir field in Iceland, where results aligned with known subsurface
@@ -36,8 +37,8 @@ conditions and guided scenario-based development strategies (Taverna et al.,
 with greater emphasis on surface constraints (Davalos-Elizondo et al., 2024;
 in work). By making advanced exploration workflows reproducible, transparent,
 and openly accessible, geoPFA enables research teams, developers, and agencies
-to make better-informed decisions through reducing time required for developing 
-workflows, allowing more time to be spent on feature engineering and interpretation 
+to make better-informed decisions through reducing time required for developing
+workflows, allowing more time to be spent on feature engineering and interpretation
 of results.
 
 # NOTICE

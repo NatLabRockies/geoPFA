@@ -21,4 +21,3 @@ What is geoPFA?
 
 .. include:: ../README.md
    :end-before: NOTICE
-
