@@ -97,7 +97,7 @@ class GeospatialDataPlotters:
         gdf, col, units, title,
         area_outline=None, overlay=None, well_path=None, well_path_values=None,
         xlabel='default', ylabel='default', zlabel='Z-axis',
-        cmap='jet', xlim=None, ylim=None, zlim=None, extent=None, markersize=15, figsize=(14, 5),
+        cmap='jet', xlim=None, ylim=None, zlim=None, extent=None, markersize=15, figsize=(12, 10),
         vmin=None, vmax=None, filter_threshold=None, x_slice=None, y_slice=None, z_slice=None,
         # Well-path colorbar settings
         well_units='Temperature (°C)',
@@ -107,19 +107,22 @@ class GeospatialDataPlotters:
         well_vmax=None,          # independent well-path vmax
         # Main (favorability) colorbar settings
         show_main_colorbar=True,
-        # Two-view controls (note: MAIN is from SE looking NW by default)
-        view_main=(20, 135),     # (elev, azim) – from SE looking NW
-        view_se=(20, -60),       # from NW looking SE
-        # Layout controls (fractions of figure width; thin bars so they don’t look chunky)
-        cbar_width=0.035,
-        panel_width_main=0.50,
-        panel_width_se=0.415
+        # View controls: azimuths approximate "looking toward" each compass direction
+        view_nw=(20, 135),       # from SE looking toward NW
+        view_ne=(20, 45),        # from SW looking toward NE
+        view_sw=(20, -135),      # from NE looking toward SW
+        view_se=(20, -45),       # from NW looking toward SE
+        # Layout control: relative width of colorbar column
+        cbar_width=0.08
     ):
         """
-        Plots 3D geospatial data with a main and a secondary view.
+        Plots 3D geospatial data with four directional views (NW, NE, SW, SE) in a 2×2 grid.
 
-        Main view (by default) is from the southeast looking toward the northwest.
-        Colorbars live in dedicated side columns, never overlapping content.
+        The two colorbars live in a separate right-hand column:
+            - Top:  main dataset colorbar (col / units)
+            - Bottom: well-path colorbar (well_units), if well values exist
+
+        Parameters are otherwise identical to your previous version.
         """
 
         # ---------- helpers ----------
@@ -225,34 +228,40 @@ class GeospatialDataPlotters:
             and np.isfinite(well_vals).any()
         )
 
-        # ---------- figure layout: [well_cbar | main3D | se3D | main_cbar] ----------
-        ratios = [cbar_width, panel_width_main, panel_width_se, cbar_width]
-        total = sum(ratios)
-        ratios = [r / total for r in ratios]  # normalize to 1.0 for GridSpec
+        # ---------- figure layout: 2×2 views + right colorbar column ----------
+        # Grid: 2 rows × 3 columns
+        #   [ NW | NE | main_cbar ]
+        #   [ SW | SE | well_cbar ]
+        from matplotlib.gridspec import GridSpec
+        from matplotlib.ticker import MaxNLocator
 
         fig = plt.figure(figsize=figsize, constrained_layout=True)
-        gs = GridSpec(1, 4, figure=fig, width_ratios=ratios)
+        gs = GridSpec(2, 3, figure=fig, width_ratios=[1, 1, cbar_width])
 
-        # axes
-        ax_main = fig.add_subplot(gs[0, 1], projection='3d')
-        ax_se   = fig.add_subplot(gs[0, 2], projection='3d')
-        cax_left  = fig.add_subplot(gs[0, 0])  # 2D axes for well colorbar
-        cax_right = fig.add_subplot(gs[0, 3])  # 2D axes for main colorbar
+        ax_nw = fig.add_subplot(gs[0, 0], projection='3d')
+        ax_ne = fig.add_subplot(gs[0, 1], projection='3d')
+        ax_sw = fig.add_subplot(gs[1, 0], projection='3d')
+        ax_se_ax = fig.add_subplot(gs[1, 1], projection='3d')
+
+        cax_main = fig.add_subplot(gs[0, 2])  # main colorbar
+        cax_well = fig.add_subplot(gs[1, 2])  # well colorbar
 
         # make cbar axes frameless but keep ticks/labels visible
-        for cax in (cax_left, cax_right):
+        for cax in (cax_main, cax_well):
             for spine in cax.spines.values():
                 spine.set_visible(False)
 
-        # if no well values or user disabled well cbar, hide left axis
+        # hide well cbar axis entirely if we know we won't use it
         if not (show_well_colorbar and has_well_values):
-            cax_left.set_axis_off()
+            cax_well.set_axis_off()
 
-        # view angles
-        ax_main.view_init(*view_main)  # default: from SE looking NW
-        ax_se.view_init(*view_se)      # default: from NW looking SE
+        # set view angles
+        ax_nw.view_init(*view_nw)
+        ax_ne.view_init(*view_ne)
+        ax_sw.view_init(*view_sw)
+        ax_se_ax.view_init(*view_se)
 
-        # ---------- per-panel plotting ----------
+        # ---------- shared per-panel plotting ----------
         def _plot_on(ax, add_main_cbar=False, add_well_cbar=False):
             # main geometries
             if not gdf_filtered.empty:
@@ -329,7 +338,9 @@ class GeospatialDataPlotters:
             _xlabel = xlabel if xlabel != 'default' else (gdf_copy.crs.axis_info[1].name if gdf_copy.crs else 'X-axis')
             _ylabel = ylabel if ylabel != 'default' else (gdf_copy.crs.axis_info[0].name if gdf_copy.crs else 'Y-axis')
             _zlabel = zlabel if zlabel else 'Z-axis'
-            ax.set_xlabel(_xlabel); ax.set_ylabel(_ylabel); ax.set_zlabel(_zlabel)
+            ax.set_xlabel(_xlabel)
+            ax.set_ylabel(_ylabel)
+            ax.set_zlabel(_zlabel)
 
             if extent is not None and zlim is None:
                 ax.set_xlim(extent[0], extent[3])
@@ -342,32 +353,36 @@ class GeospatialDataPlotters:
 
             ax.grid(True)
 
-            # main colorbar
+            # main colorbar (only once, into dedicated axis)
             if add_main_cbar and (col is not None and str(col).lower() != "none") and not gdf_filtered.empty:
                 sm = plt.cm.ScalarMappable(cmap=cmap_main_obj, norm=norm_main)
-                cax_right.cla()
-                cb = plt.colorbar(sm, cax=cax_right)
+                cax_main.cla()
+                cb = plt.colorbar(sm, cax=cax_main)
                 cb.set_label(units)
                 cb.locator = MaxNLocator(nbins=6); cb.update_ticks()
                 cb.ax.tick_params(labelsize=9)
 
-            # well colorbar (only if we truly have well values and user wants it)
+            # well colorbar (only once, if we truly have well values and user wants it)
             if add_well_cbar and show_well_colorbar and has_well_values and sc_well is not None:
-                cax_left.cla()
-                cbw = plt.colorbar(sc_well, cax=cax_left)
+                cax_well.cla()
+                cbw = plt.colorbar(sc_well, cax=cax_well)
                 cbw.set_label(well_units)
                 cbw.locator = MaxNLocator(nbins=6); cbw.update_ticks()
                 cbw.ax.tick_params(labelsize=9)
                 cbw.ax.yaxis.set_ticks_position('left')
                 cbw.ax.yaxis.set_label_position('left')
 
-        # plot both panels; add colorbars only once (main panel)
-        _plot_on(ax_main, add_main_cbar=show_main_colorbar, add_well_cbar=True)
-        _plot_on(ax_se,   add_main_cbar=False,            add_well_cbar=False)
+        # plot all panels; add colorbars only once (NW panel)
+        _plot_on(ax_nw, add_main_cbar=show_main_colorbar, add_well_cbar=True)
+        _plot_on(ax_ne, add_main_cbar=False,               add_well_cbar=False)
+        _plot_on(ax_sw, add_main_cbar=False,               add_well_cbar=False)
+        _plot_on(ax_se_ax, add_main_cbar=False,            add_well_cbar=False)
 
         # clearer view labels
-        ax_main.set_title(f"{title} — from SE (looking NW)")
-        ax_se.set_title(f"{title} — from NW (looking SE)")
+        ax_nw.set_title(f"{title} — looking NW")
+        ax_ne.set_title(f"{title} — looking NE")
+        ax_sw.set_title(f"{title} — looking SW")
+        ax_se_ax.set_title(f"{title} — looking SE")
 
         plt.show()
 
