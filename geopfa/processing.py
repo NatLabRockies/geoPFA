@@ -977,7 +977,7 @@ class Processing:
         return pfa
 
     @staticmethod
-    def extrapolate_2d(  # noqa: PLR0913
+    def extrapolate_2d(
         pfa,
         criteria,
         component,
@@ -1008,7 +1008,7 @@ class Processing:
         training_size : float
             Percent of randomly select input observations to train on.
         verbose : bol
-            Display training progress, assessment metrics, and final plots. 
+            Display training progress, assessment metrics, and final plots.
         Returns
         -------
         pfa : dict
