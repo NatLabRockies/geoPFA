@@ -14,7 +14,7 @@ import pyproj
 import rasterio
 from itertools import starmap
 
-from geopfa.processing.Processing import convert_z_measurements
+from geopfa.processing import Processing
 
 
 class GeospatialDataReaders:
@@ -319,7 +319,7 @@ class GeospatialDataReaders:
             and z_meas is not None
             and target_z_meas is not None
         ):
-            well_gdf = convert_z_measurements(well_gdf, z_meas, target_z_meas)
+            well_gdf = Processing.convert_z_measurements(well_gdf, z_meas, target_z_meas)
 
         return well_gdf, values
 
