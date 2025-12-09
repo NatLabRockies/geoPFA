@@ -21,6 +21,9 @@ from itertools import starmap
 from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import cKDTree
 
+from geopfa.transformation import transform
+from geopfa.extrapolation import backfill_gdf, drop_z_from_geometry
+
 try:
     # Shapely 2.0 vectorized accessors (fast path)
     from shapely import get_z
@@ -971,6 +974,72 @@ class Processing:
         ] = pfa["criteria"][criteria]["components"][component]["layers"][
             layer
         ]["units"]
+        return pfa
+
+    @staticmethod
+    def extrapolate_2d(  # noqa: PLR0913
+        pfa,
+        criteria,
+        component,
+        layer,
+        dataset="model",
+        *,
+        data_col="value_interpolated",
+        training_size=0.2,
+        verbose=False,
+    ):
+        """Function to extrapolate 2D fields to max extent grid using Gaussian Process Regression.
+
+        Parameters
+        ----------
+        pfa : dict
+            Config specifying criteria, components, and data layers' relationship to one another.
+            Includes data layers' associated GeoDataFrames.
+        criteria : str
+            Criteria associated with data to interpolate.
+        component : str
+            Component associated with data to interpolate.
+        layer : str
+            Layer associated with data to interpolate.
+        dataset : str
+            Layer data source for extrapolation.
+        data_col : str
+            Column in `dataset` to use for extrapolation input observations.
+        training_size : float
+            Percent of randomly select input observations to train on.
+        verbose : bol
+            Display training progress, assessment metrics, and final plots. 
+        Returns
+        -------
+        pfa : dict
+            Updated pfa config which includes extrapolated layer.
+        """
+
+        gdf = pfa["criteria"][criteria]["components"][component]["layers"][
+            layer
+        ][dataset]
+
+        # drop z value if present
+        gdf = drop_z_from_geometry(gdf, geom_col='geometry')
+
+        test_size = 1 - training_size
+
+        extrapolated_gdf = backfill_gdf(gdf, value_col=data_col, z_value=None,
+                                        verbose=verbose, test_size=test_size)
+
+        # Update the PFA dictionary with extrapolation results
+        pfa["criteria"][criteria]["components"][component]["layers"][layer][
+            "model"
+        ] = extrapolated_gdf
+        pfa["criteria"][criteria]["components"][component]["layers"][layer][
+            "model_data_col"
+        ] = "value_extrapolated"
+        pfa["criteria"][criteria]["components"][component]["layers"][layer][
+            "model_units"
+        ] = pfa["criteria"][criteria]["components"][component]["layers"][
+            layer
+        ]["units"]
+
         return pfa
 
     @staticmethod
