@@ -144,7 +144,9 @@ def prepare_slice(
     # ------------------------------------------------------------------
     if z_value is not None:
         if "z" not in gdf.columns:
-            raise ValueError("`z_value` was provided but no 'z' column exists in gdf.")
+            raise ValueError(
+                "`z_value` was provided but no 'z' column exists in gdf."
+            )
         mask = np.abs(gdf["z"] - z_value) <= z_tol
         df_slice = gdf.loc[mask].copy()
     else:
@@ -155,7 +157,9 @@ def prepare_slice(
     # ------------------------------------------------------------------
     if "x" not in df_slice.columns or "y" not in df_slice.columns:
         if "geometry" not in df_slice.columns:
-            raise ValueError("GeoDataFrame must contain x/y or geometry for coordinate extraction.")
+            raise ValueError(
+                "GeoDataFrame must contain x/y or geometry for coordinate extraction."
+            )
         df_slice["x"] = df_slice.geometry.x
         df_slice["y"] = df_slice.geometry.y
 
@@ -410,6 +414,7 @@ def drop_z_from_geometry(
     - Only Point geometries are supported; behavior for LineString/Polygon
       geometries is not modified from the original implementation.
     """
+
     def _drop_z(geom: BaseGeometry) -> BaseGeometry:
         if hasattr(geom, "has_z") and geom.has_z:
             return Point(geom.x, geom.y)
@@ -987,9 +992,7 @@ def build_and_fit_gp(  # noqa: PLR0913, PLR0917
     model.Gaussian_noise.variance.constrain_bounded(
         *lik_params["variance"]["bounds"]
     )
-    model.Gaussian_noise.variance.set_prior(
-        lik_params["variance"]["prior"]
-    )
+    model.Gaussian_noise.variance.set_prior(lik_params["variance"]["prior"])
 
     constraint_info = {
         "kernel": kernel_info,
@@ -1022,12 +1025,20 @@ def build_and_fit_gp(  # noqa: PLR0913, PLR0917
         print("\n=== Kernel Lengthscale Diagnostics ===")
         for part in model.kern.parts:
             if hasattr(part, "lengthscale"):
-                print(f"{part.name}: lengthscales = {np.array(part.lengthscale.values)}")
+                print(
+                    f"{part.name}: lengthscales = {np.array(part.lengthscale.values)}"
+                )
 
         print("\n=== Inducing Point Ranges ===")
         print(
-            "X range:", model.Z[:, 0].min(), "→", model.Z[:, 0].max(),
-            "| Y range:", model.Z[:, 1].min(), "→", model.Z[:, 1].max(),
+            "X range:",
+            model.Z[:, 0].min(),
+            "→",
+            model.Z[:, 0].max(),
+            "| Y range:",
+            model.Z[:, 1].min(),
+            "→",
+            model.Z[:, 1].max(),
         )
 
     return model, constraint_info
@@ -1091,7 +1102,7 @@ def get_predictions(
     # ------------------------------------------------------------------
     if Y_mean is not None and Y_std is not None:
         Y_pred = Y_pred * Y_std + Y_mean
-        Y_var = (Y_std ** 2) * Y_var
+        Y_var = (Y_std**2) * Y_var
 
     # Flatten outputs
     Y_pred_flat = Y_pred.ravel()
@@ -1428,7 +1439,9 @@ def bootstrap_assess_residuals_stats(  # noqa: PLR0913, PLR0914
     # ------------------------------------------------------------------
     # Bootstrap loop
     # ------------------------------------------------------------------
-    for _ in trange(n_boot, desc="Bootstrapping", disable=not sys.stdout.isatty()):
+    for _ in trange(
+        n_boot, desc="Bootstrapping", disable=not sys.stdout.isatty()
+    ):
         idx = rng.choice(n, size=sample_size, replace=False)
         sample_resid = residuals[idx]
         sample_y = Y_true[idx]  # for Levene's homoscedasticity check
@@ -1466,7 +1479,9 @@ def bootstrap_assess_residuals_stats(  # noqa: PLR0913, PLR0914
             p_lb = np.nan
         else:
             try:
-                lb_result = acorr_ljungbox(sample_resid, lags=[10], return_df=True)
+                lb_result = acorr_ljungbox(
+                    sample_resid, lags=[10], return_df=True
+                )
                 p_lb = lb_result["lb_pvalue"].iloc[0]
             except Exception:
                 p_lb = np.nan
@@ -1487,7 +1502,9 @@ def bootstrap_assess_residuals_stats(  # noqa: PLR0913, PLR0914
                 "Test": test,
                 "Purpose": purposes[test],
                 "Mean p-value": np.nanmean(pvals) if pvals.size else np.nan,
-                "Median p-value": np.nanmedian(pvals) if pvals.size else np.nan,
+                "Median p-value": np.nanmedian(pvals)
+                if pvals.size
+                else np.nan,
                 "Rejection Rate": rejection_rate,
                 "Warn": bool(rejection_rate > REJECTION_RATE)
                 if np.isfinite(rejection_rate)
@@ -1567,7 +1584,9 @@ def report_model_fit(
     # ----------------------------
     if coverage is not None:
         if coverage < LOW_COVERAGE or coverage > HIGH_COVERAGE:
-            warnings.warn(f"Unusual 95% coverage: {coverage:.3f}", stacklevel=2)
+            warnings.warn(
+                f"Unusual 95% coverage: {coverage:.3f}", stacklevel=2
+            )
         elif report_metrics:
             print(f"95% Coverage: {coverage:.3f}")
 
@@ -1673,7 +1692,9 @@ def make_prediction_comparison_plot_2d(
 
     # Ground truth ------------------------------------------------------
     pcm_true = axs[0].pcolormesh(
-        X_grid, Y_grid, Z_true,
+        X_grid,
+        Y_grid,
+        Z_true,
         cmap="viridis",
         norm=norm,
         shading="auto",
@@ -1684,7 +1705,9 @@ def make_prediction_comparison_plot_2d(
 
     # Predictions -------------------------------------------------------
     pcm_pred = axs[1].pcolormesh(
-        X_grid, Y_grid, Z_pred,
+        X_grid,
+        Y_grid,
+        Z_pred,
         cmap="viridis",
         norm=norm,
         shading="auto",
@@ -1769,9 +1792,7 @@ def plot_array_with_coords(  # noqa: PLR0913, PLR0917
 
     elif x.ndim == 2 and y.ndim == 2:  # noqa: PLR2004
         if x.shape != y.shape or x.shape != maskZ.shape:
-            raise ValueError(
-                "If x and y are 2D, both must match shape of Z."
-            )
+            raise ValueError("If x and y are 2D, both must match shape of Z.")
         X_grid, Y_grid = x, y
 
     else:
@@ -1891,8 +1912,7 @@ def update_gdf_with_predictions(
         return (round(float(x), nd), round(float(y), nd))
 
     pred_dict = {
-        round_coord(cx, cy): val
-        for (cx, cy), val in zip(coords, Y_flat)
+        round_coord(cx, cy): val for (cx, cy), val in zip(coords, Y_flat)
     }
 
     # ------------------------------------------------------------------
@@ -1964,9 +1984,7 @@ def backfill_gdf_at_height(  # noqa: PLR0913
     # ------------------------------------------------------------------
     # Validate grid shapes
     # ------------------------------------------------------------------
-    if not (
-        X_grid.shape == Y_grid.shape == backfilled_array.shape
-    ):
+    if not (X_grid.shape == Y_grid.shape == backfilled_array.shape):
         raise ValueError(
             "X_grid, Y_grid, and backfilled_array must have identical shapes."
         )
@@ -1978,9 +1996,8 @@ def backfill_gdf_at_height(  # noqa: PLR0913
     # Identify slice by z-value within tolerance
     # ------------------------------------------------------------------
     if z_value is not None:
-        z_mask = (
-            (gdf_out["z"] >= z_value - z_tol)
-            & (gdf_out["z"] <= z_value + z_tol)
+        z_mask = (gdf_out["z"] >= z_value - z_tol) & (
+            gdf_out["z"] <= z_value + z_tol
         )
         slice_df = gdf_out.loc[z_mask].copy()
         null_mask = slice_df[value_col].isna()
@@ -2187,7 +2204,9 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
             Y_grid=Y_grid_coords,
             backfilled_array=Y_full_pred,
         )
-        gdf_filled = gdf_filled.rename(columns={value_col: "value_extrapolated"})
+        gdf_filled = gdf_filled.rename(
+            columns={value_col: "value_extrapolated"}
+        )
     else:
         gdf_filled = update_gdf_with_predictions(
             gdf=gdf.copy(),

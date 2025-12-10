@@ -1020,12 +1020,17 @@ class Processing:
         ][dataset]
 
         # drop z value if present
-        gdf = drop_z_from_geometry(gdf, geom_col='geometry')
+        gdf = drop_z_from_geometry(gdf, geom_col="geometry")
 
         test_size = 1 - training_size
 
-        extrapolated_gdf = backfill_gdf(gdf, value_col=data_col, z_value=None,
-                                        verbose=verbose, test_size=test_size)
+        extrapolated_gdf = backfill_gdf(
+            gdf,
+            value_col=data_col,
+            z_value=None,
+            verbose=verbose,
+            test_size=test_size,
+        )
 
         # Update the PFA dictionary with extrapolation results
         pfa["criteria"][criteria]["components"][component]["layers"][layer][
