@@ -16,6 +16,7 @@ import re
 from itertools import starmap
 from geopfa.processing import Processing
 
+
 class GeospatialDataReaders:
     """Read geospatial data in various formats"""
 
@@ -173,6 +174,7 @@ class GeospatialDataReaders:
         gdf.set_crs(crs, inplace=True)
 
         return gdf
+
     @staticmethod
     def read_tec(
         path,
@@ -334,8 +336,8 @@ class GeospatialDataReaders:
         y_col,
         z_col=None,
         *,
-        well_name_col=None,      # optional
-        value_col=None,          # optional per-vertex values (temp/GR/etc.)
+        well_name_col=None,  # optional
+        value_col=None,  # optional per-vertex values (temp/GR/etc.)
         source_crs=None,
         to_crs=None,
         sort_by=None,
@@ -344,7 +346,7 @@ class GeospatialDataReaders:
         deduplicate_consecutive=True,
         z_meas=None,
         target_z_meas=None,
-        convert_z_after=True
+        convert_z_after=True,
     ):
         """Reads a well-path CSV and returns a point GeoDataFrame (ordered vertices) and optional values.
 
@@ -409,7 +411,9 @@ class GeospatialDataReaders:
         coords = coords[mask]
 
         if coords.shape[0] < 2:
-            raise ValueError("Not enough valid vertices to define a well path.")
+            raise ValueError(
+                "Not enough valid vertices to define a well path."
+            )
 
         # Sorting
         if sort_by is None and md_col is not None and md_col in df.columns:
@@ -426,15 +430,24 @@ class GeospatialDataReaders:
             df = df.loc[keep].reset_index(drop=True)
             coords = coords[keep]
             if len(coords) < 2:
-                raise ValueError("Well path collapsed to one vertex after de-duplication.")
+                raise ValueError(
+                    "Well path collapsed to one vertex after de-duplication."
+                )
 
         # Build point GeoDataFrame
-        geometries = [shapely.geometry.Point(float(X), float(Y), float(Z)) for X, Y, Z in coords]
-        well_name = df[well_name_col].iloc[0] if (well_name_col and well_name_col in df.columns) else None
+        geometries = [
+            shapely.geometry.Point(float(X), float(Y), float(Z))
+            for X, Y, Z in coords
+        ]
+        well_name = (
+            df[well_name_col].iloc[0]
+            if (well_name_col and well_name_col in df.columns)
+            else None
+        )
         well_gdf = gpd.GeoDataFrame(
-            {'name': [well_name] * len(geometries)},
+            {"name": [well_name] * len(geometries)},
             geometry=geometries,
-            crs=source_crs
+            crs=source_crs,
         )
 
         # Reproject horizontal CRS if requested
@@ -449,14 +462,20 @@ class GeospatialDataReaders:
             values = df[value_col].to_numpy()
             # Align to vertex count
             if len(values) > len(well_gdf):
-                values = values[:len(well_gdf)]
+                values = values[: len(well_gdf)]
             elif len(values) < len(well_gdf):
                 pad = np.full(len(well_gdf) - len(values), np.nan)
                 values = np.concatenate([values, pad])
 
         # Optional vertical conversion (expects point Zs in geometry)
-        if convert_z_after and z_meas is not None and target_z_meas is not None:
-            well_gdf = Processing.convert_z_measurements(well_gdf, z_meas, target_z_meas)
+        if (
+            convert_z_after
+            and z_meas is not None
+            and target_z_meas is not None
+        ):
+            well_gdf = Processing.convert_z_measurements(
+                well_gdf, z_meas, target_z_meas
+            )
 
         return well_gdf, values
 
@@ -498,14 +517,16 @@ class GeospatialDataReaders:
                     shapefile_names = [
                         x.name for x in file_names if (x.suffix == ".shp")
                     ]
-                    for layer in pfa["criteria"][criteria]["components"][component][
-                        "layers"
-                    ]:
+                    for layer in pfa["criteria"][criteria]["components"][
+                        component
+                    ]["layers"]:
                         if f"{layer}.shp" in shapefile_names:
                             print("\t\t reading layer: " + layer)
                             pfa["criteria"][criteria]["components"][component][
                                 "layers"
-                            ][layer]["data"] = GeospatialDataReaders.read_shapefile(
+                            ][layer][
+                                "data"
+                            ] = GeospatialDataReaders.read_shapefile(
                                 COMPONENT_DIR / f"{layer}.shp"
                             )
 
@@ -514,14 +535,14 @@ class GeospatialDataReaders:
                     csv_file_names = [
                         x.name for x in file_names if (x.suffix == ".csv")
                     ]
-                    for layer in pfa["criteria"][criteria]["components"][component][
-                        "layers"
-                    ]:
+                    for layer in pfa["criteria"][criteria]["components"][
+                        component
+                    ]["layers"]:
                         if f"{layer}.csv" in csv_file_names:
                             print("\t\t reading layer: " + layer)
-                            layer_config = pfa["criteria"][criteria]["components"][
-                                component
-                            ]["layers"][layer]
+                            layer_config = pfa["criteria"][criteria][
+                                "components"
+                            ][component]["layers"][layer]
                             csv_crs = layer_config["crs"]
 
                             if (
@@ -562,14 +583,14 @@ class GeospatialDataReaders:
                     tec_file_names = [
                         x.name for x in file_names if (x.suffix == ".tec")
                     ]
-                    for layer in pfa["criteria"][criteria]["components"][component][
-                        "layers"
-                    ]:
+                    for layer in pfa["criteria"][criteria]["components"][
+                        component
+                    ]["layers"]:
                         if f"{layer}.tec" in tec_file_names:
                             print("\t\t reading layer: " + layer)
-                            layer_config = pfa["criteria"][criteria]["components"][
-                                component
-                            ]["layers"][layer]
+                            layer_config = pfa["criteria"][criteria][
+                                "components"
+                            ][component]["layers"][layer]
                             tec_crs = layer_config["crs"]
 
                             if (
