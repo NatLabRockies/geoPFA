@@ -4,6 +4,7 @@ Set of methods to read in data in various formats.
 
 import os
 from pathlib import Path
+from contextlib import suppress
 
 import geopandas as gpd
 import pandas as pd
@@ -176,7 +177,7 @@ class GeospatialDataReaders:
         return gdf
 
     @staticmethod
-    def read_tec(
+    def read_tec(  # noqa: PLR0917
         path,
         crs,
         x_col=None,
@@ -221,7 +222,8 @@ class GeospatialDataReaders:
         """
 
         # Read all lines
-        with open(path, "r") as f:
+        path = Path(path)
+        with path.open(encoding="utf-8") as f:
             lines = f.readlines()
 
         if len(lines) < 4:
@@ -246,10 +248,6 @@ class GeospatialDataReaders:
                 tokens = tokens[1:]
             columns = [t.strip('"') for t in tokens]
 
-        # ------------------------------------------------------------------
-        # Parse data from line 4 onward.
-        # Use .split() to handle arbitrary whitespace (double spaces, tabs, etc.)
-        # ------------------------------------------------------------------
         data = []
         for line in lines[3:]:
             if not line.strip():
@@ -268,19 +266,12 @@ class GeospatialDataReaders:
         df = pd.DataFrame(data, columns=columns)
 
         # Clean column names: strip surrounding whitespace and quotes
-        df.rename(columns=lambda c: c.strip().strip('"'), inplace=True)
+        df = df.rename(columns=lambda c: c.strip().strip('"'))
 
-        # Convert numeric columns where possible (avoid FutureWarning)
+        # Convert numeric columns where possible
         for col in df.columns:
-            try:
+            with suppress(ValueError, TypeError):
                 df[col] = pd.to_numeric(df[col])
-            except (ValueError, TypeError):
-                # Leave non-numeric columns as-is
-                pass
-
-        # ------------------------------------------------------------------
-        # Geometry handling (same pattern as read_csv)
-        # ------------------------------------------------------------------
 
         # Validate geometry input
         if sum([(x_col is None), (y_col is None)]) == 1:
