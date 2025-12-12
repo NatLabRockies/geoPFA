@@ -4,6 +4,7 @@ Set of methods to read in data in various formats.
 
 import os
 from pathlib import Path
+from contextlib import suppress
 
 import geopandas as gpd
 import pandas as pd
@@ -12,8 +13,8 @@ from shapely import wkt
 import shapely
 import pyproj
 import rasterio
+import re
 from itertools import starmap
-
 from geopfa.processing import Processing
 
 
@@ -74,7 +75,7 @@ class GeospatialDataReaders:
             Geopandas DataFrame containing contents of CSV file
         """
         # Read the CSV file
-        df = pd.read_csv(path)
+        df = pd.read_csv(path)  # noqa: PD901
 
         # Validate input geometry columns
         if sum([(x_col is None), (y_col is None)]) == 1:
@@ -94,7 +95,7 @@ class GeospatialDataReaders:
 
         # Create geometry from a combined geometry column
         if x_col is None and y_col is None and z_col is None:
-            df = df.rename(columns={geometry_column_name: "geometry"})
+            df = df.rename(columns={geometry_column_name: "geometry"})  # noqa: PD901
             df["geometry"] = df["geometry"].apply(wkt.loads)
             gdf = gpd.GeoDataFrame(df, crs=crs)
 
@@ -172,6 +173,150 @@ class GeospatialDataReaders:
         # Create a GeoDataFrame
         gdf = gpd.GeoDataFrame({"geometry": points, "value": values})
         gdf.set_crs(crs, inplace=True)
+
+        return gdf
+
+    @staticmethod
+    def read_tec(  # noqa: PLR0917
+        path,
+        crs,
+        x_col=None,
+        y_col=None,
+        z_col=None,
+        geometry_column_name="geometry",
+    ):
+        """Reads in a double-space-delimited TEC file and returns a
+        geopandas dataframe.
+
+        Assumes:
+            - First row: title (ignored)
+            - Second row: Tecplot-style VARIABLES declaration, e.g.
+            VARIABLES = "X" "Y" "Z" "P(Pa)" ...
+            - Third row: assumptions / zone line (ignored)
+            - Data begins on row 4
+
+        Parameters
+        ----------
+        path : 'str'
+            Path to TEC file.
+        crs : 'str' or 'int'
+            String or integer version of coordinate reference system
+            associated with the TEC file.
+        x_col : 'str'
+            Name of x geometry column if no combined geometry column
+            is provided.
+        y_col : 'str'
+            Name of y geometry column if no combined geometry column
+            is provided.
+        z_col : 'str'
+            Name of z geometry column if 3D, and if no combined geometry
+            column is provided.
+        geometry_column_name : str
+            Name of column containing the geometry information. Defaults
+            to 'geometry.'
+
+        Returns
+        -------
+        gdf : Geopandas DataFrame
+            Geopandas DataFrame containing contents of TEC file
+        """
+
+        # Read all lines
+        path = Path(path)
+        with path.open(encoding="utf-8") as f:
+            lines = f.readlines()
+
+        if len(lines) < 4:
+            raise ValueError(
+                "File must contain at least title, header, assumptions, and data rows."
+            )
+
+        # ------------------------------------------------------------------
+        # Parse column names from Tecplot-style header:
+        #   VARIABLES = "X" "Y" "Z" "P(Pa)" ...
+        # ------------------------------------------------------------------
+        header_line = lines[1].strip()
+
+        # Get everything inside quotes: ["X", "Y", "Z", "P(Pa)", ...]
+        columns = re.findall(r'"([^"]+)"', header_line)
+
+        # Fallback if we didn't find quoted names (more generic TEC)
+        if not columns:
+            tokens = header_line.split()
+            # Drop leading VARIABLES token if present
+            if tokens and tokens[0].lower().startswith("variables"):
+                tokens = tokens[1:]
+            columns = [t.strip('"') for t in tokens]
+
+        data = []
+        for line in lines[3:]:
+            if not line.strip():
+                continue
+            values = line.split()
+
+            # If line is short/long, pad or truncate to match number of columns
+            if len(values) < len(columns):
+                values.extend([None] * (len(columns) - len(values)))
+            elif len(values) > len(columns):
+                values = values[: len(columns)]
+
+            data.append(values)
+
+        # Create DataFrame
+        df = pd.DataFrame(data, columns=columns)
+
+        # Clean column names: strip surrounding whitespace and quotes
+        df = df.rename(columns=lambda c: c.strip().strip('"'))
+
+        # Convert numeric columns where possible
+        for col in df.columns:
+            with suppress(ValueError, TypeError):
+                df[col] = pd.to_numeric(df[col])
+
+        # Validate geometry input
+        if sum([(x_col is None), (y_col is None)]) == 1:
+            raise ValueError(
+                "Must specify both x_col and y_col, or a combined geometry column."
+            )
+        if (z_col is not None) and (x_col is None or y_col is None):
+            raise ValueError(
+                "Cannot specify z_col without also specifying x_col and y_col."
+            )
+
+        # Validate CRS
+        try:
+            crs = pyproj.CRS.from_user_input(crs) if crs else None
+        except pyproj.exceptions.CRSError as e:
+            raise ValueError(f"Invalid CRS provided: {crs}. Error: {e}")
+
+        # Create geometry from a combined geometry column (rare for TEC, but supported)
+        if x_col is None and y_col is None and z_col is None:
+            df = df.rename(columns={geometry_column_name: "geometry"})  # noqa: PD901
+            df["geometry"] = df["geometry"].apply(wkt.loads)
+            gdf = gpd.GeoDataFrame(df, crs=crs)
+
+        # Create 2D geometry from x and y columns
+        elif z_col is None:
+            gdf = gpd.GeoDataFrame(
+                df,
+                geometry=gpd.points_from_xy(df[x_col], df[y_col]),
+            )
+            gdf.set_crs(crs, inplace=True)
+
+        # Create 3D geometry from x, y, and z columns
+        else:
+            gdf = gpd.GeoDataFrame(
+                df,
+                geometry=list(
+                    map(
+                        shapely.geometry.Point,
+                        df[x_col],
+                        df[y_col],
+                        df[z_col],
+                    )
+                ),
+            )
+            gdf.set_crs(crs, inplace=True)
 
         return gdf
 
@@ -319,7 +464,9 @@ class GeospatialDataReaders:
             and z_meas is not None
             and target_z_meas is not None
         ):
-            well_gdf = Processing.convert_z_measurements(well_gdf, z_meas, target_z_meas)
+            well_gdf = Processing.convert_z_measurements(
+                well_gdf, z_meas, target_z_meas
+            )
 
         return well_gdf, values
 
@@ -341,9 +488,6 @@ class GeospatialDataReaders:
         file_types : list
             List of file types to look for when gathering data. File
             types excluded from list will be ignored.
-        csv_crs : int
-            Integer value associated with CRS associated with csv files.
-            Should be set to None if not reading csv files.
 
         Returns
         -------
@@ -358,6 +502,8 @@ class GeospatialDataReaders:
                 print("\t component: " + component)
                 COMPONENT_DIR = data_dir / criteria / component
                 file_names = sorted(COMPONENT_DIR.iterdir())
+
+                # --- Shapefiles -------------------------------------------------
                 if ".shp" in file_types:
                     shapefile_names = [
                         x.name for x in file_names if (x.suffix == ".shp")
@@ -374,6 +520,8 @@ class GeospatialDataReaders:
                             ] = GeospatialDataReaders.read_shapefile(
                                 COMPONENT_DIR / f"{layer}.shp"
                             )
+
+                # --- CSV files ---------------------------------------------------
                 if ".csv" in file_types:
                     csv_file_names = [
                         x.name for x in file_names if (x.suffix == ".csv")
@@ -387,12 +535,14 @@ class GeospatialDataReaders:
                                 "components"
                             ][component]["layers"][layer]
                             csv_crs = layer_config["crs"]
+
                             if (
                                 "x_col" in layer_config
                                 and "y_col" in layer_config
                             ):
                                 x_col = layer_config["x_col"]
                                 y_col = layer_config["y_col"]
+
                                 if "z_col" in layer_config:
                                     z_col = layer_config["z_col"]
                                     data = GeospatialDataReaders.read_csv(
@@ -414,15 +564,67 @@ class GeospatialDataReaders:
                                     COMPONENT_DIR / f"{layer}.csv",
                                     csv_crs,
                                 )
+
                             pfa["criteria"][criteria]["components"][component][
                                 "layers"
                             ][layer]["data"] = data
+
+                # --- TEC files ---------------------------------------------------
+                if ".tec" in file_types:
+                    tec_file_names = [
+                        x.name for x in file_names if (x.suffix == ".tec")
+                    ]
+                    for layer in pfa["criteria"][criteria]["components"][
+                        component
+                    ]["layers"]:
+                        if f"{layer}.tec" in tec_file_names:
+                            print("\t\t reading layer: " + layer)
+                            layer_config = pfa["criteria"][criteria][
+                                "components"
+                            ][component]["layers"][layer]
+                            tec_crs = layer_config["crs"]
+
+                            if (
+                                "x_col" in layer_config
+                                and "y_col" in layer_config
+                            ):
+                                x_col = layer_config["x_col"]
+                                y_col = layer_config["y_col"]
+
+                                if "z_col" in layer_config:
+                                    z_col = layer_config["z_col"]
+                                    data = GeospatialDataReaders.read_tec(
+                                        COMPONENT_DIR / f"{layer}.tec",
+                                        tec_crs,
+                                        x_col,
+                                        y_col,
+                                        z_col,
+                                    )
+                                else:
+                                    data = GeospatialDataReaders.read_tec(
+                                        COMPONENT_DIR / f"{layer}.tec",
+                                        tec_crs,
+                                        x_col,
+                                        y_col,
+                                    )
+                            else:
+                                # Fall back to read_tec with only path + CRS
+                                data = GeospatialDataReaders.read_tec(
+                                    COMPONENT_DIR / f"{layer}.tec",
+                                    tec_crs,
+                                )
+                            pfa["criteria"][criteria]["components"][component][
+                                "layers"
+                            ][layer]["data"] = data
+
+                # --- Unknown file types -----------------------------------------
                 for file_type in file_types:
-                    if file_type not in {".shp", ".csv"}:
+                    if file_type not in {".shp", ".csv", ".tec"}:
                         print(
                             f"Warning: file type: {file_type} "
                             " not currently compatible with geoPFA."
                         )
+
         return pfa
 
     @classmethod
