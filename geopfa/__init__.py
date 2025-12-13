@@ -3,12 +3,7 @@ GeoPFA modeling software.
 """
 
 import numpy as np
-from importlib.metadata import PackageNotFoundError, version
 
-try:
-    __version__ = version("geopfa")
-except PackageNotFoundError:
-    __version__ = "0+unknown"
-
+from ._version import __version__
 
 np.seterr(all="ignore")
