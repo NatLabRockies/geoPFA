@@ -29,4 +29,4 @@ jobs:
         cache-write: ${{ github.ref == 'refs/heads/main' }}
         environments: test
 
-    - run: pixi run -e test python-tests
+    - run: pixi run -e test --locked python-tests
