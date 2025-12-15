@@ -97,7 +97,6 @@ def normalize_array(rasterized_array, method):
     return normalized_array
 
 
-@staticmethod
 def transform(array, method):
     """Transform to relative favorability values
 
@@ -134,7 +133,9 @@ def transform(array, method):
             mad = 1e-6  # prevent division by zero
         squared_dist = (array - median) ** 2
         gaussian = np.exp(-squared_dist / (2 * mad**2))
-        transformed_array = gaussian if method.lower() == "hill" else 1 - gaussian
+        transformed_array = (
+            gaussian if method.lower() == "hill" else 1 - gaussian
+        )
     else:
         raise ValueError(
             "Transformation method ", method, " not yet implemented."
@@ -143,14 +144,15 @@ def transform(array, method):
     return transformed_array
 
 
-@staticmethod
 def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
     """Detect whether a GeoDataFrame geometry is 2D or 3D.
 
     Raises a ValueError if gdf is empty or has mixed dimensionality.
     """
     if gdf is None or len(gdf) == 0:
-        raise ValueError("Cannot detect geometry dimension from an empty GeoDataFrame.")
+        raise ValueError(
+            "Cannot detect geometry dimension from an empty GeoDataFrame."
+        )
 
     dims = set()
     for geom in gdf.geometry:
@@ -166,7 +168,9 @@ def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
             break
 
     if len(dims) == 0:
-        raise ValueError("Could not determine geometry dimension; all geometries are None.")
+        raise ValueError(
+            "Could not determine geometry dimension; all geometries are None."
+        )
 
     if len(dims) > 1:
         raise ValueError(
@@ -177,7 +181,6 @@ def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
     return dims.pop()
 
 
-@staticmethod
 def rasterize_model_2d(gdf, col):
     """2D rasterization: point GeoDataFrame -> 2D numpy array (vectorized)."""
     if len(gdf) == 0:
@@ -209,7 +212,6 @@ def rasterize_model_2d(gdf, col):
     return raster
 
 
-@staticmethod
 def derasterize_model_2d(rasterized_model, gdf_geom):
     """2D derasterization: 2D array -> GeoDataFrame with 2D points (vectorized)."""
     if len(gdf_geom) == 0:
@@ -229,7 +231,6 @@ def derasterize_model_2d(rasterized_model, gdf_geom):
     return gdf
 
 
-@staticmethod
 def rasterize_model_3d(gdf, col):
     """3D rasterization: point-Z GeoDataFrame -> 3D numpy array (vectorized)."""
     if len(gdf) == 0:
@@ -237,7 +238,9 @@ def rasterize_model_3d(gdf, col):
 
     xs = gdf.geometry.x.to_numpy()
     ys = gdf.geometry.y.to_numpy()
-    zs = np.array([p.z if getattr(p, "has_z", False) else 0.0 for p in gdf.geometry])
+    zs = np.array(
+        [p.z if getattr(p, "has_z", False) else 0.0 for p in gdf.geometry]
+    )
     vals = gdf[col].to_numpy()
 
     unique_x = np.sort(np.unique(xs))
@@ -256,7 +259,6 @@ def rasterize_model_3d(gdf, col):
     return raster
 
 
-@staticmethod
 def derasterize_model_3d(rasterized_model, gdf_geom):
     """3D derasterization: 3D array -> GeoDataFrame with 3D points (vectorized)."""
     if len(gdf_geom) == 0:
@@ -265,16 +267,15 @@ def derasterize_model_3d(rasterized_model, gdf_geom):
     unique_x = np.sort(gdf_geom.geometry.x.unique())
     unique_y = np.sort(gdf_geom.geometry.y.unique())
     unique_z = np.sort(
-        gdf_geom.geometry.apply(lambda p: p.z if getattr(p, "has_z", False) else 0).unique()
+        gdf_geom.geometry.apply(
+            lambda p: p.z if getattr(p, "has_z", False) else 0
+        ).unique()
     )
     crs = gdf_geom.crs
 
-    zs, ys, xs = np.meshgrid(
-        unique_z, unique_y, unique_x, indexing="ij"
-        )
+    zs, ys, xs = np.meshgrid(unique_z, unique_y, unique_x, indexing="ij")
     geoms = [  # noqa: FURB140
-        Point(x, y, z)
-        for x, y, z in zip(xs.ravel(), ys.ravel(), zs.ravel())
+        Point(x, y, z) for x, y, z in zip(xs.ravel(), ys.ravel(), zs.ravel())
     ]
     gdf = gpd.GeoDataFrame(geometry=geoms, crs=crs)
     gdf["favorability"] = rasterized_model.ravel()
@@ -316,156 +317,3 @@ def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
         )
 
     return dims.pop()
-
-
-class VoterVetoTransformation:
-    """Unified transformation for voter-veto that supports both 2D and 3D."""
-
-    @staticmethod
-    def transform(array, method):
-        """Transform to relative favorability values
-
-        Function to transform rasterized array to map data values to
-        relative favorability values. Includes several types of
-        transformation methods
-
-        Parameters
-        ----------
-        array : np.ndarray
-            Input 2D or 3D rasterized np.array to transform
-        method : str
-            Method to transform data to relative favorability. Can be one
-            of ['inverse', 'negate', 'ln', 'None', 'hill', 'valley']
-
-        Returns
-        -------
-        transformed_array : np.ndarray
-            Array with data values transformed to relative favorability
-            values
-        """
-        if method.lower() == "inverse":
-            transformed_array = 1 / array
-        elif method.lower() == "negate":
-            transformed_array = -array
-        elif method.lower() == "ln":
-            transformed_array = np.log(array)
-        elif method.lower() == "none":
-            transformed_array = array
-        elif method.lower() in {"hill", "valley"}:
-            median = np.nanmedian(array)
-            mad = np.nanmedian(np.abs(array - median))
-            if mad == 0:
-                mad = 1e-6  # prevent division by zero
-            squared_dist = (array - median) ** 2
-            gaussian = np.exp(-squared_dist / (2 * mad**2))
-            transformed_array = (
-                gaussian if method.lower() == "hill" else 1 - gaussian
-            )
-        else:
-            raise ValueError(
-                "Transformation method ", method, " not yet implemented."
-            )
-
-        return transformed_array
-
-    @staticmethod
-    def rasterize_model_2d(gdf, col):
-        """2D rasterization: point GeoDataFrame -> 2D numpy array (vectorized)."""
-        if len(gdf) == 0:
-            raise ValueError("GeoDataFrame 'gdf' is empty.")
-
-        xs = gdf.geometry.x.to_numpy()
-        ys = gdf.geometry.y.to_numpy()
-        vals = gdf[col].to_numpy()
-
-        unique_x = np.sort(np.unique(xs))
-        unique_y = np.sort(np.unique(ys))
-
-        num_cols = len(unique_x)
-        num_rows = len(unique_y)
-
-        raster = np.full((num_rows, num_cols), np.nan, dtype=np.float32)
-
-        # invert Y once
-        min_y = unique_y.min()
-        max_y = unique_y.max()
-        inverted_y = min_y + (max_y - ys)
-
-        # map coordinates -> indices
-        xi = np.searchsorted(unique_x, xs)
-        yi = np.searchsorted(unique_y, inverted_y)
-
-        raster[yi, xi] = vals
-
-        return raster
-
-    @staticmethod
-    def derasterize_model_2d(rasterized_model, gdf_geom):
-        """2D derasterization: 2D array -> GeoDataFrame with 2D points (vectorized)."""
-        if len(gdf_geom) == 0:
-            raise ValueError("GeoDataFrame 'gdf_geom' is empty.")
-
-        unique_x = np.sort(gdf_geom.geometry.x.unique())
-        unique_y = np.sort(gdf_geom.geometry.y.unique())
-        crs = gdf_geom.crs
-
-        raster = np.flipud(rasterized_model)
-
-        xs, ys = np.meshgrid(unique_x, unique_y)
-        geoms = [Point(x, y) for x, y in zip(xs.ravel(), ys.ravel())]  # noqa: FURB140
-
-        gdf = gpd.GeoDataFrame(geometry=geoms, crs=crs)
-        gdf["favorability"] = raster.ravel()
-        return gdf
-
-    @staticmethod
-    def rasterize_model_3d(gdf, col):
-        """3D rasterization: point-Z GeoDataFrame -> 3D numpy array (vectorized)."""
-        if len(gdf) == 0:
-            raise ValueError("GeoDataFrame 'gdf' is empty.")
-
-        xs = gdf.geometry.x.to_numpy()
-        ys = gdf.geometry.y.to_numpy()
-        zs = np.array(
-            [p.z if getattr(p, "has_z", False) else 0.0 for p in gdf.geometry]
-        )
-        vals = gdf[col].to_numpy()
-
-        unique_x = np.sort(np.unique(xs))
-        unique_y = np.sort(np.unique(ys))
-        unique_z = np.sort(np.unique(zs))
-
-        nx, ny, nz = len(unique_x), len(unique_y), len(unique_z)
-
-        raster = np.full((nz, ny, nx), np.nan, dtype=np.float32)
-
-        xi = np.searchsorted(unique_x, xs)
-        yi = np.searchsorted(unique_y, ys)
-        zi = np.searchsorted(unique_z, zs)
-
-        raster[zi, yi, xi] = vals
-        return raster
-
-    @staticmethod
-    def derasterize_model_3d(rasterized_model, gdf_geom):
-        """3D derasterization: 3D array -> GeoDataFrame with 3D points (vectorized)."""
-        if len(gdf_geom) == 0:
-            raise ValueError("GeoDataFrame 'gdf_geom' is empty.")
-
-        unique_x = np.sort(gdf_geom.geometry.x.unique())
-        unique_y = np.sort(gdf_geom.geometry.y.unique())
-        unique_z = np.sort(
-            gdf_geom.geometry.apply(
-                lambda p: p.z if getattr(p, "has_z", False) else 0
-            ).unique()
-        )
-        crs = gdf_geom.crs
-        zs, ys, xs = np.meshgrid(unique_z, unique_y, unique_x, indexing="ij")
-        geoms = [  # noqa: FURB140
-            Point(x, y, z)
-            for x, y, z in zip(xs.ravel(), ys.ravel(), zs.ravel())
-        ]
-
-        gdf = gpd.GeoDataFrame(geometry=geoms, crs=crs)
-        gdf["favorability"] = rasterized_model.ravel()
-        return gdf
