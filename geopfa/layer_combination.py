@@ -83,14 +83,13 @@ class WeightsOfEvidence:
 
 
 class VoterVeto:
-    """Unified voter-veto driver that works for both 2D and 3D PFA configs.
+    """
+    Class for combining geospatial evidence layers into favorability models
+    using the voter-veto framework.
 
-    This keeps the current behavior of the legacy 2D and 3D implementations:
-    - No special NaN treatment beyond whatever numpy does by default
-    - No explicit grid-spacing or alignment checks
-    The only new behavior here is:
-    - Auto-detection of 2D vs 3D
-    - A clear error if the PFA mixes 2D and 3D geometries
+    This class implements the full PFA aggregation workflow, including Layer,
+    component, and criteria aggregation using voter and veto logic The
+    implementation is dimension-agnostic (2D or 3D).
     """
 
     @staticmethod
@@ -498,10 +497,12 @@ class VoterVeto:
 
             pfa["criteria"][criteria]["pr"] = dr
             if normalize:
-                pfa["criteria"][criteria]["pr_norm"] = transformation.normalize_gdf(
-                    pfa["criteria"][criteria]["pr"],
-                    col="favorability",
-                    norm_to=norm_to,
+                pfa["criteria"][criteria]["pr_norm"] = (
+                    transformation.normalize_gdf(
+                        pfa["criteria"][criteria]["pr"],
+                        col="favorability",
+                        norm_to=norm_to,
+                    )
                 )
 
             PrRs.append(PrR_criteria)
