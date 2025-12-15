@@ -56,6 +56,8 @@ dependencies = [
   "pykrige>=1.7",
   "geostatspy>=0.0.72,<0.0.73",
   "gpy>=1.13.2",
+  "statsmodels",
+  "tqdm",
 ]
 [project.optional-dependencies]
 dev = [

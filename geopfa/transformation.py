@@ -45,6 +45,7 @@ def normalize_gdf(gdf, col, norm_to=1):
         gdf[col] = (gdf[col] - min_val) / (max_val - min_val) * norm_to
     return gdf
 
+
 def normalize_array(rasterized_array, method):
     """Normalize a 2D or 3D NumPy array.
 
@@ -95,6 +96,7 @@ def normalize_array(rasterized_array, method):
 
     return normalized_array
 
+
 @staticmethod
 def transform(array, method):
     """Transform to relative favorability values
@@ -140,6 +142,7 @@ def transform(array, method):
 
     return transformed_array
 
+
 @staticmethod
 def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
     """Detect whether a GeoDataFrame geometry is 2D or 3D.
@@ -173,6 +176,7 @@ def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
 
     return dims.pop()
 
+
 @staticmethod
 def rasterize_model_2d(gdf, col):
     """2D rasterization: point GeoDataFrame -> 2D numpy array (vectorized)."""
@@ -204,6 +208,7 @@ def rasterize_model_2d(gdf, col):
 
     return raster
 
+
 @staticmethod
 def derasterize_model_2d(rasterized_model, gdf_geom):
     """2D derasterization: 2D array -> GeoDataFrame with 2D points (vectorized)."""
@@ -222,6 +227,7 @@ def derasterize_model_2d(rasterized_model, gdf_geom):
     gdf = gpd.GeoDataFrame(geometry=geoms, crs=crs)
     gdf["favorability"] = raster.ravel()
     return gdf
+
 
 @staticmethod
 def rasterize_model_3d(gdf, col):
@@ -249,6 +255,7 @@ def rasterize_model_3d(gdf, col):
     raster[zi, yi, xi] = vals
     return raster
 
+
 @staticmethod
 def derasterize_model_3d(rasterized_model, gdf_geom):
     """3D derasterization: 3D array -> GeoDataFrame with 3D points (vectorized)."""
@@ -265,6 +272,14 @@ def derasterize_model_3d(rasterized_model, gdf_geom):
     zs, ys, xs = np.meshgrid(
         unique_z, unique_y, unique_x, indexing="ij"
         )
+    geoms = [  # noqa: FURB140
+        Point(x, y, z)
+        for x, y, z in zip(xs.ravel(), ys.ravel(), zs.ravel())
+    ]
+    gdf = gpd.GeoDataFrame(geometry=geoms, crs=crs)
+    gdf["favorability"] = rasterized_model.ravel()
+    return gdf
+
 
 def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
     """Detect whether a GeoDataFrame geometry is 2D or 3D.

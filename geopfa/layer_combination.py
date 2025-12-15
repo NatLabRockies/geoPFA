@@ -6,11 +6,7 @@ Best Practices Report (Pauling et al. 2023).
 
 import warnings
 import numpy as np
-from .transformation import (
-    normalize_gdf,
-    normalize_array,
-    detect_geom_dimension,
-)
+from geopfa import transformation
 
 
 def detect_pfa_dimension(pfa: dict) -> int:
@@ -29,7 +25,7 @@ def detect_pfa_dimension(pfa: dict) -> int:
                 if gdf is None or len(gdf) == 0:
                     continue
 
-                layer_dim = detect_geom_dimension(gdf)
+                layer_dim = transformation.detect_geom_dimension(gdf)
 
                 if dim is None:
                     dim = layer_dim
@@ -388,11 +384,11 @@ class VoterVeto:
             print(f"Nan mode: {nan_mode}.")
 
         if dim == 2:  # noqa: PLR2004
-            rasterize = VoterVetoTransformation.rasterize_model_2d
-            derasterize = VoterVetoTransformation.derasterize_model_2d
+            rasterize = transformation.rasterize_model_2d
+            derasterize = transformation.derasterize_model_2d
         else:
-            rasterize = VoterVetoTransformation.rasterize_model_3d
-            derasterize = VoterVetoTransformation.derasterize_model_3d
+            rasterize = transformation.rasterize_model_3d
+            derasterize = transformation.derasterize_model_3d
 
         PrRs = []
         w_criteria = []
@@ -435,7 +431,7 @@ class VoterVeto:
 
                     # transform
                     if transformation_method not in {"none", "None"}:
-                        model_array = VoterVetoTransformation.transform(
+                        model_array = transformation.transform(
                             model_array, transformation_method
                         )
                     print(
@@ -443,7 +439,7 @@ class VoterVeto:
                     )
 
                     # normalize
-                    model_array = normalize_array(
+                    model_array = transformation.normalize_array(
                         model_array, method=normalize_method
                     )
                     print(
@@ -474,7 +470,7 @@ class VoterVeto:
                 if normalize:
                     pfa["criteria"][criteria]["components"][component][
                         "pr_norm"
-                    ] = normalize_gdf(
+                    ] = transformation.normalize_gdf(
                         dr,
                         col="favorability",
                         norm_to=norm_to,
@@ -502,7 +498,7 @@ class VoterVeto:
 
             pfa["criteria"][criteria]["pr"] = dr
             if normalize:
-                pfa["criteria"][criteria]["pr_norm"] = normalize_gdf(
+                pfa["criteria"][criteria]["pr_norm"] = transformation.normalize_gdf(
                     pfa["criteria"][criteria]["pr"],
                     col="favorability",
                     norm_to=norm_to,
@@ -527,7 +523,7 @@ class VoterVeto:
 
         pfa["pr"] = dr
         if normalize:
-            pfa["pr_norm"] = normalize_gdf(
+            pfa["pr_norm"] = transformation.normalize_gdf(
                 pfa["pr"], col="favorability", norm_to=norm_to
             )
 
