@@ -1,11 +1,10 @@
 """Transition module
 
 All functionalities from this module were moved to
-:module:`~geopfa.data_readers`.
+:module:`~geopfa.layer_combination`.
 """
 
 import warnings
-
 from geopfa.layer_combination import VoterVeto as _UnifiedVoterVeto
 
 
