@@ -9,7 +9,11 @@ import warnings
 import numpy as np
 
 from .transformation import VoterVetoTransformation
-from .transformation import normalize_gdf, normalize_array, detect_geom_dimension
+from .transformation import (
+    normalize_gdf,
+    normalize_array,
+    detect_geom_dimension,
+)
 
 
 def detect_pfa_dimension(pfa: dict) -> int:
@@ -21,7 +25,9 @@ def detect_pfa_dimension(pfa: dict) -> int:
 
     for criteria in pfa.get("criteria", {}):
         for component in pfa["criteria"][criteria].get("components", {}):
-            for layer_cfg in pfa["criteria"][criteria]["components"][component]['layers'].values():
+            for layer_cfg in pfa["criteria"][criteria]["components"][
+                component
+            ]["layers"].values():
                 gdf = layer_cfg.get("model")
                 if gdf is None or len(gdf) == 0:
                     continue
@@ -37,8 +43,10 @@ def detect_pfa_dimension(pfa: dict) -> int:
                     )
 
     if dim is None:
-        raise ValueError("Could not detect geometry dimension from PFA. "
-                        "No non-empty layer models were found.")
+        raise ValueError(
+            "Could not detect geometry dimension from PFA. "
+            "No non-empty layer models were found."
+        )
 
     return dim
 
@@ -276,8 +284,8 @@ class VoterVeto:
         mask_valid = ~np.isnan(arr)
 
         # coverage masks
-        has_data_any = np.any(mask_valid, axis=0)   # at least one item has data
-        has_data_all = np.all(mask_valid, axis=0)   # all items have data
+        has_data_any = np.any(mask_valid, axis=0)  # at least one item has data
+        has_data_all = np.all(mask_valid, axis=0)  # all items have data
 
         # shared-no-data mask: no item has data here
         shared_nan_mask = ~has_data_any
@@ -378,13 +386,9 @@ class VoterVeto:
             Updated PFA config with component, criteria, and final favorability models.
         """
         dim = detect_pfa_dimension(pfa)
-        print(
-            f"Combining {dim}D PFA layers with the voter-veto method. "
-        )
+        print(f"Combining {dim}D PFA layers with the voter-veto method. ")
         if nan_mode != "default":
-            print(
-                f"Nan mode: {nan_mode}."
-            )
+            print(f"Nan mode: {nan_mode}.")
 
         if dim == 2:  # noqa: PLR2004
             rasterize = VoterVetoTransformation.rasterize_model_2d
@@ -410,14 +414,20 @@ class VoterVeto:
                 Pr0 = pfa["criteria"][criteria]["components"][component]["pr0"]
                 w0 = cls.get_w0(Pr0)
 
-                for layer in pfa["criteria"][criteria]["components"][component]["layers"]:
+                for layer in pfa["criteria"][criteria]["components"][
+                    component
+                ]["layers"]:
                     print(f"        layer: {layer}")
-                    layer_cfg = pfa["criteria"][criteria]["components"][component]["layers"][layer]
+                    layer_cfg = pfa["criteria"][criteria]["components"][
+                        component
+                    ]["layers"][layer]
                     model = layer_cfg["model"]
                     col = layer_cfg["model_data_col"]
                     transformation_method = layer_cfg["transformation_method"]
 
-                    last_model_geom = model.copy()  # keep reference for later derasterization
+                    last_model_geom = (
+                        model.copy()
+                    )  # keep reference for later derasterization
 
                     model_array = rasterize(model, col)
 
@@ -431,13 +441,17 @@ class VoterVeto:
                         model_array = VoterVetoTransformation.transform(
                             model_array, transformation_method
                         )
-                    print(f"        - Transformed with method: {transformation_method}")
+                    print(
+                        f"        - Transformed with method: {transformation_method}"
+                    )
 
                     # normalize
                     model_array = normalize_array(
                         model_array, method=normalize_method
                     )
-                    print(f"        - Normalized with method: {normalize_method}")
+                    print(
+                        f"        - Normalized with method: {normalize_method}"
+                    )
 
                     z_layers.append(model_array)
                     w_layers.append(layer_cfg["weight"])
@@ -461,16 +475,20 @@ class VoterVeto:
                 pfa["criteria"][criteria]["components"][component]["pr"] = dr
 
                 if normalize:
-                    pfa["criteria"][criteria]["components"][component]["pr_norm"] = (
-                        normalize_gdf(
-                            dr,
-                            col="favorability",
-                            norm_to=norm_to,
-                        )
+                    pfa["criteria"][criteria]["components"][component][
+                        "pr_norm"
+                    ] = normalize_gdf(
+                        dr,
+                        col="favorability",
+                        norm_to=norm_to,
                     )
 
                 PrXs.append(PrX)
-                w_components.append(pfa["criteria"][criteria]["components"][component]["weight"])
+                w_components.append(
+                    pfa["criteria"][criteria]["components"][component][
+                        "weight"
+                    ]
+                )
 
             # NaN handling at component -> criteria level
             PrXs_filled, mask_components = cls.prepare_for_combination(

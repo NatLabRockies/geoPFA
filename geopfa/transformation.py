@@ -72,7 +72,9 @@ def normalize_array(rasterized_array, method):
             normalized_array = np.zeros_like(rasterized_array, dtype=float)
         else:
             # normalize the array to the range [0, 1]
-            normalized_array = (rasterized_array - min_val) / (max_val - min_val)
+            normalized_array = (rasterized_array - min_val) / (
+                max_val - min_val
+            )
 
     elif method == "mad":
         median = np.nanmedian(rasterized_array)
@@ -85,9 +87,7 @@ def normalize_array(rasterized_array, method):
                 stacklevel=2,
             )
             # reuse the minmax branch
-            return normalize_array(
-                rasterized_array, method="minmax"
-            )
+            return normalize_array(rasterized_array, method="minmax")
 
         num = rasterized_array - median
         den = 1.482 * mad
@@ -105,7 +105,9 @@ def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
     Raises a ValueError if gdf is empty or has mixed dimensionality.
     """
     if gdf is None or len(gdf) == 0:
-        raise ValueError("Cannot detect geometry dimension from an empty GeoDataFrame.")
+        raise ValueError(
+            "Cannot detect geometry dimension from an empty GeoDataFrame."
+        )
 
     dims = set()
     for geom in gdf.geometry:
@@ -121,7 +123,9 @@ def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
             break
 
     if len(dims) == 0:
-        raise ValueError("Could not determine geometry dimension; all geometries are None.")
+        raise ValueError(
+            "Could not determine geometry dimension; all geometries are None."
+        )
 
     if len(dims) > 1:
         raise ValueError(
@@ -133,8 +137,7 @@ def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
 
 
 class VoterVetoTransformation:
-    """Unified transformation for voter-veto that supports both 2D and 3D.
-    """
+    """Unified transformation for voter-veto that supports both 2D and 3D."""
 
     @staticmethod
     def transform(array, method):
@@ -173,7 +176,9 @@ class VoterVetoTransformation:
                 mad = 1e-6  # prevent division by zero
             squared_dist = (array - median) ** 2
             gaussian = np.exp(-squared_dist / (2 * mad**2))
-            transformed_array = gaussian if method.lower() == "hill" else 1 - gaussian
+            transformed_array = (
+                gaussian if method.lower() == "hill" else 1 - gaussian
+            )
         else:
             raise ValueError(
                 "Transformation method ", method, " not yet implemented."
@@ -239,7 +244,9 @@ class VoterVetoTransformation:
 
         xs = gdf.geometry.x.to_numpy()
         ys = gdf.geometry.y.to_numpy()
-        zs = np.array([p.z if getattr(p, "has_z", False) else 0.0 for p in gdf.geometry])
+        zs = np.array(
+            [p.z if getattr(p, "has_z", False) else 0.0 for p in gdf.geometry]
+        )
         vals = gdf[col].to_numpy()
 
         unique_x = np.sort(np.unique(xs))
@@ -266,13 +273,13 @@ class VoterVetoTransformation:
         unique_x = np.sort(gdf_geom.geometry.x.unique())
         unique_y = np.sort(gdf_geom.geometry.y.unique())
         unique_z = np.sort(
-            gdf_geom.geometry.apply(lambda p: p.z if getattr(p, "has_z", False) else 0).unique()
+            gdf_geom.geometry.apply(
+                lambda p: p.z if getattr(p, "has_z", False) else 0
+            ).unique()
         )
         crs = gdf_geom.crs
 
-        zs, ys, xs = np.meshgrid(
-            unique_z, unique_y, unique_x, indexing="ij"
-        )
+        zs, ys, xs = np.meshgrid(unique_z, unique_y, unique_x, indexing="ij")
         geoms = [  # noqa: FURB140
             Point(x, y, z)
             for x, y, z in zip(xs.ravel(), ys.ravel(), zs.ravel())
