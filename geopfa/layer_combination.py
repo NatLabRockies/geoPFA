@@ -9,6 +9,38 @@ import warnings
 import numpy as np
 
 from .transformation import VoterVetoTransformation
+from .transformation import normalize_gdf, normalize_array, detect_geom_dimension
+
+
+def detect_pfa_dimension(pfa: dict) -> int:
+    """Detect whether the PFA uses 2D or 3D geometries.
+
+    All non-empty layer GeoDataFrames must share the same dimensionality.
+    """
+    dim = None
+
+    for criteria in pfa.get("criteria", {}):
+        for component in pfa["criteria"][criteria].get("components", {}):
+            for layer_cfg in pfa["criteria"][criteria]["components"][component]['layers'].values():
+                gdf = layer_cfg.get("model")
+                if gdf is None or len(gdf) == 0:
+                    continue
+
+                layer_dim = detect_geom_dimension(gdf)
+
+                if dim is None:
+                    dim = layer_dim
+                elif dim != layer_dim:
+                    raise ValueError(
+                        "PFA configuration mixes 2D and 3D geometries across layers. "
+                        "All layers used in voter-veto must be consistently 2D or 3D."
+                    )
+
+    if dim is None:
+        raise ValueError("Could not detect geometry dimension from PFA. "
+                        "No non-empty layer models were found.")
+
+    return dim
 
 
 class WeightsOfEvidence:
@@ -59,37 +91,6 @@ class VoterVeto:
     - Auto-detection of 2D vs 3D
     - A clear error if the PFA mixes 2D and 3D geometries
     """
-
-    @staticmethod
-    def detect_pfa_dimension(pfa: dict) -> int:
-        """Detect whether the PFA uses 2D or 3D geometries.
-
-        All non-empty layer GeoDataFrames must share the same dimensionality.
-        """
-        dim = None
-
-        for criteria in pfa.get("criteria", {}):
-            for component in pfa["criteria"][criteria].get("components", {}):
-                for layer_cfg in pfa["criteria"][criteria]["components"][component]['layers'].values():
-                    gdf = layer_cfg.get("model")
-                    if gdf is None or len(gdf) == 0:
-                        continue
-
-                    layer_dim = VoterVetoTransformation.detect_geom_dimension(gdf)
-
-                    if dim is None:
-                        dim = layer_dim
-                    elif dim != layer_dim:
-                        raise ValueError(
-                            "PFA configuration mixes 2D and 3D geometries across layers. "
-                            "All layers used in voter-veto must be consistently 2D or 3D."
-                        )
-
-        if dim is None:
-            raise ValueError("Could not detect geometry dimension from PFA. "
-                            "No non-empty layer models were found.")
-
-        return dim
 
     @staticmethod
     def get_w0(Pr0):
@@ -327,9 +328,8 @@ class VoterVeto:
 
         return filled, mask_nan
 
-
     @classmethod
-    def do_voter_veto(
+    def do_voter_veto(  # noqa: PLR0915, PLR0914, PLR0913, PLR0917
         cls,
         pfa,
         normalize_method,
@@ -339,6 +339,7 @@ class VoterVeto:
         norm_to=5,
         nan_mode="default",
     ):
+        # TODO: refactor into helpers to satisy ignored Ruff hits
         """
         Combine individual data layers into a resource 'favorability' model,
         using the unified 2D/3D voter-veto implementation with NaN handling.
@@ -376,7 +377,7 @@ class VoterVeto:
         pfa : dict
             Updated PFA config with component, criteria, and final favorability models.
         """
-        dim = cls.detect_pfa_dimension(pfa)
+        dim = detect_pfa_dimension(pfa)
         print(
             f"Combining {dim}D PFA layers with the voter-veto method. "
         )
@@ -385,9 +386,16 @@ class VoterVeto:
                 f"Nan mode: {nan_mode}."
             )
 
+        if dim == 2:  # noqa: PLR2004
+            rasterize = VoterVetoTransformation.rasterize_model_2d
+            derasterize = VoterVetoTransformation.derasterize_model_2d
+        else:
+            rasterize = VoterVetoTransformation.rasterize_model_3d
+            derasterize = VoterVetoTransformation.derasterize_model_3d
+
         PrRs = []
         w_criteria = []
-
+        ref_shape = None
         last_model_geom = None
 
         for criteria in pfa["criteria"]:
@@ -411,13 +419,9 @@ class VoterVeto:
 
                     last_model_geom = model.copy()  # keep reference for later derasterization
 
-                    # rasterize and check for mismatching grids
-                    if dim == 2:  # noqa: PLR2004
-                        model_array = VoterVetoTransformation.rasterize_model_2d(model, col)
-                    else:
-                        model_array = VoterVetoTransformation.rasterize_model_3d(model, col)
+                    model_array = rasterize(model, col)
 
-                    if "ref_shape" not in locals():
+                    if ref_shape is None:
                         ref_shape = model_array.shape
                     elif model_array.shape != ref_shape:
                         raise ValueError("Layer grid shape mismatch.")
@@ -430,7 +434,7 @@ class VoterVeto:
                     print(f"        - Transformed with method: {transformation_method}")
 
                     # normalize
-                    model_array = VoterVetoTransformation.normalize_array(
+                    model_array = normalize_array(
                         model_array, method=normalize_method
                     )
                     print(f"        - Normalized with method: {normalize_method}")
@@ -452,16 +456,13 @@ class VoterVeto:
                 PrX[mask_layers] = np.nan
 
                 # derasterize to GeoDataFrame
-                if dim == 2:  # noqa: PLR2004
-                    dr = VoterVetoTransformation.derasterize_model_2d(PrX, model)
-                else:
-                    dr = VoterVetoTransformation.derasterize_model_3d(PrX, model)
+                dr = derasterize(PrX, model)
 
                 pfa["criteria"][criteria]["components"][component]["pr"] = dr
 
                 if normalize:
                     pfa["criteria"][criteria]["components"][component]["pr_norm"] = (
-                        VoterVetoTransformation.normalize_gdf(
+                        normalize_gdf(
                             dr,
                             col="favorability",
                             norm_to=norm_to,
@@ -472,31 +473,21 @@ class VoterVeto:
                 w_components.append(pfa["criteria"][criteria]["components"][component]["weight"])
 
             # NaN handling at component -> criteria level
-            PrXs_arr = np.array(PrXs)
-            w_components_arr = np.array(w_components)
-
             PrXs_filled, mask_components = cls.prepare_for_combination(
-                PrXs_arr, nan_mode=nan_mode
+                np.array(PrXs), nan_mode=nan_mode
             )
 
             PrR_criteria = cls.modified_veto(
-                PrXs_filled, w_components_arr, veto=component_veto
+                PrXs_filled, np.array(w_components), veto=component_veto
             )
             PrR_criteria[mask_components] = np.nan
 
             # derasterize criteria-level favorability
-            if dim == 2:  # noqa: PLR2004
-                dr = VoterVetoTransformation.derasterize_model_2d(
-                    PrR_criteria, last_model_geom
-                )
-            else:
-                dr = VoterVetoTransformation.derasterize_model_3d(
-                    PrR_criteria, last_model_geom
-                )
+            dr = derasterize(PrR_criteria, last_model_geom)
 
             pfa["criteria"][criteria]["pr"] = dr
             if normalize:
-                pfa["criteria"][criteria]["pr_norm"] = VoterVetoTransformation.normalize_gdf(
+                pfa["criteria"][criteria]["pr_norm"] = normalize_gdf(
                     pfa["criteria"][criteria]["pr"],
                     col="favorability",
                     norm_to=norm_to,
@@ -506,30 +497,22 @@ class VoterVeto:
             w_criteria.append(pfa["criteria"][criteria]["weight"])
 
         # NaN handling at criteria -> final level
-        PrRs_arr = np.array(PrRs)
-        w_criteria_arr = np.array(w_criteria)
-
         PrRs_filled, mask_criteria = cls.prepare_for_combination(
-            PrRs_arr, nan_mode=nan_mode
+            np.array(PrRs), nan_mode=nan_mode
         )
 
         # final resource favorability
         PrR_final = cls.modified_veto(
-            PrRs_filled, w_criteria_arr, veto=criteria_veto
+            PrRs_filled, np.array(w_criteria), veto=criteria_veto
         )
         PrR_final[mask_criteria] = np.nan
 
-        if dim == 2:  # noqa: PLR2004
-            dr = VoterVetoTransformation.derasterize_model_2d(
-                PrR_final, last_model_geom
-            )
-        else:
-            dr = VoterVetoTransformation.derasterize_model_3d(
-                PrR_final, last_model_geom
-            )
+        # derasterize final favorability
+        dr = derasterize(PrR_final, last_model_geom)
+
         pfa["pr"] = dr
         if normalize:
-            pfa["pr_norm"] = VoterVetoTransformation.normalize_gdf(
+            pfa["pr_norm"] = normalize_gdf(
                 pfa["pr"], col="favorability", norm_to=norm_to
             )
 
