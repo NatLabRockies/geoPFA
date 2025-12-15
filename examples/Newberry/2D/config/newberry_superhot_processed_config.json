@@ -62,6 +62,34 @@
                             "processing_method": "density",
                             "model_data_col": "weighted_point_score",
                             "model_units": "score (0-\u221e)"
+                        },
+                        "velocity_model_vs": {
+                            "weight": 0.158,
+                            "units": "summed dv/v",
+                            "is_3d": "yes",
+                            "data_col": "vs",
+                            "x_col": "X",
+                            "y_col": "Y",
+                            "z_col": "z",
+                            "crs": "26910",
+                            "transformation_method": "negate",
+                            "processing_method": "interpolate",
+                            "model_data_col": "value_interpolated",
+                            "model_units": "summed dv/v"
+                        },
+                        "velocity_model_vpvs": {
+                            "weight": 0.158,
+                            "units": "summed ratio",
+                            "is_3d": "yes",
+                            "data_col": "vpvs",
+                            "x_col": "X",
+                            "y_col": "Y",
+                            "z_col": "z",
+                            "crs": "26910",
+                            "transformation_method": "None",
+                            "processing_method": "interpolate",
+                            "model_data_col": "value_interpolated",
+                            "model_units": "summed ratio"
                         }
                     },
                     "pr0": 0.4
@@ -124,6 +152,34 @@
                             "processing_method": "faults",
                             "model_data_col": "fault score",
                             "model_units": "fault score (0-1)"
+                        },
+                        "velocity_model_vs": {
+                            "weight": 0.158,
+                            "units": "summed dv/v",
+                            "is_3d": "yes",
+                            "data_col": "vs",
+                            "x_col": "X",
+                            "y_col": "Y",
+                            "z_col": "z",
+                            "crs": "26910",
+                            "transformation_method": "negate",
+                            "processing_method": "interpolate",
+                            "model_data_col": "value_interpolated",
+                            "model_units": "summed dv/v"
+                        },
+                        "velocity_model_vpvs": {
+                            "weight": 0.158,
+                            "units": "summed ratio",
+                            "is_3d": "yes",
+                            "data_col": "vpvs",
+                            "x_col": "X",
+                            "y_col": "Y",
+                            "z_col": "z",
+                            "crs": "26910",
+                            "transformation_method": "None",
+                            "processing_method": "interpolate",
+                            "model_data_col": "value_interpolated",
+                            "model_units": "summed ratio"
                         }
                     },
                     "pr0": 0.6
@@ -187,6 +243,20 @@
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
                             "model_units": "summed degC"
+                        },
+                        "velocity_model_vp": {
+                            "weight": 0.124,
+                            "units": "summed dv/v",
+                            "is_3d": "yes",
+                            "data_col": "vp",
+                            "x_col": "X",
+                            "y_col": "Y",
+                            "z_col": "z",
+                            "crs": "26910",
+                            "transformation_method": "None",
+                            "processing_method": "interpolate",
+                            "model_data_col": "value_interpolated",
+                            "model_units": "summed dv/v"
                         }
                     },
                     "pr0": 0.8
