@@ -292,7 +292,7 @@ class VoterVeto:
         return filled, mask_nan
 
     @classmethod
-    def do_voter_veto(  # noqa: PLR0915, PLR0914, PLR0913, PLR0917
+    def do_voter_veto(  # noqa: PLR0915, PLR0914, PLR0913, PLR0917, PLR0912
         cls,
         pfa,
         normalize_method,
@@ -349,9 +349,14 @@ class VoterVeto:
         if dim == 2:  # noqa: PLR2004
             rasterize = transformation.rasterize_model_2d
             derasterize = transformation.derasterize_model_2d
-        else:
+        elif dim == 3:  # noqa: PLR2004
             rasterize = transformation.rasterize_model_3d
             derasterize = transformation.derasterize_model_3d
+        else:
+            raise ValueError(
+                        "Invalid PFA dimensionality (must be 2D or 3D). "
+                        "Check input layers. "
+                    )
 
         PrRs = []
         w_criteria = []
