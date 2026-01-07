@@ -256,6 +256,9 @@ class VoterVeto:
                     continue
 
                 neutral = np.nanmedian(layer)
+                # Use median as a neutral fill so missing data contributes neither
+                # positively nor negatively after transformation + normalization.
+                # TODO: Revisit whether mean makes more sense in certain cases.
                 if np.isnan(neutral):
                     # entire layer is NaN wherever there is coverage; fall back to 0
                     neutral = 0.0
@@ -274,6 +277,8 @@ class VoterVeto:
                 if not np.any(layer_nan):
                     continue
 
+                # NOTE: Neutral fill here is only to keep operations stable.
+                # Pixels are always masked out via mask_nan for propagate_any.
                 neutral = np.nanmedian(layer)
                 if np.isnan(neutral):
                     neutral = 0.0
