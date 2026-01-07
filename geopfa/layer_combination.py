@@ -195,7 +195,7 @@ class VoterVeto:
         return PrR
 
     @staticmethod
-    def prepare_for_combination(arr, nan_mode="default"):
+    def prepare_for_combination(arr, nan_mode="propogate_shared"):
         """
         Prepare a stack of layers/components for combination by handling NaNs.
 
@@ -205,13 +205,14 @@ class VoterVeto:
             Array of shape (n_items, *spatial_shape), where n_items is the number
             of layers (at layer→component level), components (at component→criteria),
             or criteria (at criteria→final).
-        nan_mode : {"default", "propagate_any"}
+        nan_mode : {"propogate_shared", "propagate_any"}
             Strategy for handling NaN values during aggregation:
 
-            - "default":
+            - "propogate_shared":
                 Propagates NaNs through combined layers only where *all* contributing
-                inputs are NaN. NaNs present in only a subset of inputs are treated
-                as neutral (non-contributing) evidence.
+                inputs are NaN. That is, NaNs appear in combined layers only at
+                pixels where all input layers are NaN. NaNs present in only a subset
+                of inputs are treated as neutral (non-contributing) evidence.
 
             - "propagate_any":
                 Propagates NaNs through combined layers whenever *any* contributing
@@ -246,7 +247,7 @@ class VoterVeto:
 
         filled = arr.copy()
 
-        if nan_mode == "default":
+        if nan_mode == "propogate_shared":
             for i in range(filled.shape[0]):
                 layer = filled[i]
                 # pixels where this layer is NaN but at least one other has data
@@ -285,7 +286,7 @@ class VoterVeto:
         else:
             raise ValueError(
                 f"Invalid nan_mode '{nan_mode}'. "
-                "Must be one of {'default', 'propagate_any'}."
+                "Must be one of {'propogate_shared', 'propagate_any'}."
             )
 
         return filled, mask_nan
@@ -299,7 +300,7 @@ class VoterVeto:
         criteria_veto=True,
         normalize=True,
         norm_to=5,
-        nan_mode="default",
+        nan_mode="propogate_shared",
     ):
         # TODO: refactor into helpers to satisy ignored Ruff hits
         """
@@ -322,13 +323,14 @@ class VoterVeto:
             Whether to normalize output favorability GeoDataFrames.
         norm_to : float
             Max value for normalization of favorability in GeoDataFrames.
-        nan_mode : {"default", "propagate_any"}
+        nan_mode : {"propogate_shared", "propagate_any"}
             Strategy for handling NaN values during aggregation:
 
-            - "default":
+            - "propogate_shared":
                 Propagates NaNs through combined layers only where *all* contributing
-                inputs are NaN. NaNs present in only a subset of inputs are treated
-                as neutral (non-contributing) evidence.
+                inputs are NaN. That is, NaNs appear in combined layers only at
+                pixels where all input layers are NaN. NaNs present in only a subset
+                of inputs are treated as neutral (non-contributing) evidence.
 
             - "propagate_any":
                 Propagates NaNs through combined layers whenever *any* contributing
@@ -341,7 +343,7 @@ class VoterVeto:
         """
         dim = detect_pfa_dimension(pfa)
         print(f"Combining {dim}D PFA layers with the voter-veto method. ")
-        if nan_mode != "default":
+        if nan_mode != "propogate_shared":
             print(f"Nan mode: {nan_mode}.")
 
         if dim == 2:  # noqa: PLR2004
