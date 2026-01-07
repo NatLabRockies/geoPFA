@@ -7,6 +7,44 @@ Best Practices Report (Pauling et al. 2023).
 import warnings
 import numpy as np
 from geopfa import transformation
+import geopandas as gpd
+
+
+def detect_geom_dimension(gdf: gpd.GeoDataFrame) -> int:
+    """Detect whether a GeoDataFrame geometry is 2D or 3D.
+
+    Raises a ValueError if gdf is empty or has mixed dimensionality.
+    """
+    if gdf is None or len(gdf) == 0:
+        raise ValueError(
+            "Cannot detect geometry dimension from an empty GeoDataFrame."
+        )
+
+    dims = set()
+    for geom in gdf.geometry:
+        if geom is None:
+            continue
+        # shapely Point has .has_z; for other geometry types, fall back on coord length
+        has_z = getattr(geom, "has_z", False)
+        if has_z:
+            dims.add(3)
+        else:
+            dims.add(2)
+        if len(dims) > 1:
+            break
+
+    if len(dims) == 0:
+        raise ValueError(
+            "Could not determine geometry dimension; all geometries are None."
+        )
+
+    if len(dims) > 1:
+        raise ValueError(
+            "Mixed 2D and 3D geometries found within a single GeoDataFrame. "
+            "All geometries for a given layer must be consistently 2D or 3D."
+        )
+
+    return dims.pop()
 
 
 def detect_pfa_dimension(pfa: dict) -> int:
@@ -25,7 +63,7 @@ def detect_pfa_dimension(pfa: dict) -> int:
                 if gdf is None or len(gdf) == 0:
                     continue
 
-                layer_dim = transformation.detect_geom_dimension(gdf)
+                layer_dim = detect_geom_dimension(gdf)
 
                 if dim is None:
                     dim = layer_dim
