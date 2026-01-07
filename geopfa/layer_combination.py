@@ -44,44 +44,6 @@ def detect_pfa_dimension(pfa: dict) -> int:
     return dim
 
 
-class WeightsOfEvidence:
-    """Class of functions to weight and combine data layers using the weights of evidence
-    method. This method examines multiple layers of evidence, calculates weights for each
-    evidential layer based upon the spatial relationships of training points, which are
-    located at known geothermal systems, and then produces a posterior 'favorability' raster
-    surface and other related statistics. Weights of Evidence is defined as a best
-    practice in the PFA Best Practices Report (Pauling et al. 2023)."""
-
-    @classmethod
-    def do_weights_of_evidence(cls):
-        """
-        Combine individual data layers into a resource 'favorability' model,
-        using WoE.
-
-        Parameters
-        ----------
-        pfa : dict
-
-        Returns
-        __________
-        pfa : dict
-        """
-        print("NOT YET IMPLEMENTED")
-        # # # Example below from: https://ishanjainoffical.medium.com/understanding-weight-of-evidence-woe-with-python-code-cd0df0e4001e
-        # # # TODO: Enhance with this article: https://www.sciencedirect.com/science/article/pii/S0377027313002941?via%3Dihub
-        # # # and Tularosa Basin reports/papers. Maybe Faulds work??
-        # # Calculate WOE for Category 'A' and 'B'
-        # category_counts = data['Category'].value_counts()
-        # category_counts_pos = data[data['Target'] == 1]['Category'].value_counts()
-        # category_counts_neg = data[data['Target'] == 0]['Category'].value_counts()
-
-        # # Calculate WOE
-        # woe_pos = np.log((category_counts_pos['A'] / category_counts['A']) / (category_counts_neg['A'] / category_counts['A']))
-        # woe_neg = np.log((category_counts_pos['B'] / category_counts['B']) / (category_counts_neg['B'] / category_counts['B']))
-        PrR = None
-        return PrR
-
-
 class VoterVeto:
     """
     Class for combining geospatial evidence layers into favorability models
