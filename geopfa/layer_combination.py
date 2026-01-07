@@ -397,9 +397,9 @@ class VoterVeto:
             derasterize = transformation.derasterize_model_3d
         else:
             raise ValueError(
-                        "Invalid PFA dimensionality (must be 2D or 3D). "
-                        "Check input layers. "
-                    )
+                "Invalid PFA dimensionality (must be 2D or 3D). "
+                "Check input layers. "
+            )
 
         PrRs = []
         w_criteria = []
