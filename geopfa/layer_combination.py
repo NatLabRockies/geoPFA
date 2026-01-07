@@ -209,12 +209,12 @@ class VoterVeto:
             Strategy for handling NaN values during aggregation:
 
             - "default":
-                Propagates NaNs through cmobined layers only where *all* contributing
+                Propagates NaNs through combined layers only where *all* contributing
                 inputs are NaN. NaNs present in only a subset of inputs are treated
                 as neutral (non-contributing) evidence.
 
             - "propagate_any":
-                Propagates NaNs through cmobined layers whenever *any* contributing
+                Propagates NaNs through combined layers whenever *any* contributing
                 input is NaN.
 
         Returns
@@ -326,12 +326,12 @@ class VoterVeto:
             Strategy for handling NaN values during aggregation:
 
             - "default":
-                Propagates NaNs through cmobined layers only where *all* contributing
+                Propagates NaNs through combined layers only where *all* contributing
                 inputs are NaN. NaNs present in only a subset of inputs are treated
                 as neutral (non-contributing) evidence.
 
             - "propagate_any":
-                Propagates NaNs through cmobined layers whenever *any* contributing
+                Propagates NaNs through combined layers whenever *any* contributing
                 input is NaN.
 
         Returns
