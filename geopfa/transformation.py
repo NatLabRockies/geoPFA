@@ -3,7 +3,6 @@
 import geopandas as gpd
 import numpy as np
 import shapely
-from shapely.geometry import Point
 from itertools import starmap
 import warnings
 
@@ -224,7 +223,7 @@ def derasterize_model_2d(rasterized_model, gdf_geom):
     raster = np.flipud(rasterized_model)
 
     xs, ys = np.meshgrid(unique_x, unique_y)
-    geoms = [Point(x, y) for x, y in zip(xs.ravel(), ys.ravel())]  # noqa: FURB140
+    geoms = [shapely.geometry.Point(x, y) for x, y in zip(xs.ravel(), ys.ravel())]  # noqa: FURB140
 
     gdf = gpd.GeoDataFrame(geometry=geoms, crs=crs)
     gdf["favorability"] = raster.ravel()
@@ -275,7 +274,7 @@ def derasterize_model_3d(rasterized_model, gdf_geom):
 
     zs, ys, xs = np.meshgrid(unique_z, unique_y, unique_x, indexing="ij")
     geoms = [  # noqa: FURB140
-        Point(x, y, z) for x, y, z in zip(xs.ravel(), ys.ravel(), zs.ravel())
+        shapely.geometry.Point(x, y, z) for x, y, z in zip(xs.ravel(), ys.ravel(), zs.ravel())
     ]
     gdf = gpd.GeoDataFrame(geometry=geoms, crs=crs)
     gdf["favorability"] = rasterized_model.ravel()
