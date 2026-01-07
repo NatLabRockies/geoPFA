@@ -13,8 +13,7 @@ import pytest
 
 import geopfa.geopfa2d.layer_combination as layer_combination_2D
 import geopfa.geopfa3d.layer_combination as layer_combination_3D
-import geopfa.layer_combination
-from geopfa.layer_combination import get_w0, voter
+from geopfa.layer_combination import VoterVeto
 
 
 # ==== Transition tets ====
@@ -56,7 +55,7 @@ def test_3D_get_w0():
     )
 )
 def test_validate_2D_and_3D_get_w0(Pr0):
-    ans = get_w0(Pr0)
+    ans = VoterVeto.get_w0(Pr0)
     assert ans == layer_combination_2D.VoterVeto().get_w0(Pr0)
     assert ans == layer_combination_3D.VoterVeto().get_w0(Pr0)
 
@@ -76,7 +75,7 @@ def test_validate_2D_voter(Pr0, n_layers, ni, nj):
     z = np.random.random((n_layers, ni, nj))
     w0 = Voter.get_w0(Pr0)
 
-    assert np.allclose(voter(w, z, w0), Voter.voter(w, z, w0))
+    assert np.allclose(VoterVeto.voter(w, z, w0), Voter.voter(w, z, w0))
 
 
 @given(
@@ -95,7 +94,7 @@ def test_validate_3D_voter(Pr0, n_layers, ni, nj, nk):
     z = np.random.random((n_layers, ni, nj, nk))
     w0 = Voter.get_w0(Pr0)
 
-    assert np.allclose(voter(w, z, w0), Voter.voter(w, z, w0))
+    assert np.allclose(VoterVeto.voter(w, z, w0), Voter.voter(w, z, w0))
 
 
 # ==== Unified module tests ====
@@ -103,12 +102,12 @@ def test_validate_3D_voter(Pr0, n_layers, ni, nj, nk):
 
 def test_get_w0():
     """Test some special cases for `get_w0`"""
-    assert np.isneginf(get_w0(0))
+    assert np.isneginf(VoterVeto.get_w0(0))
 
-    assert get_w0(0.5) == 0.0
+    assert VoterVeto.get_w0(0.5) == 0.0
 
     with pytest.raises(ZeroDivisionError):
-        get_w0(1)
+        VoterVeto.get_w0(1)
 
 
 def test_voter():
@@ -122,8 +121,8 @@ def test_voter():
             ]
         ]
     )
-    w0 = get_w0(0.5)
-    PrX = voter(w, z, w0)
+    w0 = VoterVeto.get_w0(0.5)
+    PrX = VoterVeto.voter(w, z, w0)
 
     assert np.allclose(
         PrX, np.array([[0.52497919, 0.549834], [0.73105858, 0.88079708]])
@@ -140,9 +139,9 @@ def test_voter():
 def test_voter_properties(Pr0, n_layers, ni, nj, nk):
     w = np.random.random(n_layers)
     z = np.random.random((n_layers, ni, nj, nk))
-    w0 = get_w0(Pr0)
+    w0 = VoterVeto.get_w0(Pr0)
 
-    PrX = voter(w, z, w0)
+    PrX = VoterVeto.voter(w, z, w0)
 
     assert PrX.shape == (ni, nj, nk)
     assert np.all(PrX >= 0) and np.all(PrX <= 1)

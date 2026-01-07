@@ -54,6 +54,30 @@
                             "crs": "26910",
                             "transformation_method": "negate",
                             "processing_method": "density"
+                        },
+                        "velocity_model_vs": {
+                            "weight": 0.158,
+                            "units": "dv/v",
+                            "is_3d": "yes",
+                            "data_col": "vs",
+                            "x_col": "X",
+                            "y_col": "Y",
+                            "z_col": "z",
+                            "crs": "26910",
+                            "transformation_method": "negate",
+                            "processing_method": "interpolate"
+                        },
+                        "velocity_model_vpvs": {
+                            "weight": 0.158,
+                            "units": "ratio",
+                            "is_3d": "yes",
+                            "data_col": "vpvs",
+                            "x_col": "X",
+                            "y_col": "Y",
+                            "z_col": "z",
+                            "crs": "26910",
+                            "transformation_method": "None",
+                            "processing_method": "interpolate"
                         }
                     },
                     "pr0": 0.4
@@ -108,6 +132,30 @@
                             "crs": "4326",
                             "transformation_method": "none",
                             "processing_method": "faults"
+                        },
+                        "velocity_model_vs": {
+                            "weight": 0.106,
+                            "units": "dv/v",
+                            "is_3d": "yes",
+                            "data_col": "vs",
+                            "x_col": "X",
+                            "y_col": "Y",
+                            "z_col": "z",
+                            "crs": "26910",
+                            "transformation_method": "none",
+                            "processing_method": "interpolate"
+                        },
+                        "velocity_model_vpvs": {
+                            "weight": 0.106,
+                            "units": "ratio",
+                            "is_3d": "yes",
+                            "data_col": "vpvs",
+                            "x_col": "X",
+                            "y_col": "Y",
+                            "z_col": "z",
+                            "crs": "26910",
+                            "transformation_method": "none",
+                            "processing_method": "interpolate"
                         }
                     },
                     "pr0": 0.6
@@ -163,6 +211,18 @@
                             "crs": "26910",
                             "z_meas": "epsg:26910",
                             "transformation_method": "negate",
+                            "processing_method": "interpolate"
+                        },
+                        "velocity_model_vp": {
+                            "weight": 0.124,
+                            "units": "dv/v",
+                            "is_3d": "yes",
+                            "data_col": "vp",
+                            "x_col": "X",
+                            "y_col": "Y",
+                            "z_col": "z",
+                            "crs": "26910",
+                            "transformation_method": "None",
                             "processing_method": "interpolate"
                         }
                     },
