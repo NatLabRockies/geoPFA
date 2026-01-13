@@ -1,9 +1,21 @@
 """Set of methods to model geospatial uncertainty in 2D"""
+
+import warnings
+
 import numpy as np
 import matplotlib.pyplot as plt
-import geostatspy.geostats as geostats
-import geostatspy.GSLIB as GSLIB
 import matplotlib.colors as colors
+
+try:
+    import geostatspy.geostats as geostats
+    import geostatspy.GSLIB as GSLIB
+    GEOSTATSPY_AVAILABLE = True
+except:
+    GEOSTATSPY_AVAILABLE = False
+    warnings.warn(
+        "Missing geostatspy - uncertainty module unavailable",
+        stacklevel=2
+    )
 
 class SGS:
     """
