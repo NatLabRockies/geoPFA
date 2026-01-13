@@ -5,8 +5,6 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -389,7 +387,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/6d/5a/cdc78a77bb1c7290fd1ccfe6001437f99a2af63e28343299abd09336236e/dask-2024.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/6a/bd/d91c5e39f490a49df14320f4e8c80161cfcce09f1e2cde1edd16a551abb3/frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/05/4ee17fd89661d92ed621a95d252ec5800c37cdfe5728d2f49be380f819bf/GPy-1.13.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3a/30/d1c94066343a98bb2cea40120873193a4fed68c4ad7f8935c11caf74c681/h5py-3.15.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/9e/f7caf7486a22c3f8dde60228a9905c73dd676cdcacbdaa4390acfc9ae959/h5pyd-0.18.0.tar.gz
@@ -723,7 +720,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/6d/5a/cdc78a77bb1c7290fd1ccfe6001437f99a2af63e28343299abd09336236e/dask-2024.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2b/94/5c8a2b50a496b11dd519f4a24cb5496cf125681dd99e94c604ccdea9419a/frozenlist-1.8.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/98/74/0f20626f4f3081d841f93625c8f7ba5af12dd09249705b4d2a2c77b596f6/GPy-1.13.2-cp312-cp312-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/a4/5e/3c6f6e0430813c7aefe784d00c6711166f46225f5d229546eb53032c3707/h5py-3.15.1-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/9e/f7caf7486a22c3f8dde60228a9905c73dd676cdcacbdaa4390acfc9ae959/h5pyd-0.18.0.tar.gz
@@ -1065,7 +1061,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/6d/5a/cdc78a77bb1c7290fd1ccfe6001437f99a2af63e28343299abd09336236e/dask-2024.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b8/af/38e51a553dd66eb064cdf193841f16f077585d4d28394c2fa6235cb41765/frozenlist-1.8.0-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fe/ea/b53ea5728eae7baeaab78f627dcd629ce469ff5591387a04c78a138101e4/GPy-1.13.2-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/cf/51/329e7436bf87ca6b0fe06dd0a3795c34bebe4ed8d6c44450a20565d57832/h5py-3.15.1-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/9e/f7caf7486a22c3f8dde60228a9905c73dd676cdcacbdaa4390acfc9ae959/h5pyd-0.18.0.tar.gz
@@ -1091,8 +1086,6 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -1474,7 +1467,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/6d/5a/cdc78a77bb1c7290fd1ccfe6001437f99a2af63e28343299abd09336236e/dask-2024.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/6a/bd/d91c5e39f490a49df14320f4e8c80161cfcce09f1e2cde1edd16a551abb3/frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/05/4ee17fd89661d92ed621a95d252ec5800c37cdfe5728d2f49be380f819bf/GPy-1.13.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3a/30/d1c94066343a98bb2cea40120873193a4fed68c4ad7f8935c11caf74c681/h5py-3.15.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/9e/f7caf7486a22c3f8dde60228a9905c73dd676cdcacbdaa4390acfc9ae959/h5pyd-0.18.0.tar.gz
@@ -1807,7 +1799,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/6d/5a/cdc78a77bb1c7290fd1ccfe6001437f99a2af63e28343299abd09336236e/dask-2024.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2b/94/5c8a2b50a496b11dd519f4a24cb5496cf125681dd99e94c604ccdea9419a/frozenlist-1.8.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/98/74/0f20626f4f3081d841f93625c8f7ba5af12dd09249705b4d2a2c77b596f6/GPy-1.13.2-cp312-cp312-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/a4/5e/3c6f6e0430813c7aefe784d00c6711166f46225f5d229546eb53032c3707/h5py-3.15.1-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/9e/f7caf7486a22c3f8dde60228a9905c73dd676cdcacbdaa4390acfc9ae959/h5pyd-0.18.0.tar.gz
@@ -2148,7 +2139,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/6d/5a/cdc78a77bb1c7290fd1ccfe6001437f99a2af63e28343299abd09336236e/dask-2024.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b8/af/38e51a553dd66eb064cdf193841f16f077585d4d28394c2fa6235cb41765/frozenlist-1.8.0-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fe/ea/b53ea5728eae7baeaab78f627dcd629ce469ff5591387a04c78a138101e4/GPy-1.13.2-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/cf/51/329e7436bf87ca6b0fe06dd0a3795c34bebe4ed8d6c44450a20565d57832/h5py-3.15.1-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/8d/9e/f7caf7486a22c3f8dde60228a9905c73dd676cdcacbdaa4390acfc9ae959/h5pyd-0.18.0.tar.gz
@@ -2174,8 +2164,6 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -2599,7 +2587,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/6a/bd/d91c5e39f490a49df14320f4e8c80161cfcce09f1e2cde1edd16a551abb3/frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f7/ec/67fbef5d497f86283db54c22eec6f6140243aae73265799baaaa19cd17fb/ghp_import-2.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/ed/89d760cb25279109b89eb52975a7b5479700d3114a2421ce735bfb2e7513/gprof2dot-2025.4.14-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/05/4ee17fd89661d92ed621a95d252ec5800c37cdfe5728d2f49be380f819bf/GPy-1.13.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
@@ -3005,7 +2992,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2b/94/5c8a2b50a496b11dd519f4a24cb5496cf125681dd99e94c604ccdea9419a/frozenlist-1.8.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f7/ec/67fbef5d497f86283db54c22eec6f6140243aae73265799baaaa19cd17fb/ghp_import-2.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/ed/89d760cb25279109b89eb52975a7b5479700d3114a2421ce735bfb2e7513/gprof2dot-2025.4.14-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/98/74/0f20626f4f3081d841f93625c8f7ba5af12dd09249705b4d2a2c77b596f6/GPy-1.13.2-cp312-cp312-macosx_10_9_universal2.whl
@@ -3417,7 +3403,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b8/af/38e51a553dd66eb064cdf193841f16f077585d4d28394c2fa6235cb41765/frozenlist-1.8.0-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f7/ec/67fbef5d497f86283db54c22eec6f6140243aae73265799baaaa19cd17fb/ghp_import-2.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/ed/89d760cb25279109b89eb52975a7b5479700d3114a2421ce735bfb2e7513/gprof2dot-2025.4.14-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fe/ea/b53ea5728eae7baeaab78f627dcd629ce469ff5591387a04c78a138101e4/GPy-1.13.2-cp312-cp312-win_amd64.whl
@@ -3474,8 +3459,6 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -3875,7 +3858,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/6d/5a/cdc78a77bb1c7290fd1ccfe6001437f99a2af63e28343299abd09336236e/dask-2024.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/6a/bd/d91c5e39f490a49df14320f4e8c80161cfcce09f1e2cde1edd16a551abb3/frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f7/ec/67fbef5d497f86283db54c22eec6f6140243aae73265799baaaa19cd17fb/ghp_import-2.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/05/4ee17fd89661d92ed621a95d252ec5800c37cdfe5728d2f49be380f819bf/GPy-1.13.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3a/30/d1c94066343a98bb2cea40120873193a4fed68c4ad7f8935c11caf74c681/h5py-3.15.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
@@ -4237,7 +4219,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/6d/5a/cdc78a77bb1c7290fd1ccfe6001437f99a2af63e28343299abd09336236e/dask-2024.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2b/94/5c8a2b50a496b11dd519f4a24cb5496cf125681dd99e94c604ccdea9419a/frozenlist-1.8.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f7/ec/67fbef5d497f86283db54c22eec6f6140243aae73265799baaaa19cd17fb/ghp_import-2.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/98/74/0f20626f4f3081d841f93625c8f7ba5af12dd09249705b4d2a2c77b596f6/GPy-1.13.2-cp312-cp312-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/a4/5e/3c6f6e0430813c7aefe784d00c6711166f46225f5d229546eb53032c3707/h5py-3.15.1-cp312-cp312-macosx_11_0_arm64.whl
@@ -4607,7 +4588,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/6d/5a/cdc78a77bb1c7290fd1ccfe6001437f99a2af63e28343299abd09336236e/dask-2024.12.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b8/af/38e51a553dd66eb064cdf193841f16f077585d4d28394c2fa6235cb41765/frozenlist-1.8.0-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/f7/ec/67fbef5d497f86283db54c22eec6f6140243aae73265799baaaa19cd17fb/ghp_import-2.1.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fe/ea/b53ea5728eae7baeaab78f627dcd629ce469ff5591387a04c78a138101e4/GPy-1.13.2-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/cf/51/329e7436bf87ca6b0fe06dd0a3795c34bebe4ed8d6c44450a20565d57832/h5py-3.15.1-cp312-cp312-win_amd64.whl
@@ -4644,8 +4624,6 @@ environments:
     - url: https://conda.anaconda.org/conda-forge/
     indexes:
     - https://pypi.org/simple
-    options:
-      pypi-prerelease-mode: if-necessary-or-explicit
     packages:
       linux-64:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -5043,7 +5021,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/6a/bd/d91c5e39f490a49df14320f4e8c80161cfcce09f1e2cde1edd16a551abb3/frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/ed/89d760cb25279109b89eb52975a7b5479700d3114a2421ce735bfb2e7513/gprof2dot-2025.4.14-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/47/05/4ee17fd89661d92ed621a95d252ec5800c37cdfe5728d2f49be380f819bf/GPy-1.13.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3a/30/d1c94066343a98bb2cea40120873193a4fed68c4ad7f8935c11caf74c681/h5py-3.15.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
@@ -5399,7 +5376,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2b/94/5c8a2b50a496b11dd519f4a24cb5496cf125681dd99e94c604ccdea9419a/frozenlist-1.8.0-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/ed/89d760cb25279109b89eb52975a7b5479700d3114a2421ce735bfb2e7513/gprof2dot-2025.4.14-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/98/74/0f20626f4f3081d841f93625c8f7ba5af12dd09249705b4d2a2c77b596f6/GPy-1.13.2-cp312-cp312-macosx_10_9_universal2.whl
       - pypi: https://files.pythonhosted.org/packages/a4/5e/3c6f6e0430813c7aefe784d00c6711166f46225f5d229546eb53032c3707/h5py-3.15.1-cp312-cp312-macosx_11_0_arm64.whl
@@ -5763,7 +5739,6 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/b8/af/38e51a553dd66eb064cdf193841f16f077585d4d28394c2fa6235cb41765/frozenlist-1.8.0-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/70/25/fab23259a52ece5670dcb8452e1af34b89e6135ecc17cd4b54b4b479eac6/fsspec-2023.12.2-py3-none-any.whl
-      - pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/71/ed/89d760cb25279109b89eb52975a7b5479700d3114a2421ce735bfb2e7513/gprof2dot-2025.4.14-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/fe/ea/b53ea5728eae7baeaab78f627dcd629ce469ff5591387a04c78a138101e4/GPy-1.13.2-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/cf/51/329e7436bf87ca6b0fe06dd0a3795c34bebe4ed8d6c44450a20565d57832/h5py-3.15.1-cp312-cp312-win_amd64.whl
@@ -8364,12 +8339,11 @@ packages:
   timestamp: 1759763364111
 - pypi: ./
   name: geopfa
-  version: 0.0.14.dev23+gcbbfbcc6e
-  sha256: 64d6da06b0fb4175a39508053952e406989bac6d03b003e1c566544d15cddcad
+  version: 0.0.14.dev5+g2f7c62949.d20260113
+  sha256: 8ce9e67724cd404db84ab3c30acc04edfe11a7e5ae70570c17eaa26bc181b8c0
   requires_dist:
   - contextily>=1.6.2
   - geopandas>=1.0
-  - geostatspy>=0.0.72,<0.0.73
   - gpy>=1.13.2
   - iapws>=1.5.4
   - matplotlib>=3.1
@@ -8410,6 +8384,7 @@ packages:
   - pytest-xdist>=3.0 ; extra == 'test'
   - pytest>=7.0 ; extra == 'test'
   - tox>=4.0 ; extra == 'test'
+  - geostatspy>=0.0.72,<0.0.73 ; extra == 'uncertainty'
   requires_python: '>=3.10'
   editable: true
 - conda: https://conda.anaconda.org/conda-forge/noarch/geopy-2.4.1-pyhd8ed1ab_2.conda
@@ -8456,11 +8431,6 @@ packages:
   purls: []
   size: 1703268
   timestamp: 1741052039669
-- pypi: https://files.pythonhosted.org/packages/2a/bd/4274701881208929969b09d268671718ddb7b9f67aef3c1e7cf4246330fd/geostatspy-0.0.72-py3-none-any.whl
-  name: geostatspy
-  version: 0.0.72
-  sha256: 195167fecf5f5ac57dc54692722327e9135528eeb90141dd77b20abb189a5068
-  requires_python: '>=3.7'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/geotiff-1.7.4-h3551947_0.conda
   sha256: a5c6bf5654cf7e96d44aaac68b4b654a9e148b811e5b0f36ba7d70db87416fff
   md5: 5998212641e3feb3660295eacc717139
