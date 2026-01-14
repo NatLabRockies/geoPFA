@@ -5,7 +5,7 @@ from tests.fixtures.data_generators import generate_campbell2d_grid
 
 
 def test_load_2d_data_shapes():
-    gdf, X, Y, Z_true, Z_obs, mask = generate_campbell2d_grid(
+    gdf, X, Y, _Z_true, Z_obs, _mask = generate_campbell2d_grid(
         nx=20, ny=20, missing_pattern="center_block"
     )
 

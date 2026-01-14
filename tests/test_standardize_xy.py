@@ -7,7 +7,7 @@ def test_standardize_xy_training_mean_zero():
     X_train = np.array([[1, 2], [3, 4], [5, 6]], dtype=float)
     X_full = np.array([[1, 2], [3, 4], [5, 6], [7, 8]], dtype=float)
 
-    X_train_std, X_full_std, mean, std = standardize_xy(X_train, X_full)
+    X_train_std, _X_full_std, _mean, _std = standardize_xy(X_train, X_full)
 
     assert np.allclose(X_train_std.mean(axis=0), [0, 0], atol=1e-7)
     assert np.allclose(X_train_std.std(axis=0), [1, 1], atol=1e-7)

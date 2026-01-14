@@ -54,6 +54,6 @@ def test_prepare_slice_error_no_geometry():
     gdf = gpd.GeoDataFrame({"value": [1, 2]})
     try:
         prepare_slice(gdf, value_col="value")
-        assert False, "Expected ValueError"
+        raise AssertionError("Expected ValueError")
     except ValueError:
         pass

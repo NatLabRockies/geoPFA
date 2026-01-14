@@ -8,7 +8,7 @@ from tests.fixtures.campbell2d import DEFAULT_THETA
 
 @pytest.fixture
 def small_training_set():
-    gdf, X, Y, Z_true, Z_obs, mask = generate_campbell2d_grid(
+    _gdf, X, Y, Z_true, _Z_obs, _mask = generate_campbell2d_grid(
         nx=15, ny=15, theta=DEFAULT_THETA, missing_pattern="center_block"
     )
 

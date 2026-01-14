@@ -70,7 +70,7 @@ def test_full_pipeline(theta_name, missing_pattern, noise):
     # ------------------------------------------------------------------
     # Create synthetic 2D data with missingness
     # ------------------------------------------------------------------
-    gdf, X_grid, Y_grid, Z_true, Z_obs, nan_mask = generate_campbell2d_grid(
+    gdf, _X_grid, _Y_grid, _Z_true, _Z_obs, _nan_mask = generate_campbell2d_grid(
         nx=20,
         ny=20,
         theta=theta,

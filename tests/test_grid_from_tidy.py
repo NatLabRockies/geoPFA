@@ -40,6 +40,6 @@ def test_grid_from_tidy_handles_missing():
         }
     )
 
-    grid, xs, ys, *_ = grid_from_tidy(df)
+    grid, _xs, _ys, *_ = grid_from_tidy(df)
 
     assert np.isnan(grid.values[1, 1])

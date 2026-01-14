@@ -293,6 +293,7 @@ ignore = [
   "RUF100",
   "PLR0913", # Too many arguments in function definition (15 > 5)
   ]
+"tests/*py" = ["D"]
 
 [tool.ruff.lint.pycodestyle]
 max-doc-length = 72

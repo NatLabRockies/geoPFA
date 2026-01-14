@@ -28,7 +28,7 @@ def generate_campbell2d_grid(
     Z_true = campbell2d(X, Y, theta)
 
     if noise > 0:
-        Z_true = Z_true + noise * np.random.randn(*Z_true.shape)
+        Z_true += noise * np.random.randn(*Z_true.shape)
 
     nan_mask = np.zeros_like(Z_true, dtype=bool)
 

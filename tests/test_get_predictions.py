@@ -8,7 +8,7 @@ from tests.fixtures.campbell2d import DEFAULT_THETA
 
 @pytest.fixture
 def small_trained_model():
-    gdf, X, Y, Z_true, Z_obs, mask = generate_campbell2d_grid(
+    _gdf, X, Y, Z_true, _Z_obs, _mask = generate_campbell2d_grid(
         nx=15, ny=15, theta=DEFAULT_THETA, missing_pattern="center_block"
     )
 
@@ -27,7 +27,7 @@ def small_trained_model():
     X_train_std = (X_train - Xm) / Xs
     Y_train_std = (Y_train - Ym) / Ys
 
-    model, constraints = build_and_fit_gp(
+    model, _constraints = build_and_fit_gp(
         X_train_stdized=X_train_std,
         Y_train_stdized=Y_train_std,
         verbose=False,
@@ -43,13 +43,13 @@ def small_trained_model():
 def test_get_predictions_shapes(small_trained_model):
     (
         model,
-        X_train,
+        _X_train,
         Y_train,
-        X_train_std,
-        Y_train_std,
+        _X_train_std,
+        _Y_train_std,
         X_full_std,
-        X_grid,
-        Y_grid,
+        _X_grid,
+        _Y_grid,
     ) = small_trained_model
 
     preds, vars_ = get_predictions(
@@ -66,13 +66,13 @@ def test_get_predictions_shapes(small_trained_model):
 def test_get_predictions_flat_correct(small_trained_model):
     (
         model,
-        X_train,
+        _X_train,
         Y_train,
-        X_train_std,
-        Y_train_std,
+        _X_train_std,
+        _Y_train_std,
         X_full_std,
-        X_grid,
-        Y_grid,
+        _X_grid,
+        _Y_grid,
     ) = small_trained_model
 
     preds, vars_ = get_predictions(
@@ -86,9 +86,9 @@ def test_get_predictions_flat_correct(small_trained_model):
 
 
 def test_get_predictions_variance_nonnegative(small_trained_model):
-    model, *_, X_full_std, X_grid, Y_grid = small_trained_model
+    model, *_, X_full_std, _X_grid, _Y_grid = small_trained_model
 
-    preds, vars_ = get_predictions(
+    _preds, vars_ = get_predictions(
         model=model,
         X=X_full_std,
         Y_mean=0.0,
