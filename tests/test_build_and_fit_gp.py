@@ -43,4 +43,3 @@ def test_gp_noise_constraints_respected(small_training_set):
 
     # Only enforce the lower bound, since GP optimization often expands variance upward
     assert var >= lower
-

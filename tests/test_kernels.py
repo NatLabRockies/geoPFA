@@ -92,4 +92,3 @@ def test_combined_kernel_components(small_training_data):
     # Check long-scale kernel properties included
     assert "longscale" in info
     assert info["longscale"]["variance"] == 0.05
-

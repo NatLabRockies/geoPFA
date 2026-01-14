@@ -36,6 +36,7 @@ NOISE_LEVELS = [
 # Evaluation helpers
 # ---------------------------------------------------------------------
 
+
 def rmse(a, b):
     return np.sqrt(((a - b) ** 2).mean())
 
@@ -49,6 +50,7 @@ def r2(a, b):
 # ---------------------------------------------------------------------
 # Main end-to-end pipeline test
 # ---------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("theta_name", THETA_SCENARIOS.keys())
 @pytest.mark.parametrize("missing_pattern", MISSING_PATTERNS)
@@ -86,7 +88,7 @@ def test_full_pipeline(theta_name, missing_pattern, noise):
     gdf_filled = backfill_gdf(
         gdf.copy(),
         value_col="value",
-        z_value=None,      # 2D mode (no Z-slicing)
+        z_value=None,  # 2D mode (no Z-slicing)
         test_size=0.20,
         seed=123,
         verbose=False,
@@ -112,6 +114,6 @@ def test_full_pipeline(theta_name, missing_pattern, noise):
     assert r2(y_true, y_pred) > 0.85, "R² too low"
 
     # Ensure missing values were actually filled
-    assert np.all(~np.isnan(filled_values[missing_mask])), \
+    assert np.all(~np.isnan(filled_values[missing_mask])), (
         "Missing values were not filled by backfill_gdf()"
-
+    )

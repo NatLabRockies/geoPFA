@@ -4,6 +4,7 @@ from shapely.geometry import Point
 
 from .campbell2d import campbell2d, DEFAULT_THETA, NEG_THETA, POS_THETA
 
+
 def generate_campbell2d_grid(
     nx=20,
     ny=20,
@@ -68,4 +69,3 @@ def get_theta_choices():
         "negative": NEG_THETA,
         "positive": POS_THETA,
     }
-

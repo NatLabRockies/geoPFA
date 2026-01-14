@@ -42,8 +42,7 @@ def test_load_2d_data_train_val_split():
 
     n_total = (~np.isnan(out["Y_2d"])).sum()
     n_train = out["X_train"].shape[0]
-    n_val   = out["X_val"].shape[0]
+    n_val = out["X_val"].shape[0]
 
     assert n_train + n_val == n_total
     assert abs(n_val / n_total - 0.25) < 0.1  # allow sampling variance
-

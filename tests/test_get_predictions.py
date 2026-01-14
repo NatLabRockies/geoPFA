@@ -41,7 +41,16 @@ def small_trained_model():
 
 
 def test_get_predictions_shapes(small_trained_model):
-    model, X_train, Y_train, X_train_std, Y_train_std, X_full_std, X_grid, Y_grid = small_trained_model
+    (
+        model,
+        X_train,
+        Y_train,
+        X_train_std,
+        Y_train_std,
+        X_full_std,
+        X_grid,
+        Y_grid,
+    ) = small_trained_model
 
     preds, vars_ = get_predictions(
         model=model,
@@ -55,7 +64,16 @@ def test_get_predictions_shapes(small_trained_model):
 
 
 def test_get_predictions_flat_correct(small_trained_model):
-    model, X_train, Y_train, X_train_std, Y_train_std, X_full_std, X_grid, Y_grid = small_trained_model
+    (
+        model,
+        X_train,
+        Y_train,
+        X_train_std,
+        Y_train_std,
+        X_full_std,
+        X_grid,
+        Y_grid,
+    ) = small_trained_model
 
     preds, vars_ = get_predictions(
         model=model,
@@ -68,7 +86,7 @@ def test_get_predictions_flat_correct(small_trained_model):
 
 
 def test_get_predictions_variance_nonnegative(small_trained_model):
-    model, *_ , X_full_std, X_grid, Y_grid = small_trained_model
+    model, *_, X_full_std, X_grid, Y_grid = small_trained_model
 
     preds, vars_ = get_predictions(
         model=model,
@@ -78,4 +96,3 @@ def test_get_predictions_variance_nonnegative(small_trained_model):
     )
 
     assert np.all(vars_ >= 0.0)
-
