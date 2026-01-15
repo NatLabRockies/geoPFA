@@ -16,7 +16,7 @@ def small_training_data():
     """
     Returns standardized training data X_std and Y_std suitable for kernel testing.
     """
-    gdf, X, Y, Z_true, Z_obs, mask = generate_campbell2d_grid(
+    _gdf, X, Y, Z_true, _Z_obs, _mask = generate_campbell2d_grid(
         nx=15, ny=15, theta=DEFAULT_THETA, missing_pattern="none"
     )
 
@@ -92,4 +92,3 @@ def test_combined_kernel_components(small_training_data):
     # Check long-scale kernel properties included
     assert "longscale" in info
     assert info["longscale"]["variance"] == 0.05
-

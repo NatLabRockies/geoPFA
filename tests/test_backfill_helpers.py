@@ -11,7 +11,7 @@ from tests.fixtures.data_generators import generate_campbell2d_grid
 
 
 def test_update_gdf_fills_nan_values_only():
-    gdf, X, Y, Z_true, Z_obs, mask = generate_campbell2d_grid(
+    gdf, X, Y, _Z_true, Z_obs, mask = generate_campbell2d_grid(
         nx=12, ny=12, missing_pattern="center_block"
     )
 
@@ -23,18 +23,21 @@ def test_update_gdf_fills_nan_values_only():
     before_vals = gdf["value"].to_numpy()
     after_vals = gdf2["value_extrapolated"].to_numpy()
 
-    assert np.allclose(before_vals[~np.isnan(before_vals)],
-                       after_vals[~np.isnan(before_vals)])
+    assert np.allclose(
+        before_vals[~np.isnan(before_vals)], after_vals[~np.isnan(before_vals)]
+    )
 
     assert np.allclose(after_vals[np.isnan(before_vals)], 10.0)
 
 
 def test_update_gdf_rounding_is_internal_only():
     """Your implementation always rounds internally, so we do not test ndigits."""
-    gdf = gpd.GeoDataFrame({
-        "geometry": [Point(0, 0)],
-        "value": [np.nan],
-    })
+    gdf = gpd.GeoDataFrame(
+        {
+            "geometry": [Point(0, 0)],
+            "value": [np.nan],
+        }
+    )
 
     X = np.array([[0]])
     Y = np.array([[0]])
@@ -45,7 +48,7 @@ def test_update_gdf_rounding_is_internal_only():
 
 
 def test_backfill_gdf_at_height_maps_to_grid():
-    gdf, X, Y, Z_true, Z_obs, mask = generate_campbell2d_grid(
+    gdf, X, Y, Z_true, _Z_obs, _mask = generate_campbell2d_grid(
         nx=10, ny=10, missing_pattern="none"
     )
 
@@ -67,23 +70,25 @@ def test_backfill_gdf_at_height_maps_to_grid():
         backfilled_array=preds,
     )
 
-    assert np.allclose(np.sort(out["value"]),
-                       np.sort(Z_true.ravel()),
-                       atol=1e-3)
+    assert np.allclose(
+        np.sort(out["value"]), np.sort(Z_true.ravel()), atol=1e-3
+    )
 
 
 def test_backfill_gdf_at_height_shape_mismatch_raises():
-    gdf = gpd.GeoDataFrame({
-        "geometry": [Point(1,1), Point(2,2)],
-        "value": [np.nan, np.nan],
-        "x": [1,2],
-        "y": [1,2],
-        "z": [0,0],
-    })
+    gdf = gpd.GeoDataFrame(
+        {
+            "geometry": [Point(1, 1), Point(2, 2)],
+            "value": [np.nan, np.nan],
+            "x": [1, 2],
+            "y": [1, 2],
+            "z": [0, 0],
+        }
+    )
 
-    wrong_preds = np.ones((3,3))
-    X = np.ones((2,2))
-    Y = np.ones((2,2))
+    wrong_preds = np.ones((3, 3))
+    X = np.ones((2, 2))
+    Y = np.ones((2, 2))
 
     with pytest.raises(ValueError):
         backfill_gdf_at_height(
@@ -95,4 +100,3 @@ def test_backfill_gdf_at_height_shape_mismatch_raises():
             Y_grid=Y,
             backfilled_array=wrong_preds,
         )
-

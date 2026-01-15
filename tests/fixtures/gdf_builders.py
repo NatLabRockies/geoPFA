@@ -2,6 +2,7 @@ import geopandas as gpd
 from shapely.geometry import Point
 import numpy as np
 
+
 def gdf_from_xy_value(xs, ys, Z):
     """
     Helper that converts x,y,Z to a GeoDataFrame with column 'value'.
@@ -25,4 +26,3 @@ def extract_xy_from_gdf(gdf):
     x = gdf.geometry.x.to_numpy()
     y = gdf.geometry.y.to_numpy()
     return x, y
-
