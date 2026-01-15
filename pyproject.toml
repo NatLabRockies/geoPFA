@@ -36,7 +36,6 @@ classifiers=[
 dependencies = [
   "iapws>=1.5.4",
   "matplotlib>=3.1",
-  "networkx>=2.3",
   "notebook",
   "numpy>=1.16",
   "pandas>=2.0",
@@ -130,7 +129,6 @@ gdal = ">=3.10.2,<4"
 geopandas = ">=1.1.1,<2"
 jupyterlab = ">=4.3.4,<5"
 iapws = "==1.5.4"
-networkx = "==3.4.2"
 matplotlib = ">=3.10.7,<4"
 numpy = ">=1.26.4,<2"
 pandas = ">=2.3.3,<3"
