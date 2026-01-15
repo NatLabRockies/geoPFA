@@ -37,7 +37,7 @@ dependencies = [
   "iapws>=1.5.4",
   "matplotlib>=3.0",
   "notebook",
-  "numpy>=1.24",
+  "numpy>=1.21.6",
   "pandas>=2.0",
   "psutil>=6.1.0",
   "pyarrow>=20.0",
@@ -124,11 +124,11 @@ geoPFA = { path = ".", editable = true }
 [tool.pixi.dependencies]
 contextily = "==1.6.2"
 gdal = ">=3.10.2,<4"
-geopandas = ">=1.0,<2"
+geopandas = ">=0.14.4,<2"
 jupyterlab = ">=4.3.4,<5"
 iapws = "==1.5.4"
 matplotlib = ">=3.10.7,<4"
-numpy = ">=1.24,<2"
+numpy = ">=1.21.6,<2"
 pandas = ">=2.3.3,<3"
 pathos = "==0.3.3"
 pyarrow = ">=21.0.0,<22"
