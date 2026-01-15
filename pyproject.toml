@@ -41,8 +41,8 @@ dependencies = [
   "pandas>=2.0",
   "psutil>=6.1.0",
   "pytest>=5.2",
-  "pyarrow>=21.0.0,<22",
-  "pooch>=1.8.2,<2",
+  "pyarrow>=20.0",
+  "pooch>=1.8",
   "seaborn>=0.13.2",
   "geopandas>=1.0",
   "rasterio>=1.4.2",
@@ -126,7 +126,7 @@ geoPFA = { path = ".", editable = true }
 [tool.pixi.dependencies]
 contextily = "==1.6.2"
 gdal = ">=3.10.2,<4"
-geopandas = ">=1.1.1,<2"
+geopandas = ">=1.0,<2"
 jupyterlab = ">=4.3.4,<5"
 iapws = "==1.5.4"
 matplotlib = ">=3.10.7,<4"
@@ -138,7 +138,7 @@ pykrige = ">=1.7.1,<2"
 pooch = ">=1.8.2,<2"
 psutil = "==6.1.0"
 rasterio = "==1.4.2"
-scipy = "==1.12.0"
+scipy = ">=1.11,<=1.12.0"
 seaborn = ">=0.13.2,<0.14"
 shapely = ">=2.1.0,<3"
 statsmodels = ">=0.14.6,<0.15"
