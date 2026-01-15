@@ -7710,16 +7710,16 @@ packages:
   timestamp: 1766475275483
 - pypi: ./
   name: geopfa
-  version: 0.0.16.dev8+g8ce22d2a3
-  sha256: 807656efad89e308ca5cc697325630ba7a9b2a1b95af5230614597e5ca968042
+  version: 0.0.17.dev4+g230362451.d20260115
+  sha256: 50507e94e49e20857c7b411eec6e188f0b7882e3145721a0c819069170727808
   requires_dist:
   - contextily>=1.6.2
-  - geopandas>=1.0
+  - geopandas>=0.14.4
   - gpy>=1.13.2
   - iapws>=1.5.4
-  - matplotlib>=3.1
+  - matplotlib>=3.0
   - notebook
-  - numpy>=1.16
+  - numpy>=1.24
   - pandas>=2.0
   - pathos>=0.3.3
   - pooch>=1.8
@@ -7727,7 +7727,7 @@ packages:
   - pyarrow>=20.0
   - pykrige>=1.7
   - rasterio>=1.4.2
-  - scipy>=1.12
+  - scipy>=1.11
   - shapely>=2.0.6
   - statsmodels>=0.14
   - tqdm>=4.67
