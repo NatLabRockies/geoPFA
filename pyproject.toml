@@ -40,7 +40,6 @@ dependencies = [
   "numpy>=1.16",
   "pandas>=2.0",
   "psutil>=6.1.0",
-  "pytest>=5.2",
   "pyarrow>=20.0",
   "pooch>=1.8",
   "seaborn>=0.13.2",
