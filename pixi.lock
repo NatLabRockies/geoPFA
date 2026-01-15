@@ -8349,8 +8349,8 @@ packages:
   timestamp: 1759763364111
 - pypi: ./
   name: geopfa
-  version: 0.0.15.dev1+gc5d247e0b.d20260114
-  sha256: f383fbb8ff40943ce3a81ea0bcd90222eafa89ba64c0a24e996128aafe9310ec
+  version: 0.0.15.dev6+ge617782fd
+  sha256: b087bf016e4d955eb490283657337669887e470a551d4e75b5c912db1dcfe455
   requires_dist:
   - contextily>=1.6.2
   - geopandas>=1.0
@@ -8394,7 +8394,7 @@ packages:
   - pytest-xdist>=3.0 ; extra == 'test'
   - pytest>=7.0 ; extra == 'test'
   - tox>=4.0 ; extra == 'test'
-  requires_python: '>=3.10'
+  requires_python: '>=3.11'
 - conda: https://conda.anaconda.org/conda-forge/noarch/geopy-2.4.1-pyhd8ed1ab_2.conda
   sha256: ac453c9558c48febe452c79281c632b3749baef7c04ed4b62f871709aee2aa03
   md5: 40182a8d62a61d147ec7d3e4c5c36ac2
