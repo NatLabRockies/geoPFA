@@ -59,9 +59,6 @@ dependencies = [
   "tqdm",
 ]
 [project.optional-dependencies]
-uncertainty = [
-  "geostatspy>=0.0.72,<0.0.73",
-  ]
 dev = [
   "ipython>=8.29.0",
   "twine>=5.1",
