@@ -7767,22 +7767,21 @@ packages:
   timestamp: 1766475275483
 - pypi: ./
   name: geopfa
-  version: 0.0.16.dev2+ga0e52149e.d20260115
-  sha256: d3e1c8b5cae366c7102ec6dd8d49e0a420e488e55d4488a46ac86cf0003d991c
+  version: 0.0.16.dev5+g12c6e318f.d20260115
+  sha256: e1e507ab955793f13d38d21627bdcdfc088727c918f363c45ab03042f219c305
   requires_dist:
   - contextily>=1.6.2
   - geopandas>=1.0
   - gpy>=1.13.2
   - iapws>=1.5.4
   - matplotlib>=3.1
-  - networkx>=2.3
   - notebook
   - numpy>=1.16
   - pandas>=2.0
   - pathos>=0.3.3
-  - pooch>=1.8.2,<2
+  - pooch>=1.8
   - psutil>=6.1.0
-  - pyarrow>=21.0.0,<22
+  - pyarrow>=20.0
   - pykrige>=1.7
   - pytest>=5.2
   - rasterio>=1.4.2
