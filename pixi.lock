@@ -7767,8 +7767,8 @@ packages:
   timestamp: 1766475275483
 - pypi: ./
   name: geopfa
-  version: 0.0.16.dev1+ga72e7b6c1.d20260115
-  sha256: 359b80b0d9b21f47c45a4dd237a0ebaaef8d6d225923241a0108b47505660011
+  version: 0.0.16.dev2+ga0e52149e.d20260115
+  sha256: d3e1c8b5cae366c7102ec6dd8d49e0a420e488e55d4488a46ac86cf0003d991c
   requires_dist:
   - contextily>=1.6.2
   - geopandas>=1.0
@@ -7786,7 +7786,7 @@ packages:
   - pykrige>=1.7
   - pytest>=5.2
   - rasterio>=1.4.2
-  - scipy>=1.11
+  - scipy>=1.12
   - seaborn>=0.13.2
   - shapely>=2.0.6
   - statsmodels>=0.14

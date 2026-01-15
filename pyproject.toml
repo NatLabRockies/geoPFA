@@ -48,7 +48,7 @@ dependencies = [
   "geopandas>=1.0",
   "rasterio>=1.4.2",
   "shapely>=2.0.6",
-  "scipy>=1.11",
+  "scipy>=1.12",
   "contextily>=1.6.2",
   "pathos>=0.3.3",
   "pykrige>=1.7",
@@ -140,7 +140,7 @@ pykrige = ">=1.7.1,<2"
 pooch = ">=1.8.2,<2"
 psutil = "==6.1.0"
 rasterio = "==1.4.2"
-scipy = ">=1.11,<=1.12.0"
+scipy = "==1.12.0"
 seaborn = ">=0.13.2,<0.14"
 shapely = ">=2.1.0,<3"
 statsmodels = ">=0.14.6,<0.15"
