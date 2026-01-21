@@ -9,11 +9,18 @@ transition process to a unified module.
 from datetime import timedelta
 from hypothesis import given, settings, strategies as st
 import numpy as np
+import geopandas as gpd
+from shapely.geometry import Point
 import pytest
 
 import geopfa.geopfa2d.layer_combination as layer_combination_2D
 import geopfa.geopfa3d.layer_combination as layer_combination_3D
 from geopfa.layer_combination import VoterVeto
+from geopfa.layer_combination import (
+    detect_geom_dimension,
+    detect_pfa_dimension,
+)
+from tests.fixtures.pfa_builders import make_pfa_with_layers
 
 
 # ==== Transition tets ====
@@ -145,3 +152,119 @@ def test_voter_properties(Pr0, n_layers, ni, nj, nk):
 
     assert PrX.shape == (ni, nj, nk)
     assert np.all(PrX >= 0) and np.all(PrX <= 1)
+
+
+# ==== Dimensionality detection function tests ====
+
+
+def test_detect_geom_dimension_2d():
+    gdf = gpd.GeoDataFrame(
+        geometry=[
+            Point(0, 0),
+            Point(1, 1),
+            Point(2, 2),
+        ]
+    )
+
+    assert detect_geom_dimension(gdf) == 2
+
+
+def test_detect_geom_dimension_3d():
+    gdf = gpd.GeoDataFrame(
+        geometry=[
+            Point(0, 0, 0),
+            Point(1, 1, 1),
+            Point(2, 2, 2),
+        ]
+    )
+
+    assert detect_geom_dimension(gdf) == 3
+
+
+def test_detect_geom_dimension_mixed_raises():
+    gdf = gpd.GeoDataFrame(
+        geometry=[
+            Point(0, 0),
+            Point(1, 1, 1),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="Mixed 2D and 3D geometries"):
+        detect_geom_dimension(gdf)
+
+
+def test_detect_geom_dimension_empty_raises():
+    gdf = gpd.GeoDataFrame(geometry=[])
+
+    with pytest.raises(ValueError, match="empty GeoDataFrame"):
+        detect_geom_dimension(gdf)
+
+
+def test_detect_geom_dimension_all_none_raises():
+    gdf = gpd.GeoDataFrame(geometry=[None, None])
+
+    with pytest.raises(ValueError, match="all geometries are None"):
+        detect_geom_dimension(gdf)
+
+
+def test_detect_pfa_dimension_single_layer_2d():
+    gdf = gpd.GeoDataFrame(geometry=[Point(0, 0), Point(1, 1)])
+
+    pfa = make_pfa_with_layers({"layer1": gdf})
+
+    assert detect_pfa_dimension(pfa) == 2
+
+
+def test_detect_pfa_dimension_multiple_layers_same_dim():
+    gdf1 = gpd.GeoDataFrame(geometry=[Point(0, 0), Point(1, 1)])
+    gdf2 = gpd.GeoDataFrame(geometry=[Point(2, 2), Point(3, 3)])
+
+    pfa = make_pfa_with_layers(
+        {
+            "layer1": gdf1,
+            "layer2": gdf2,
+        }
+    )
+
+    assert detect_pfa_dimension(pfa) == 2
+
+
+def test_detect_pfa_dimension_mixed_layers_raises():
+    gdf2d = gpd.GeoDataFrame(geometry=[Point(0, 0)])
+    gdf3d = gpd.GeoDataFrame(geometry=[Point(0, 0, 1)])
+
+    pfa = make_pfa_with_layers(
+        {
+            "layer2d": gdf2d,
+            "layer3d": gdf3d,
+        }
+    )
+
+    with pytest.raises(ValueError, match="mixes 2D and 3D geometries"):
+        detect_pfa_dimension(pfa)
+
+
+def test_detect_pfa_dimension_all_layers_empty_raises():
+    pfa = make_pfa_with_layers(
+        {
+            "layer1": gpd.GeoDataFrame(geometry=[]),
+            "layer2": gpd.GeoDataFrame(geometry=[]),
+        }
+    )
+
+    with pytest.raises(
+        ValueError, match="No non-empty layer models were found"
+    ):
+        detect_pfa_dimension(pfa)
+
+
+def test_detect_pfa_dimension_all_layers_none_raises():
+    pfa = make_pfa_with_layers(
+        {
+            "layer1": None,
+            "layer2": None,
+        }
+    )
+
+    with pytest.raises(ValueError):
+        detect_pfa_dimension(pfa)
