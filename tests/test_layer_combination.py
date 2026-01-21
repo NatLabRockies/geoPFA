@@ -155,6 +155,7 @@ def test_voter_properties(Pr0, n_layers, ni, nj, nk):
 
 
 # ==== Dimensionality detection function tests ====
+# Basic checks on gdf and pfa dimensionality and mismatches
 
 
 def test_detect_geom_dimension_2d():
@@ -268,3 +269,87 @@ def test_detect_pfa_dimension_all_layers_none_raises():
 
     with pytest.raises(ValueError):
         detect_pfa_dimension(pfa)
+
+
+# ==== prepare_for_combination tests ====
+# Ensure function
+
+
+def test_prepare_propagate_shared_partial_nans():
+    # No NaNs propogate unless at shared pixels with
+    # nan_mode = "propagate_shared"
+    arr = np.array(
+        [
+            [[1.0, np.nan], [2.0, 3.0]],
+            [[4.0, 5.0], [np.nan, 6.0]],
+        ]
+    )
+
+    filled, mask = VoterVeto.prepare_for_combination(
+        arr, nan_mode="propagate_shared"
+    )
+
+    # Only pixels where *all* inputs are NaN should be masked
+    assert mask.shape == (2, 2)
+    assert not mask.any()
+
+    # Filled array should contain no NaNs
+    assert not np.isnan(filled).any()
+
+
+def test_prepare_propagate_any_masks_any_nan():
+    # Ensure any NaNs propogate (get masked) with
+    # nan_mode = "propagate_any"
+    arr = np.array(
+        [
+            [[1.0, np.nan], [2.0, 3.0]],
+            [[4.0, 5.0], [np.nan, 6.0]],
+        ]
+    )
+
+    filled, mask = VoterVeto.prepare_for_combination(
+        arr, nan_mode="propagate_any"
+    )
+
+    expected_mask = np.array(
+        [
+            [False, True],
+            [True, False],
+        ]
+    )
+
+    assert np.array_equal(mask, expected_mask)
+
+    # Filled array itself should be finite (mask controls NaNs)
+    assert not np.isnan(filled).any()
+
+
+def test_prepare_all_nan_input():
+    # All NaNs in -> all NaNs out
+    arr = np.array(
+        [
+            [[np.nan, np.nan], [np.nan, np.nan]],
+            [[np.nan, np.nan], [np.nan, np.nan]],
+        ]
+    )
+
+    filled, mask = VoterVeto.prepare_for_combination(
+        arr, nan_mode="propagate_shared"
+    )
+
+    # All pixels have no data
+    assert mask.all()
+
+    # Filled array should remain NaN everywhere
+    assert np.isnan(filled).all()
+
+
+def test_prepare_invalid_inputs_raise():
+    # Too few dimensions
+    with pytest.raises(ValueError):
+        VoterVeto.prepare_for_combination(np.array([1.0, 2.0]))
+
+    # Invalid nan_mode
+    arr = np.zeros((2, 2, 2))
+    with pytest.raises(ValueError):
+        VoterVeto.prepare_for_combination(arr, nan_mode="not_a_mode")
