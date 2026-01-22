@@ -21,6 +21,7 @@ from geopfa.layer_combination import (
     detect_pfa_dimension,
 )
 from tests.fixtures.pfa_builders import make_pfa_with_layers
+from tests.fixtures.gdf_builders import gdf_from_xy_value, extract_xy_from_gdf
 
 
 # ==== Transition tets ====
@@ -319,7 +320,7 @@ def test_modified_veto_weighted_no_veto():
 
 
 def test_prepare_propagate_shared_partial_nans():
-    # No NaNs propogate unless at shared pixels with
+    # No NaNs propagate unless at shared pixels with
     # nan_mode = "propagate_shared"
     arr = np.array(
         [
@@ -341,7 +342,7 @@ def test_prepare_propagate_shared_partial_nans():
 
 
 def test_prepare_propagate_any_masks_any_nan():
-    # Ensure any NaNs propogate (get masked) with
+    # Ensure any NaNs propagate (get masked) with
     # nan_mode = "propagate_any"
     arr = np.array(
         [
@@ -396,3 +397,97 @@ def test_prepare_invalid_inputs_raise():
     arr = np.zeros((2, 2, 2))
     with pytest.raises(ValueError):
         VoterVeto.prepare_for_combination(arr, nan_mode="not_a_mode")
+
+
+# ==== do_voter_veto tests ====
+
+
+def test_do_voter_veto_minimal_2d():
+    # Basic 2D pipeline test
+    xs = np.array([0.0, 1.0])
+    ys = np.array([0.0, 1.0])
+
+    Z = np.array(
+        [
+            [1.0, 2.0],
+            [3.0, 4.0],
+        ]
+    )
+
+    gdf = gdf_from_xy_value(xs, ys, Z)
+
+    pfa = make_pfa_with_layers({"layer1": gdf})
+
+    layer_cfg = pfa["criteria"]["crit1"]["components"]["comp1"]["layers"][
+        "layer1"
+    ]
+    layer_cfg["model_data_col"] = "value"
+    layer_cfg["weight"] = 1.0
+    layer_cfg["transformation_method"] = "none"
+
+    pfa["criteria"]["crit1"]["weight"] = 1.0
+    pfa["criteria"]["crit1"]["components"]["comp1"]["weight"] = 1.0
+    pfa["criteria"]["crit1"]["components"]["comp1"]["pr0"] = 0.5
+
+    result = VoterVeto.do_voter_veto(
+        pfa,
+        normalize_method="minmax",
+        normalize=True,
+    )
+
+    assert "pr" in result
+    assert len(result["pr"]) == 4
+    assert "favorability" in result["pr"].columns
+
+
+def test_do_voter_veto_nan_propagate_shared():
+    # Ensure shared NaNs propagate with
+    # nan_mode="propagate_shared"
+
+    xs = np.array([0.0, 1.0])
+    ys = np.array([0.0, 1.0])
+
+    Z1 = np.array(
+        [
+            [np.nan, 1.0],
+            [2.0, 3.0],
+        ]
+    )
+
+    Z2 = np.array(
+        [
+            [np.nan, 4.0],
+            [5.0, 6.0],
+        ]
+    )
+
+    gdf1 = gdf_from_xy_value(xs, ys, Z1)
+    gdf2 = gdf_from_xy_value(xs, ys, Z2)
+
+    pfa = make_pfa_with_layers(
+        {
+            "layer1": gdf1,
+            "layer2": gdf2,
+        }
+    )
+
+    for name in ["layer1", "layer2"]:
+        layer_cfg = pfa["criteria"]["crit1"]["components"]["comp1"]["layers"][
+            name
+        ]
+        layer_cfg["model_data_col"] = "value"
+        layer_cfg["weight"] = 0.5
+        layer_cfg["transformation_method"] = "none"
+
+    pfa["criteria"]["crit1"]["weight"] = 1.0
+    pfa["criteria"]["crit1"]["components"]["comp1"]["weight"] = 1.0
+    pfa["criteria"]["crit1"]["components"]["comp1"]["pr0"] = 0.5
+
+    result = VoterVeto.do_voter_veto(
+        pfa,
+        normalize_method="minmax",
+        nan_mode="propagate_shared",
+    )
+
+    vals = result["pr"]["favorability"].values
+    assert np.isnan(vals).sum() == 1  # only shared-NaN pixel
