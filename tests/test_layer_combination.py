@@ -105,57 +105,7 @@ def test_validate_3D_voter(Pr0, n_layers, ni, nj, nk):
 
 
 # ==== Unified module tests ====
-
-
-def test_get_w0():
-    """Test some special cases for `get_w0`"""
-    assert np.isneginf(VoterVeto.get_w0(0))
-
-    assert VoterVeto.get_w0(0.5) == 0.0
-
-    with pytest.raises(ZeroDivisionError):
-        VoterVeto.get_w0(1)
-
-
-def test_voter():
-    """Test a simple case for `voter`"""
-    w = np.array([0.1])
-    z = np.array(
-        [
-            [
-                [1, 2],
-                [10, 20],
-            ]
-        ]
-    )
-    w0 = VoterVeto.get_w0(0.5)
-    PrX = VoterVeto.voter(w, z, w0)
-
-    assert np.allclose(
-        PrX, np.array([[0.52497919, 0.549834], [0.73105858, 0.88079708]])
-    )
-
-
-@given(
-    st.floats(min_value=0.0, max_value=1.0, exclude_max=True),
-    st.integers(min_value=1, max_value=10),
-    st.integers(min_value=1, max_value=100),
-    st.integers(min_value=1, max_value=100),
-    st.integers(min_value=0, max_value=100),
-)
-def test_voter_properties(Pr0, n_layers, ni, nj, nk):
-    w = np.random.random(n_layers)
-    z = np.random.random((n_layers, ni, nj, nk))
-    w0 = VoterVeto.get_w0(Pr0)
-
-    PrX = VoterVeto.voter(w, z, w0)
-
-    assert PrX.shape == (ni, nj, nk)
-    assert np.all(PrX >= 0) and np.all(PrX <= 1)
-
-
-# ==== Dimensionality detection function tests ====
-# Basic checks on gdf and pfa dimensionality and mismatches
+# ==== detect_geom_dimension tests ====
 
 
 def test_detect_geom_dimension_2d():
@@ -206,6 +156,9 @@ def test_detect_geom_dimension_all_none_raises():
 
     with pytest.raises(ValueError, match="all geometries are None"):
         detect_geom_dimension(gdf)
+
+
+# ==== detect_pfa_dimension tests ====
 
 
 def test_detect_pfa_dimension_single_layer_2d():
@@ -271,8 +224,98 @@ def test_detect_pfa_dimension_all_layers_none_raises():
         detect_pfa_dimension(pfa)
 
 
+# ==== get_w0 tests ====
+
+
+def test_get_w0():
+    """Test some special cases for `get_w0`"""
+    assert np.isneginf(VoterVeto.get_w0(0))
+
+    assert VoterVeto.get_w0(0.5) == 0.0
+
+    with pytest.raises(ZeroDivisionError):
+        VoterVeto.get_w0(1)
+
+
+# ==== voter tests ====
+
+
+def test_voter():
+    """Test a simple case for `voter`"""
+    w = np.array([0.1])
+    z = np.array(
+        [
+            [
+                [1, 2],
+                [10, 20],
+            ]
+        ]
+    )
+    w0 = VoterVeto.get_w0(0.5)
+    PrX = VoterVeto.voter(w, z, w0)
+
+    assert np.allclose(
+        PrX, np.array([[0.52497919, 0.549834], [0.73105858, 0.88079708]])
+    )
+
+
+@given(
+    st.floats(min_value=0.0, max_value=1.0, exclude_max=True),
+    st.integers(min_value=1, max_value=10),
+    st.integers(min_value=1, max_value=100),
+    st.integers(min_value=1, max_value=100),
+    st.integers(min_value=0, max_value=100),
+)
+def test_voter_properties(Pr0, n_layers, ni, nj, nk):
+    w = np.random.random(n_layers)
+    z = np.random.random((n_layers, ni, nj, nk))
+    w0 = VoterVeto.get_w0(Pr0)
+
+    PrX = VoterVeto.voter(w, z, w0)
+
+    assert PrX.shape == (ni, nj, nk)
+    assert np.all(PrX >= 0) and np.all(PrX <= 1)
+
+
+# ==== veto tests ====
+
+
+def test_veto_elementwise_multiplication():
+    PrXs = np.array(
+        [
+            [[0.0, 0.2], [1.0, 0.8]],
+            [[0.4, 0.5], [0.5, np.nan]],
+        ]
+    )
+
+    result = VoterVeto.veto(PrXs)
+
+    expected = np.array([[0.0 * 0.4, 0.2 * 0.5], [1.0 * 0.5, np.nan]])
+
+    assert np.allclose(result, expected, equal_nan=True)
+
+
+# ==== modified_veto tests ====
+
+
+def test_modified_veto_weighted_no_veto():
+    PrXs = np.array(
+        [
+            [[1.0, 2.0], [3.0, 4.0]],
+            [[2.0, 2.0], [2.0, 2.0]],
+        ]
+    )
+    w = np.array([0.5, 0.5])
+
+    result = VoterVeto.modified_veto(PrXs, w, veto=False)
+
+    # Basic sanity checks
+    assert result.shape == (2, 2)
+    assert np.nanmax(result) > 0
+    assert result[1, 1] > result[0, 0]  # ordering preserved
+
+
 # ==== prepare_for_combination tests ====
-# Ensure function
 
 
 def test_prepare_propagate_shared_partial_nans():
