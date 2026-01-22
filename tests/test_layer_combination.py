@@ -24,7 +24,7 @@ from tests.fixtures.pfa_builders import make_pfa_with_layers
 from tests.fixtures.gdf_builders import gdf_from_xy_value, extract_xy_from_gdf
 
 
-# ==== Transition tets ====
+# ==== Transition tests ====
 # Tests to secure the transition from the 2D & 3D modules to the
 # unified module. Eventually, this might be unecessary.
 
@@ -440,6 +440,58 @@ def test_do_voter_veto_minimal_2d():
     assert "favorability" in result["pr"].columns
 
 
+def test_do_voter_veto_minimal_3d():
+    # Basic 3D pipeline test
+    xs = np.array([0.0, 1.0])
+    ys = np.array([0.0, 1.0])
+    zs = np.array([0.0, 1.0])  # two depth levels
+
+    pts = []
+    vals = []
+
+    Z = np.array(
+        [
+            [[1.0, 2.0], [3.0, 4.0]],
+            [[5.0, 6.0], [7.0, 8.0]],
+        ]
+    )
+
+    for k, z in enumerate(zs):
+        for i, y in enumerate(ys):
+            for j, x in enumerate(xs):
+                pts.append(Point(x, y, z))
+                vals.append(Z[k, i, j])
+
+    gdf = gpd.GeoDataFrame(
+        {"geometry": pts, "value": vals},
+        crs=None,
+    )
+
+    pfa = make_pfa_with_layers({"layer1": gdf})
+
+    layer_cfg = pfa["criteria"]["crit1"]["components"]["comp1"]["layers"][
+        "layer1"
+    ]
+    layer_cfg["model_data_col"] = "value"
+    layer_cfg["weight"] = 1.0
+    layer_cfg["transformation_method"] = "none"
+
+    pfa["criteria"]["crit1"]["weight"] = 1.0
+    pfa["criteria"]["crit1"]["components"]["comp1"]["weight"] = 1.0
+    pfa["criteria"]["crit1"]["components"]["comp1"]["pr0"] = 0.5
+
+    result = VoterVeto.do_voter_veto(
+        pfa,
+        normalize_method="minmax",
+        normalize=True,
+    )
+
+    assert "pr" in result
+    assert len(result["pr"]) == 8  # 2×2×2 voxels
+    assert "favorability" in result["pr"].columns
+    assert result["pr"].geometry.iloc[0].has_z
+
+
 def test_do_voter_veto_nan_propagate_shared():
     # Ensure shared NaNs propagate with
     # nan_mode="propagate_shared"
@@ -491,3 +543,42 @@ def test_do_voter_veto_nan_propagate_shared():
 
     vals = result["pr"]["favorability"].values
     assert np.isnan(vals).sum() == 1  # only shared-NaN pixel
+
+
+def test_do_voter_veto_shape_mismatch_raises():
+    # Ensure we warn against mismatched grids
+    xs1 = np.array([0.0, 1.0])
+    ys1 = np.array([0.0, 1.0])
+    Z1 = np.ones((2, 2))
+
+    xs2 = np.array([0.0, 1.0, 2.0])
+    ys2 = np.array([0.0, 1.0])
+    Z2 = np.ones((2, 3))
+
+    gdf1 = gdf_from_xy_value(xs1, ys1, Z1)
+    gdf2 = gdf_from_xy_value(xs2, ys2, Z2)
+
+    pfa = make_pfa_with_layers(
+        {
+            "layer1": gdf1,
+            "layer2": gdf2,
+        }
+    )
+
+    for name in ["layer1", "layer2"]:
+        layer_cfg = pfa["criteria"]["crit1"]["components"]["comp1"]["layers"][
+            name
+        ]
+        layer_cfg["model_data_col"] = "value"
+        layer_cfg["weight"] = 0.5
+        layer_cfg["transformation_method"] = "none"
+
+    pfa["criteria"]["crit1"]["weight"] = 1.0
+    pfa["criteria"]["crit1"]["components"]["comp1"]["weight"] = 1.0
+    pfa["criteria"]["crit1"]["components"]["comp1"]["pr0"] = 0.5
+
+    with pytest.raises(ValueError, match="Layer grid shape mismatch"):
+        VoterVeto.do_voter_veto(
+            pfa,
+            normalize_method="minmax",
+        )
