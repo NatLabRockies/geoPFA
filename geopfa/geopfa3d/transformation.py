@@ -2,7 +2,7 @@
 Transition module
 
 All functionalities from this module were moved to
-:module:`~geopfa.transformation`.
+:mod:`~geopfa.transformation`.
 """
 
 import warnings
