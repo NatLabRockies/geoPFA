@@ -38,7 +38,7 @@ exclude_patterns = []
 
 # -- Extension configuration -------------------------------------------------
 # Specify your BibTeX file(s)
-bibtex_bibfiles = ['references.bib']
+bibtex_bibfiles = ["references.bib"]
 
 
 # -- Options for HTML output -------------------------------------------------
