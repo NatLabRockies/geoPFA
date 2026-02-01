@@ -22,6 +22,7 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx_copybutton",
+    "sphinxcontrib.bibtex",
 ]
 
 intersphinx_mapping = {
@@ -33,6 +34,11 @@ intersphinx_mapping = {
 
 templates_path = ["_templates"]
 exclude_patterns = []
+
+
+# -- Extension configuration -------------------------------------------------
+# Specify your BibTeX file(s)
+bibtex_bibfiles = ['references.bib']
 
 
 # -- Options for HTML output -------------------------------------------------
