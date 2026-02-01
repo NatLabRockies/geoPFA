@@ -13,6 +13,7 @@ documentation for details.
    :maxdepth: 2
    :caption: Contents:
 
+    Installation <install>
     API reference <_autosummary/geoPFA>
 
 
