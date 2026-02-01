@@ -14,7 +14,7 @@ documentation for details.
    :caption: Contents:
 
     Installation <install>
-    API reference <_autosummary/geoPFA>
+    API reference <_autosummary/geopfa>
 
 
 What is geoPFA?
