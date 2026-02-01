@@ -82,9 +82,9 @@ test = [
 ]
 
 [project.urls]
-homepage = "https://github.com/NREL/geoPFA"
-documentation = "https://github.com/NREL/geoPFA"
-repository = "https://github.com/NREL/geoPFA"
+homepage = "https://github.com/NatLabRockies/geoPFA"
+documentation = "https://github.com/NatLabRockies/geoPFA"
+repository = "https://github.com/NatLabRockies/geoPFA"
 
 [tool.hatch.build.hooks.vcs]
 version-file = "geopfa/_version.py"
