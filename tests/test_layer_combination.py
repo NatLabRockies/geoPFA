@@ -30,7 +30,9 @@ from tests.fixtures.gdf_builders import gdf_from_xy_value, extract_xy_from_gdf
 
 
 def test_2D_get_w0():
-    """Test some special cases for `get_w0`"""
+    """
+    Test some special cases for `get_w0`
+    """
     Voter = layer_combination_2D.VoterVeto()
 
     assert np.isneginf(Voter.get_w0(0))
@@ -42,7 +44,9 @@ def test_2D_get_w0():
 
 
 def test_3D_get_w0():
-    """Test some special cases for `get_w0`"""
+    """
+    Test some special cases for `get_w0`
+    """
     Voter = layer_combination_3D.VoterVeto()
 
     assert np.isneginf(Voter.get_w0(0))
@@ -63,6 +67,9 @@ def test_3D_get_w0():
     )
 )
 def test_validate_2D_and_3D_get_w0(Pr0):
+    """
+    Confirm that get_w0 is consistent with the unified module
+    """
     ans = VoterVeto.get_w0(Pr0)
     assert ans == layer_combination_2D.VoterVeto().get_w0(Pr0)
     assert ans == layer_combination_3D.VoterVeto().get_w0(Pr0)
@@ -76,7 +83,9 @@ def test_validate_2D_and_3D_get_w0(Pr0):
 )
 @settings(max_examples=10, deadline=timedelta(milliseconds=500))
 def test_validate_2D_voter(Pr0, n_layers, ni, nj):
-    """Confirm that the 2D voter is consistent with the unified module"""
+    """
+    Confirm that the 2D voter is consistent with the unified module
+    """
     Voter = layer_combination_2D.VoterVeto()
 
     w = np.random.random(n_layers)
@@ -95,7 +104,9 @@ def test_validate_2D_voter(Pr0, n_layers, ni, nj):
 )
 @settings(max_examples=10, deadline=timedelta(milliseconds=500))
 def test_validate_3D_voter(Pr0, n_layers, ni, nj, nk):
-    """Confirm that the 3D voter is consistent with the unified module"""
+    """
+    Confirm that the 3D voter is consistent with the unified module
+    """
     Voter = layer_combination_3D.VoterVeto()
 
     w = np.random.random(n_layers)
@@ -107,9 +118,14 @@ def test_validate_3D_voter(Pr0, n_layers, ni, nj, nk):
 
 # ==== Unified module tests ====
 # ==== detect_geom_dimension tests ====
+# The function detects whether a GeoDataFrame geometry is 2D or 3D and
+# raises a ValueError if gdf is empty or has mixed dimensionality.
 
 
 def test_detect_geom_dimension_2d():
+    """
+    Verify that purely 2D geometries are correctly identified as 2D.
+    """
     gdf = gpd.GeoDataFrame(
         geometry=[
             Point(0, 0),
@@ -122,6 +138,10 @@ def test_detect_geom_dimension_2d():
 
 
 def test_detect_geom_dimension_3d():
+    """
+    Verify that purely 3D geometries (with Z coordinates) are correctly
+    identified as 3D.
+    """
     gdf = gpd.GeoDataFrame(
         geometry=[
             Point(0, 0, 0),
@@ -134,6 +154,10 @@ def test_detect_geom_dimension_3d():
 
 
 def test_detect_geom_dimension_mixed_raises():
+    """
+    Ensure an error is raised when 2D and 3D geometries are mixed within
+    a single GeoDataFrame.
+    """
     gdf = gpd.GeoDataFrame(
         geometry=[
             Point(0, 0),
@@ -146,6 +170,9 @@ def test_detect_geom_dimension_mixed_raises():
 
 
 def test_detect_geom_dimension_empty_raises():
+    """
+    Ensure an informative error is raised for empty GeoDataFrames.
+    """
     gdf = gpd.GeoDataFrame(geometry=[])
 
     with pytest.raises(ValueError, match="empty GeoDataFrame"):
@@ -153,6 +180,9 @@ def test_detect_geom_dimension_empty_raises():
 
 
 def test_detect_geom_dimension_all_none_raises():
+    """
+    Ensure an error is raised when all geometries are None.
+    """
     gdf = gpd.GeoDataFrame(geometry=[None, None])
 
     with pytest.raises(ValueError, match="all geometries are None"):
@@ -160,9 +190,14 @@ def test_detect_geom_dimension_all_none_raises():
 
 
 # ==== detect_pfa_dimension tests ====
+# The function detects whether the PFA uses 2D or 3D geometries and enforces
+# that non-empty layer GeoDataFrames must share the same dimensionality.
 
 
 def test_detect_pfa_dimension_single_layer_2d():
+    """
+    Infer overall PFA dimensionality from a single 2D layer.
+    """
     gdf = gpd.GeoDataFrame(geometry=[Point(0, 0), Point(1, 1)])
 
     pfa = make_pfa_with_layers({"layer1": gdf})
@@ -171,6 +206,10 @@ def test_detect_pfa_dimension_single_layer_2d():
 
 
 def test_detect_pfa_dimension_multiple_layers_same_dim():
+    """
+    Infer overall PFA dimensionality when multiple layers consistently share
+    the same dimension.
+    """
     gdf1 = gpd.GeoDataFrame(geometry=[Point(0, 0), Point(1, 1)])
     gdf2 = gpd.GeoDataFrame(geometry=[Point(2, 2), Point(3, 3)])
 
@@ -185,6 +224,9 @@ def test_detect_pfa_dimension_multiple_layers_same_dim():
 
 
 def test_detect_pfa_dimension_mixed_layers_raises():
+    """
+    Reject PFAs that mix 2D and 3D layers across components or criteria.
+    """
     gdf2d = gpd.GeoDataFrame(geometry=[Point(0, 0)])
     gdf3d = gpd.GeoDataFrame(geometry=[Point(0, 0, 1)])
 
@@ -200,6 +242,9 @@ def test_detect_pfa_dimension_mixed_layers_raises():
 
 
 def test_detect_pfa_dimension_all_layers_empty_raises():
+    """
+    Ensure an error is raised when no non-empty layer models are available.
+    """
     pfa = make_pfa_with_layers(
         {
             "layer1": gpd.GeoDataFrame(geometry=[]),
@@ -214,6 +259,9 @@ def test_detect_pfa_dimension_all_layers_empty_raises():
 
 
 def test_detect_pfa_dimension_all_layers_none_raises():
+    """
+    Ensure an error is raised when all layer models are set to None.
+    """
     pfa = make_pfa_with_layers(
         {
             "layer1": None,
@@ -226,10 +274,13 @@ def test_detect_pfa_dimension_all_layers_none_raises():
 
 
 # ==== get_w0 tests ====
+# The function derives w0 value using logit function.
 
 
 def test_get_w0():
-    """Test some special cases for `get_w0`"""
+    """
+    Validate special and boundary cases for the unified get_w0 implementation.”
+    """
     assert np.isneginf(VoterVeto.get_w0(0))
 
     assert VoterVeto.get_w0(0.5) == 0.0
@@ -239,10 +290,16 @@ def test_get_w0():
 
 
 # ==== voter tests ====
+# The voter function combines processed, transformed, and scaled data layers into a
+# 'favorability' grid for a specific required resource component using a
+# generalized linear model.
 
 
 def test_voter():
-    """Test a simple case for `voter`"""
+    """
+    Verify the voter produces expected favorability values for a simple,
+    deterministic input.
+    """
     w = np.array([0.1])
     z = np.array(
         [
@@ -268,6 +325,9 @@ def test_voter():
     st.integers(min_value=0, max_value=100),
 )
 def test_voter_properties(Pr0, n_layers, ni, nj, nk):
+    """
+    Ensure voter outputs preserve expected shape and remain bounded.
+    """
     w = np.random.random(n_layers)
     z = np.random.random((n_layers, ni, nj, nk))
     w0 = VoterVeto.get_w0(Pr0)
@@ -279,9 +339,15 @@ def test_voter_properties(Pr0, n_layers, ni, nj, nk):
 
 
 # ==== veto tests ====
+# The veto function performs element-wise multiplication of component
+# favorabilities.
 
 
 def test_veto_elementwise_multiplication():
+    """
+    Confirm that the original veto combines component favorabilities via
+    element-wise multiplication, including NaN propagation.
+    """
     PrXs = np.array(
         [
             [[0.0, 0.2], [1.0, 0.8]],
@@ -297,9 +363,16 @@ def test_veto_elementwise_multiplication():
 
 
 # ==== modified_veto tests ====
+# modified_veto combines component 'favorability' grids into a resource 'favorability'
+# model, optionally vetoing areas where any one component is not present (0% 'favorability').
+# This method combines component 'favorability' grids using a weighted sum, and then normalizing.
 
 
 def test_modified_veto_weighted_no_veto():
+    """
+    Verify weighted aggregation behavior of modified_veto when hard vetoing
+    is disabled.
+    """
     PrXs = np.array(
         [
             [[1.0, 2.0], [3.0, 4.0]],
@@ -317,11 +390,15 @@ def test_modified_veto_weighted_no_veto():
 
 
 # ==== prepare_for_combination tests ====
+# The prepare_for_combination function prepare a stack of layers/components for
+# combination by handling NaNs.
 
 
 def test_prepare_propagate_shared_partial_nans():
-    # No NaNs propagate unless at shared pixels with
-    # nan_mode = "propagate_shared"
+    """
+    Ensure that NaNs propagate only when all contributing inputs are NaN at a
+    pixel under propagate_shared mode.
+    """
     arr = np.array(
         [
             [[1.0, np.nan], [2.0, 3.0]],
@@ -342,8 +419,10 @@ def test_prepare_propagate_shared_partial_nans():
 
 
 def test_prepare_propagate_any_masks_any_nan():
-    # Ensure any NaNs propagate (get masked) with
-    # nan_mode = "propagate_any"
+    """
+    Ensure that any NaN in contributing inputs masks the output pixel under
+    propagate_any mode.
+    """
     arr = np.array(
         [
             [[1.0, np.nan], [2.0, 3.0]],
@@ -369,7 +448,10 @@ def test_prepare_propagate_any_masks_any_nan():
 
 
 def test_prepare_all_nan_input():
-    # All NaNs in -> all NaNs out
+    """
+    Confirm that fully missing inputs remain fully masked and are not
+    neutral-filled.
+    """
     arr = np.array(
         [
             [[np.nan, np.nan], [np.nan, np.nan]],
@@ -389,6 +471,10 @@ def test_prepare_all_nan_input():
 
 
 def test_prepare_invalid_inputs_raise():
+    """
+    Ensure invalid input shapes or unsupported NaN handling modes raise
+    informative errors
+    """
     # Too few dimensions
     with pytest.raises(ValueError):
         VoterVeto.prepare_for_combination(np.array([1.0, 2.0]))
@@ -400,10 +486,15 @@ def test_prepare_invalid_inputs_raise():
 
 
 # ==== do_voter_veto tests ====
+# The do_voter_veto function combines individual data layers into a resource 'favorability'
+# model, using the unified 2D/3D voter-veto implementation with NaN handling.
 
 
 def test_do_voter_veto_minimal_2d():
-    # Basic 2D pipeline test
+    """
+    Run a minimal end-to-end 2D voter-veto pipeline to ensure basic wiring,
+    rasterization, and aggregation succeed.
+    """
     xs = np.array([0.0, 1.0])
     ys = np.array([0.0, 1.0])
 
@@ -441,7 +532,10 @@ def test_do_voter_veto_minimal_2d():
 
 
 def test_do_voter_veto_minimal_3d():
-    # Basic 3D pipeline test
+    """
+    Run a minimal end-to-end 3D voter-veto pipeline to ensure basic wiring,
+    rasterization, and aggregation succeed.
+    """
     xs = np.array([0.0, 1.0])
     ys = np.array([0.0, 1.0])
     zs = np.array([0.0, 1.0])  # two depth levels
@@ -493,7 +587,10 @@ def test_do_voter_veto_minimal_3d():
 
 
 def test_do_voter_veto_nan_propagate_shared():
-    # Ensure shared NaNs propagate with
+    """
+    Verify that shared NaN regions propagate correctly through the full
+    voter-veto workflow under the propagate_shared mode
+    """
     # nan_mode="propagate_shared"
 
     xs = np.array([0.0, 1.0])
@@ -546,7 +643,9 @@ def test_do_voter_veto_nan_propagate_shared():
 
 
 def test_do_voter_veto_shape_mismatch_raises():
-    # Ensure we warn against mismatched grids
+    """
+    Ensure the pipeline fails fast when layer grids have incompatible shapes.
+    """
     xs1 = np.array([0.0, 1.0])
     ys1 = np.array([0.0, 1.0])
     Z1 = np.ones((2, 2))
