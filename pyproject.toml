@@ -76,7 +76,6 @@ test = [
   "pytest-cases>=3.8.6,<4",
   "pytest-cov>=3.0",
   "pytest-profiling>=1.7.0,<2",
-  "pytest-xdist>=3.0",
   "tox>=4.0",
   "hypothesis>=6.0",
 ]
@@ -109,7 +108,7 @@ build-wheels = { cmd = "uv build --sdist --wheel --out-dir dist/ ." }
 publish-pypi = { cmd = "uv publish", depends-on = ["build-wheels"] }
 
 [tool.pixi.feature.test.tasks]
-python-tests = "pytest --durations=20 -rapP -vv --cov=geopfa --cov-report=html --cov-branch --cov-report=xml:coverage.xml --cov-fail-under=8 tests"
+python-tests = "pytest --durations=20 -rapP -vv --cov=geopfa --cov-report=html --cov-branch --cov-report=xml:coverage.xml --cov-fail-under=8 -n auto tests"
 
 [tool.pixi.environments]
 default = { solve-group = "default" }
@@ -154,6 +153,7 @@ pylint = ">=3.3.3,<4"
 pytest = ">=8.3.4,<9"
 pytest-cov = ">=7.0.0,<8"
 hypothesis = ">=6.129.3,<7"
+pytest-xdist = ">=3.8.0,<4"
 
 [tool.pixi.feature.dev.dependencies]
 ipython = "==8.29.0"
