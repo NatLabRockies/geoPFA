@@ -55,8 +55,8 @@ Choose your preferred installation method:
 
    Inside Python:
    ```python
-   import geoPFA
-   print(geoPFA.__version__)
+   import geopfa
+   print(geopfa.__version__)
    ```
 
 ---
@@ -69,7 +69,7 @@ as `virtualenv`.
 `geoPFA` requires **Python 3.11 or newer**.
 You might need to install PIP if it is not already provided.
 
-Inside your prefered environment manager
+Inside your preferred environment manager
 
 1. **Upgrade pip:**
 
@@ -94,7 +94,7 @@ Inside your prefered environment manager
    python -m pip install .
    ```
 
-5. **Verify the installation:**
+3. **Verify the installation:**
 
    Inside Python:
    ```python
