@@ -109,7 +109,7 @@ Inside your preferred environment manager
 (installing-from-released-wheels)=
 ## Installing from released Wheels
 
-Download from https://github.com/GeothermalExplorationTools/geopfa/releases
+Download from https://github.com/NatLabRockies/geoPFA/releases
 
 (installing-with-conda)=
 ## Installing with Conda/Mamba
