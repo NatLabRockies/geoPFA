@@ -14,6 +14,7 @@ documentation for details.
    :caption: Contents:
 
     Installation <install>
+    Methodology <methodology>
     API reference <_autosummary/geopfa>
 
 
