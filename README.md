@@ -7,7 +7,7 @@
 [![PythonV](https://img.shields.io/pypi/pyversions/geoPFA.svg)](https://pypi.org/project/geoPFA/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Pixi](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prefix-dev/pixi/main/assets/badge/v0.json)](https://pixi.sh)
-[![codecov](https://codecov.io/gh/NREL/geoPFA/graph/badge.svg?token=W2COSPBX4Z)](https://codecov.io/gh/NREL/geoPFA)
+[![codecov](https://codecov.io/gh/NatLabRockies/geoPFA/graph/badge.svg?token=W2COSPBX4Z)](https://codecov.io/gh/NatLabRockies/geoPFA)
 
 # Geothermal PFA
 
