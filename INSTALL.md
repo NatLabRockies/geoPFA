@@ -8,13 +8,14 @@ on your system.
 
 Choose your preferred installation method:
 
-1. [**Pixi** (recommended for development)](#installing-with-pixi-recommended) - Reproducible environments with exact dependency versions
+1. [**Pixi** (recommended for development)](#installing-with-pixi) - Reproducible environments with exact dependency versions
 2. [**pip**](#installing-with-pip) - Standard Python package installation
 3. [**Conda/Mamba**](#installing-with-conda) - Conda ecosystem integration
 4. [**Wheels**](#installing-from-released-wheels) - Pre-built distribution files
 
 ---
 
+(installing-with-pixi)=
 ## Installing with Pixi (recommended)
 
 [Pixi](https://pixi.sh) provides reproducible Python environments and is our recommended tool for development. It uses the `pyproject.toml` and `pixi.lock` files to ensure you have exactly the same dependencies as the development team.
@@ -61,6 +62,7 @@ Choose your preferred installation method:
 
 ---
 
+(installing-with-pip)=
 ## Installing with pip
 
 Installing with PIP is the most basic way of installing a Python package, and
@@ -104,8 +106,10 @@ Inside your preferred environment manager
 
 ---
 
+(installing-from-released-wheels)=
 ## Installing from released Wheels
 
 Download from https://github.com/GeothermalExplorationTools/geopfa/releases
 
+(installing-with-conda)=
 ## Installing with Conda/Mamba
