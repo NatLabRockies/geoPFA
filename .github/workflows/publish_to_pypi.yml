@@ -8,6 +8,8 @@ on:
 jobs:
   build_and_publish:
     name: Build and upload wheels
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
 
     steps:
