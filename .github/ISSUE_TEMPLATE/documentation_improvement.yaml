@@ -18,7 +18,7 @@ body:
       label: Location of the documentation
       description: >
         Please provide the location of the documentation,
-        placeholder: https://nrel.github.io/geoPFA/_autosummary/geopfa.cli.html#geopfa.cli
+      placeholder: https://nrel.github.io/geoPFA/_autosummary/geopfa.cli.html#geopfa.cli
     validations:
       required: true
   - type: textarea
