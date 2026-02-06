@@ -4,22 +4,14 @@
 Geothermal Play Fairway Analysis documentation
 ==============================================
 
-Add your content using ``reStructuredText`` syntax. See the
-`reStructuredText <https://www.sphinx-doc.org/en/master/usage/restructuredtext/index.html>`_
-documentation for details.
-
-
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+   :hidden:
 
     Installation <install>
     Methodology <methodology>
     API reference <_autosummary/geopfa>
 
 
-What is geoPFA?
----------------
-
-.. include:: ../README.md
-   :end-before: NOTICE
+.. include:: ../../README.md
+   :parser: myst
+   :end-before: <!-- start-license -->
