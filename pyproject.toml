@@ -253,7 +253,6 @@ ignore = [
   "Q000",  # Single quote
   "S101", # Use of assert
   "TRY003",
-  "UP038", # Use `X | Y` in `isinstance` call instead of `(X, Y)`
   "W505",  # Doc line too long
 ]
 
