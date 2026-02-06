@@ -60,16 +60,15 @@ dev = [
   "pre-commit>=4.0",
 ]
 doc = [
-  "ghp-import>=2.1",
+  "myst-parser>=5.0",
   "numpydoc>=1.6",
-  "make>=0.1",
-  "myst-parser>=3.0.1",
   "pandoc>=2.3",
   "pydata-sphinx-theme>=0.15",
-  "sphinx>=8.1.3,<9",
+  "sphinx>=8.1.3",
   "sphinx-click>=5.1",
   "sphinx-copybutton>=0.5",
   "sphinx-tabs>=3.4",
+  "sphinxcontrib-bibtex>=2.6.5",
 ]
 test = [
   "pytest>=7.0",
@@ -81,9 +80,9 @@ test = [
 ]
 
 [project.urls]
-homepage = "https://github.com/NREL/geoPFA"
-documentation = "https://github.com/NREL/geoPFA"
-repository = "https://github.com/NREL/geoPFA"
+homepage = "https://github.com/NatLabRockies/geoPFA"
+documentation = "https://github.com/NatLabRockies/geoPFA"
+repository = "https://github.com/NatLabRockies/geoPFA"
 
 [tool.hatch.build.hooks.vcs]
 version-file = "geopfa/_version.py"
@@ -101,7 +100,7 @@ channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64", "win-64"]
 
 [tool.pixi.feature.doc.tasks]
-python-docs = { cmd = "make html", cwd = "docs"}
+python-docs = { cmd = "make html", cwd = "docs", env = { SPHINXOPTS = "--fail-on-warning --keep-going --nitpicky" }}
 
 [tool.pixi.feature.build.tasks]
 build-wheels = { cmd = "uv build --sdist --wheel --out-dir dist/ ." }
@@ -144,9 +143,17 @@ tqdm = ">=4.67.1,<5"
 uv = ">=0.7.22,<0.8"
 
 [tool.pixi.feature.doc.dependencies]
-sphinx = ">=8.2.3,<9"
-myst-parser = ">=4.0.1,<5"
+ghp-import = ">=2.1.0,<3"
 make = ">=4.4.1,<5"
+myst-parser = ">=5.0.0,<6"
+pydata-sphinx-theme = ">=0.16.1,<0.17"
+sphinx = ">=8.2.3,<9"
+sphinx-click = ">=6.2.0,<7"
+sphinx-copybutton = ">=0.5.2,<0.6"
+sphinx-tabs = ">=3.4.1,<4"
+sphinxcontrib-mermaid = ">=2.0.0,<3"
+sphinxcontrib-bibtex = ">=2.6.5,<3"
+pandoc = ">=3.9,<4"
 
 [tool.pixi.feature.test.dependencies]
 pylint = ">=3.3.3,<4"
@@ -252,7 +259,6 @@ ignore = [
   "Q000",  # Single quote
   "S101", # Use of assert
   "TRY003",
-  "UP038", # Use `X | Y` in `isinstance` call instead of `(X, Y)`
   "W505",  # Doc line too long
 ]
 
