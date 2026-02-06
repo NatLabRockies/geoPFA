@@ -153,6 +153,7 @@ sphinx-copybutton = ">=0.5.2,<0.6"
 sphinx-tabs = ">=3.4.1,<4"
 sphinxcontrib-mermaid = ">=2.0.0,<3"
 sphinxcontrib-bibtex = ">=2.6.5,<3"
+pandoc = ">=3.9,<4"
 
 [tool.pixi.feature.test.dependencies]
 pylint = ">=3.3.3,<4"
