@@ -2,7 +2,7 @@
 Transition module
 
 All functionalities from this module were moved to
-:module:`~geopfa.layer_combination`.
+:mod:`~geopfa.layer_combination`.
 """
 
 import warnings

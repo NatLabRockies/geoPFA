@@ -41,6 +41,7 @@ to make better-informed decisions through reducing time required for developing
 workflows, allowing more time to be spent on feature engineering and interpretation
 of results.
 
+<!-- start-license -->
 # NOTICE
 
 Copyright © 2023 Alliance for Sustainable Energy, LLC
