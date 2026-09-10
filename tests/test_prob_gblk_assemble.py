@@ -661,6 +661,61 @@ def test_p_gblk_assemble_tolerates_sub_per_mille_boundary_roundoff():
     )
 
 
+def test_p_gblk_assemble_resamples_component_offsets_to_reference_grid():
+    """Component grids with serialization drift share one canonical support."""
+    rng = np.random.default_rng(94)
+    components = ["comp_a", "comp_b"]
+    reference = _make_grid_gdf(4)
+    spacing = float(np.diff(np.unique(reference.geometry.x)).min())
+    shift = 0.0005 * spacing
+    shifted = reference.copy()
+    shifted.geometry = shifted.translate(xoff=shift, yoff=shift)
+    pfa = _make_pfa(components, reference, n_layers=1, rng=rng)
+    comp_b = pfa["criteria"]["geologic"]["components"]["comp_b"]
+    comp_b["pr_norm"] = shifted.copy()
+    comp_b["layers"]["layer_0_comp_b"]["model"] = shifted.assign(
+        value_interpolated=(
+            2.0 * shifted.geometry.x.to_numpy()
+            + 3.0 * shifted.geometry.y.to_numpy()
+        )
+    )
+    alpha = _make_alpha_results(components, reference, rng=rng)
+    shifted_offset = (
+        shifted.geometry.x.to_numpy() + shifted.geometry.y.to_numpy()
+    )
+    alpha["comp_b"] = AlphaCResult(
+        grid_offset=shifted_offset,
+        scalar_fallback=0.0,
+    )
+    wells = _make_wells_gdf(10, components, rng=rng, unlabeled_count=0)
+    adapter = PFAGridAdapter(pfa, criteria="geologic", dimensions="2d")
+
+    result = assemble_gblk_inputs(
+        adapter,
+        LoadedLabels(gdf=wells, config=_make_labels_config(components)),
+        alpha,
+    )
+
+    expected_x = np.maximum(
+        reference.geometry.x.to_numpy(), shifted.geometry.x.min()
+    )
+    expected_y = np.maximum(
+        reference.geometry.y.to_numpy(), shifted.geometry.y.min()
+    )
+    np.testing.assert_allclose(
+        result.grid_offsets[:, 1],
+        expected_x + expected_y,
+        rtol=1e-12,
+        atol=1e-8,
+    )
+    np.testing.assert_allclose(
+        result.grid_evidence["comp_b"][:, 0],
+        2.0 * expected_x + 3.0 * expected_y,
+        rtol=1e-12,
+        atol=1e-8,
+    )
+
+
 def test_p_gblk_assemble_rejects_evidence_grid_without_full_coverage():
     rng = np.random.default_rng(92)
     components = ["comp_a"]

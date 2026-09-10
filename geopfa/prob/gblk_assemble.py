@@ -35,8 +35,9 @@ same play type share a common prior mean and between-region variance.
 Notes
 -----
 Grid offsets for wells are obtained by dimension-aware nearest-neighbour
-snapping onto the first component's ``pr_norm`` grid. Every fitted component
-must use the same ordered grid; mismatches fail closed.
+snapping onto the first component's ``pr_norm`` grid. Rectilinear component
+grids are linearly resampled to that canonical support; incomplete,
+duplicated, or non-covering grids fail closed.
 """
 
 from __future__ import annotations
@@ -62,7 +63,6 @@ from geopfa.prob.spatial_alignment import (
     align_to_grid_crs,
     extract_coordinates,
     grid_values_on_reference,
-    require_same_grid,
     sample_layer_at_points,
     snap_to_grid_indices,
 )
@@ -287,12 +287,6 @@ def _build_grid_evidence(
     """Build prediction-grid evidence in the same column order as well evidence."""
     grid_evidence: dict[str, NDArray[np.float64]] = {}
     for comp in component_names:
-        component_grid = adapter.pr_norm(comp)
-        require_same_grid(
-            reference_grid,
-            component_grid,
-            context=f"component {comp!r} probability grid",
-        )
         columns: list[NDArray[np.float64]] = []
         for lname in layer_names_map[comp]:
             layer_grid, value_col = _transformed_layer_model(
@@ -300,7 +294,7 @@ def _build_grid_evidence(
             )
             columns.append(
                 grid_values_on_reference(
-                    component_grid,
+                    reference_grid,
                     layer_grid,
                     value_col,
                     context=f"component {comp!r} layer {lname!r}",
@@ -310,9 +304,33 @@ def _build_grid_evidence(
             grid_evidence[comp] = np.column_stack(columns).astype(np.float64)
         else:
             grid_evidence[comp] = np.zeros(
-                (len(adapter.pr_norm(comp)), 0), dtype=np.float64
+                (len(reference_grid), 0), dtype=np.float64
             )
     return grid_evidence
+
+
+def _component_values_on_reference(
+    reference_grid: gpd.GeoDataFrame,
+    component_grid: gpd.GeoDataFrame,
+    values: NDArray[np.float64],
+    *,
+    context: str,
+) -> NDArray[np.float64]:
+    """Resample one component-grid vector onto the canonical support."""
+    vector = np.asarray(values, dtype=np.float64)
+    if vector.shape != (len(component_grid),):
+        raise GEOPFAValueError(
+            f"{context} has {vector.size} values; expected {len(component_grid)}"
+        )
+    value_col = "__geopfa_component_value__"
+    field = component_grid[[component_grid.geometry.name]].copy()
+    field[value_col] = vector
+    return grid_values_on_reference(
+        reference_grid,
+        field,
+        value_col,
+        context=context,
+    )
 
 
 def build_component_grid_evidence(
@@ -422,19 +440,16 @@ def assemble_gblk_inputs(
 
     grid_gdf = adapter.pr_norm(component_names[0])
     grid_coords = extract_coordinates(grid_gdf)
-    for component in component_names:
-        require_same_grid(
+    aligned_offsets = [
+        _component_values_on_reference(
             grid_gdf,
             adapter.pr_norm(component),
-            context=f"component {component!r} probability grid",
+            alpha_results[component].grid_offset,
+            context=f"component {component!r} alpha grid",
         )
-        if len(alpha_results[component].grid_offset) != len(grid_gdf):
-            raise GEOPFAValueError(
-                f"component {component!r} alpha offset length does not match grid"
-            )
-    grid_offsets = np.column_stack(
-        [alpha_results[c].grid_offset for c in component_names]
-    ).astype(np.float64)
+        for component in component_names
+    ]
+    grid_offsets = np.column_stack(aligned_offsets).astype(np.float64)
 
     wells_gdf = align_to_grid_crs(loaded_labels.gdf, grid_gdf)
     well_coords = extract_coordinates(wells_gdf)

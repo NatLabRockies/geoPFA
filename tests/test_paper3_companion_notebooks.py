@@ -71,6 +71,8 @@ def test_study_notebooks_use_only_public_geopfa_interfaces() -> None:
         assert "sys.path" not in source
         assert "load_probabilistic_config" not in source
         assert "/Users/" not in source
+        assert "GEOPFA_DEMO_OUTPUT_ROOT" in source
+        assert 'config_dict["output_dir"] = str(output_dir)' in source
 
 
 def test_study_notebooks_keep_runtime_checks_active_under_optimization() -> None:
