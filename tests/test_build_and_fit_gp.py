@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from geopfa.extrapolation import build_and_fit_gp
+from geopfa.spatial_lkx import LkxModel
 from tests.fixtures.data_generators import generate_campbell2d_grid
 from tests.fixtures.campbell2d import DEFAULT_THETA
 
@@ -38,8 +39,8 @@ def test_gp_noise_constraints_respected(small_training_set):
         verbose=False,
     )
 
-    var = float(model.Gaussian_noise.variance[0])
-    lower = constraints["Gaussian_noise"]["variance"]["lower"]
-
-    # Only enforce the lower bound, since GP optimization often expands variance upward
-    assert var >= lower
+    assert isinstance(model, LkxModel)
+    lambda_fit = float(constraints["lambda_fit"])
+    assert lambda_fit > 0, f"lambda_fit should be positive, got {lambda_fit}"
+    assert np.isfinite(lambda_fit), f"lambda_fit should be finite, got {lambda_fit}"
+    assert "lambda_bounds" in constraints

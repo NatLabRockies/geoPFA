@@ -157,3 +157,23 @@ examples/Newberry/3D/data/
 examples/Newberry/2D/outputs/
 examples/Newberry/3D/outputs/
 applications
+
+# latticekrigx migration slice-runner state (local only)
+.slice-runner-lkx/
+.slice-runner.main.bak
+
+.slice-runner-gblk-review/
+
+# Local publication-analysis products; compact checksummed evidence lives in PhD.
+.paper3_runs/
+
+# Downloaded/generated research artifacts are not source-controlled.
+data/raw/
+data/evidence_layers/
+data/labeled_wells/
+examples/**/data/
+examples/**/outputs/
+outputs/
+*.pkl
+.review_artifacts/
+.tmp_stage2_bundle/

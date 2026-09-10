@@ -390,3 +390,53 @@ class GeospatialDataWriters:
                             print(f"\t\tWrote {comp_name} component model")
 
         print("\nFinished exporting favorability models.\n")
+
+    @staticmethod
+    def export_probabilistic_results(
+        result,
+        output_dir,
+        *,
+        target_crs=None,
+        fmt: str = "csv",
+    ):
+        """Export probabilistic workflow results using the geoPFA IO conventions.
+
+        Parameters
+        ----------
+        result : ProbabilisticResult
+            Output from :func:`geopfa.prob.run_probabilistic`.
+        output_dir : str or Path
+            Directory to write output files into.
+        target_crs : str or int, optional
+            Reproject outputs to this CRS before writing.
+        fmt : {"csv", "shp", "both"}, optional
+            File format.  Defaults to ``"csv"``.
+        """
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        output_dir = _Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        def _write(gdf, stem):
+            if target_crs is not None:
+                gdf = gdf.to_crs(target_crs)
+            if fmt in {"csv", "both"}:
+                GeospatialDataWriters.write_csv(
+                    gdf, str(output_dir / f"{stem}.csv"), target_crs=target_crs
+                )
+            if fmt in {"shp", "both"}:
+                GeospatialDataWriters.write_shapefile(
+                    gdf, str(output_dir / f"{stem}.shp"), target_crs=target_crs
+                )
+
+        for comp_name, comp in result.components.items():
+            prob_gdf = (
+                comp.probability if hasattr(comp, "probability") else comp
+            )
+            _write(prob_gdf, f"{comp_name}_probability")
+
+        if result.combined is not None and len(result.combined) > 0:
+            _write(result.combined, "combined_probability")
+
+        for comp_name, gdf in result.calibrated_components.items():
+            _write(gdf, f"{comp_name}_probability_calibrated")

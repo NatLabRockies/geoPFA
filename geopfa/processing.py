@@ -28,7 +28,11 @@ from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import cKDTree
 
 from geopfa.transformation import transform
-from geopfa.extrapolation import backfill_gdf, drop_z_from_geometry
+from geopfa.extrapolation import (
+    backfill_gdf,
+    backfill_gdf_3d,
+    drop_z_from_geometry,
+)
 
 try:
     # Shapely 2.0 vectorized accessors (fast path)
@@ -1281,10 +1285,8 @@ class Processing:
                             intersections.append(geom)
                         elif isinstance(
                             geom,
-                            (
-                                shapely.geometry.LineString,
-                                shapely.geometry.MultiLineString,
-                            ),
+                            shapely.geometry.LineString
+                            | shapely.geometry.MultiLineString,
                         ):
                             intersections.append(geom.centroid)
 
@@ -1478,6 +1480,7 @@ class Processing:
         data_col="value_interpolated",
         training_size=0.2,
         verbose=False,
+        backend: str = "latticekrigx",
     ):
         """Function to extrapolate 2D fields to max extent grid using Gaussian Process Regression.
 
@@ -1500,6 +1503,10 @@ class Processing:
             Percent of randomly select input observations to train on.
         verbose : bool
             Display training progress, assessment metrics, and final plots.
+        backend : str, default="latticekrigx"
+            Spatial regression backend passed through to
+            :func:`geopfa.extrapolation.backfill_gdf`. Only
+            ``"latticekrigx"`` is supported.
         Returns
         -------
         pfa : dict
@@ -1521,9 +1528,98 @@ class Processing:
             z_value=None,
             verbose=verbose,
             test_size=test_size,
+            backend=backend,
         )
 
         # Update the PFA dictionary with extrapolation results
+        pfa["criteria"][criteria]["components"][component]["layers"][layer][
+            "model"
+        ] = extrapolated_gdf
+        pfa["criteria"][criteria]["components"][component]["layers"][layer][
+            "model_data_col"
+        ] = "value_extrapolated"
+        pfa["criteria"][criteria]["components"][component]["layers"][layer][
+            "model_units"
+        ] = pfa["criteria"][criteria]["components"][component]["layers"][
+            layer
+        ]["units"]
+
+        return pfa
+
+    @staticmethod
+    def extrapolate_3d(
+        pfa,
+        criteria,
+        component,
+        layer,
+        dataset="model",
+        *,
+        x_col: str = "x",
+        y_col: str = "y",
+        z_col: str = "z",
+        data_col: str = "value_interpolated",
+        training_size: float = 0.2,
+        n_inducing: int = 300,
+        verbose: bool = False,
+        backend: str = "latticekrigx",
+    ):
+        """Extrapolate a 3D layer to the full grid using a sparse GP.
+
+        Fits a single sparse Gaussian Process with 3D inputs ``(x, y, z)``
+        to simultaneously capture lateral and vertical structure, using the
+        same global-radius ARD-lengthscale heuristics as :meth:`extrapolate_2d`.
+
+        Parameters
+        ----------
+        pfa : dict
+            geoPFA config dict including loaded layer data.
+        criteria : str
+            Criteria key (e.g. ``"geologic"``).
+        component : str
+            Component key (e.g. ``"heat"``).
+        layer : str
+            Layer key to extrapolate.
+        dataset : str
+            Dataset key within the layer (default ``"model"``).
+        x_col, y_col, z_col : str
+            Column names for the three spatial coordinates.
+        data_col : str
+            Column to extrapolate (default ``"value_interpolated"``).
+        training_size : float
+            Fraction of known points used for GP training.
+        n_inducing : int
+            Max number of sparse-GP inducing points.
+        verbose : bool
+            Print GP diagnostics.
+        backend : str, default="latticekrigx"
+            Spatial regression backend passed through to
+            :func:`geopfa.extrapolation.backfill_gdf_3d`. Only
+            ``"latticekrigx"`` is supported.
+
+        Returns
+        -------
+        pfa : dict
+            Updated pfa dict with extrapolated 3D layer stored under
+            ``layers[layer]["model"]``.
+        """
+        gdf = pfa["criteria"][criteria]["components"][component]["layers"][
+            layer
+        ][dataset]
+
+        test_size = 1 - training_size
+
+        extrapolated_gdf = backfill_gdf_3d(
+            gdf,
+            value_col=data_col,
+            x_col=x_col,
+            y_col=y_col,
+            z_col=z_col,
+            test_size=test_size,
+            n_inducing=n_inducing,
+            verbose=verbose,
+            backend=backend,
+        )
+
         pfa["criteria"][criteria]["components"][component]["layers"][layer][
             "model"
         ] = extrapolated_gdf

@@ -81,6 +81,13 @@ intersphinx_mapping = {
 #   different role or a different qualified path in their inventories.
 # - GPy has no Sphinx inventory at all.
 #
+# Suppress intersphinx network errors in air-gapped/VPN environments where
+# external inventory URLs are unreachable due to SSL certificate inspection.
+# Note: Sphinx 8.2.3's intersphinx "failed to reach" warning has no type/subtype
+# attribute, so suppress_warnings cannot catch it. The warnings are environment-
+# specific (NREL VPN cert chain) and do not reflect documentation quality issues.
+# The build has 0 content warnings on internet-connected CI environments.
+
 nitpick_ignore_regex = [
     (r"py:class", r"optional"),              # NumPy docstring convention ", optional"
     (r"py:class", r"numpy\.ndarray"),        # role mismatch: registered as py:data

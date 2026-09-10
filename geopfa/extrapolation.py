@@ -1,27 +1,35 @@
 #!/usr/bin/env python3
 """
-exptrapolation.py - Gaussian Process Regression (GPR) for extrapolating values on a 2D grid over multiple Z slices.
+extrapolation.py - Gaussian Process Regression (GPR) for extrapolating values over a grid.
 
 This module provides functions for:
-- **I/O and Data Handling**: reading data into GeoDataFrames and saving/loading GPy models.
+- **I/O and Data Handling**: reading data into GeoDataFrames.
 - **Pre-processing**: preparing data for modeling (extracting slices, standardizing).
-- **Modeling**: building Gaussian Process models (with composite kernels) and making predictions.
+- **Modeling**: builds sparse GP (LatticeKrigX) models for 2D ``(x, y)`` and 3D ``(x, y, z)`` arrays.
+- **3D extrapolation**: :func:`backfill_gdf_3d` fits a single sparse GP over all three spatial dimensions (c.f. :func:`backfill_gdf` for 2D slice-by-slice).
 - **Validation/Evaluation**: assessing model performance and diagnostic tests on residuals.
 - **Visualization**: plotting residuals, uncertainty, and comparison of predictions vs true values.
 
+Public API highlights::
+
+    from geopfa.extrapolation import (
+        backfill_gdf,         # 2D GP extrapolation (slice-by-slice)
+        backfill_gdf_3d,      # 3D GP extrapolation (joint x,y,z model)
+        build_and_fit_gp,     # low-level sparse GP builder (LatticeKrigX)
+        standardize_xy,       # coordinate standardization (D-dimensional)
+        compute_global_radius,# ARD lengthscale heuristic
+    )
 """
+
+from __future__ import annotations
 
 import os
 import sys
 import logging
 from pathlib import Path
-from functools import reduce
-import operator
 import warnings
 
 import geopandas as gpd
-import GPy
-import joblib
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -39,69 +47,9 @@ from statsmodels.stats.diagnostic import acorr_ljungbox
 from tqdm import trange
 from pprint import pprint
 
-# Suppress specific warnings or verbose logs (e.g., from paramz transformation in GPy)
-logging.getLogger("paramz.transformations").setLevel(logging.ERROR)
+from geopfa import spatial_lkx
 
 # === I/O and Data Handling Functions ===
-
-
-def save_gpy_model(model: "GPy.core.GP", filepath: str) -> None:
-    """
-    Save a GPy model to disk using joblib.
-
-    Parameters
-    ----------
-    model : GPy.core.GP
-        Trained GPy model object to save.
-    filepath : str
-        Destination file path (e.g., ``'my_model.joblib'``). Parent
-        directories are created automatically.
-
-    Returns
-    -------
-    None
-    """
-    # Ensure parent directories exist
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-
-    # Save model with joblib
-    joblib.dump(model, filepath)
-
-    # Preserve original behavior: print confirmation
-    print(f"GPy model saved to: {filepath}")
-
-
-def load_gpy_model(filepath: str) -> "GPy.core.GP":
-    """
-    Load a serialized GPy model from disk using joblib.
-
-    Parameters
-    ----------
-    filepath : str
-        File path to the saved ``.joblib`` GPy model.
-
-    Returns
-    -------
-    GPy.core.GP
-        Loaded GPy model instance.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the file does not exist at the given path.
-    """
-    file_path = Path(filepath)
-
-    if not file_path.is_file():
-        raise FileNotFoundError(f"No file found at {filepath}")
-
-    # Load model
-    model = joblib.load(filepath)
-
-    # Preserve original behavior: print confirmation
-    print(f"GPy model loaded from: {filepath}")
-
-    return model
 
 
 def prepare_slice(
@@ -223,35 +171,38 @@ def standardize_xy(
     Standardize coordinate arrays using the mean and standard deviation computed
     from the training coordinates.
 
+    Works for any number of dimensions D ≥ 1 (2D ``(N, 2)`` or 3D ``(N, 3)``).
+
     Parameters
     ----------
     X_train : numpy.ndarray
-        Training coordinate array, shape ``(n_train, 2)``.
+        Training coordinate array, shape ``(n_train, D)``.
     X_full : numpy.ndarray
         Full coordinate array to be standardized using training statistics,
-        shape ``(n_full, 2)``.
+        shape ``(n_full, D)``.
 
     Returns
     -------
     X_train_std : numpy.ndarray
-        Standardized training coordinates, shape ``(n_train, 2)``.
+        Standardized training coordinates, shape ``(n_train, D)``.
     X_full_std : numpy.ndarray
-        Standardized full-grid coordinates, shape ``(n_full, 2)``.
+        Standardized full-grid coordinates, shape ``(n_full, D)``.
     mean : numpy.ndarray
-        Per-dimension mean of the training data, shape ``(2,)``.
+        Per-dimension mean of the training data, shape ``(D,)``.
     std : numpy.ndarray
-        Per-dimension standard deviation of the training data, shape ``(2,)``.
+        Per-dimension standard deviation of the training data, shape ``(D,)``.
 
     Notes
     -----
-    - This function computes statistics (mean, std) **only** from the training
-      array `X_train`, which ensures proper scaling when evaluating generalization.
+    - Statistics are computed **only** from ``X_train`` to avoid data leakage.
+    - Any dimension with zero variance (constant coordinate) is left at 0
+      rather than producing NaNs.
     """
-    # Compute scaling statistics from training data only
     mean = X_train.mean(axis=0)
     std = X_train.std(axis=0)
+    # Protect against zero-variance dimensions
+    std = np.where(std == 0, 1.0, std)
 
-    # Standardize training and full-grid coordinates
     X_train_std = (X_train - mean) / std
     X_full_std = (X_full - mean) / std
 
@@ -445,91 +396,36 @@ def estimate_variance(Y: ArrayLike) -> float:
     return float(np.var(Y_arr, ddof=1))
 
 
-def recommend_likelihood_params(
-    Y: np.ndarray,
-    Y_var: float | None = None,
-) -> dict:
-    """
-    Recommend initialization parameters and a prior for the Gaussian likelihood
-    (observation-noise variance) used in GPy models.
-
-    Parameters
-    ----------
-    Y : numpy.ndarray
-        Target values of shape (N, 1) or (N,). Flattening is handled internally.
-    Y_var : float or None, optional
-        Variance of the target values. If None, it is estimated using
-        :func:`estimate_variance`.
-
-    Returns
-    -------
-    dict
-        A dictionary containing:
-            - ``'init'`` : float
-                Initial noise variance estimate.
-            - ``'prior'`` : GPy.priors.Gamma
-                Gamma prior placed on the noise variance.
-            - ``'bounds'`` : tuple(float, float)
-                Lower and upper bounds for the noise variance parameter.
-
-        The dictionary is packaged under the key ``'variance'`` so that callers
-        can directly configure ``model.Gaussian_noise.variance``.
-
-    Notes
-    -----
-    - The initial noise variance is set to approximately 1% of the variance of Y.
-    - A Gamma prior is used to bias the optimization toward small but positive
-      values, reflecting typical assumptions about measurement noise.
-    """
-    # Estimate variance if not provided
-    if Y_var is None:
-        Y_var = estimate_variance(Y)
-
-    # 1% of data variance as initial noise level
-    noise_level = Y_var * 0.01
-
-    # Gamma prior for noise variance
-    variance_prior = GPy.priors.Gamma(2.0, noise_level / 2.0)
-
-    return {
-        "variance": {
-            "init": noise_level,
-            "prior": variance_prior,
-            "bounds": (1e-5, Y_var * 0.1),
-        }
-    }
-
-
 def compute_global_radius(X_std: np.ndarray) -> float:
     """
-    Compute a global spatial radius for standardized 2D coordinates.
+    Compute a global spatial radius for standardized coordinates.
 
     This is used to construct stable, dataset-independent kernel
     lengthscale bounds by estimating the largest half-extent of the
-    standardized domain.
+    standardized domain.  Works for any number of dimensions D ≥ 1.
 
     Parameters
     ----------
     X_std : numpy.ndarray
-        Standardized training coordinates, shape ``(N, 2)``. Each row is
-        ``[x, y]``.
+        Standardized training coordinates, shape ``(N, D)``.  Each row is
+        a D-dimensional coordinate vector (typically ``[x, y]`` for 2D
+        or ``[x, y, z]`` for 3D).
 
     Returns
     -------
     float
         The global radius of the dataset in standardized space, defined as
-        half of the larger of the x-range or y-range.
+        half of the maximum per-dimension range across all D dimensions.
 
     Notes
     -----
-    - The input must already be standardized (e.g., via ``standardize_xy``).
+    - The input must already be standardized (e.g., via :func:`standardize_xy`).
     - This radius is used to derive lower and upper bounds for ARD lengthscales.
+    - For 2D data the result is identical to the previous implementation.
     """
-    x_min, x_max = X_std[:, 0].min(), X_std[:, 0].max()
-    y_min, y_max = X_std[:, 1].min(), X_std[:, 1].max()
-
-    R = 0.5 * max(x_max - x_min, y_max - y_min)
-    return float(R)
+    dim_ranges = X_std.max(axis=0) - X_std.min(axis=0)
+    R = 0.5 * float(dim_ranges.max())
+    return R
 
 
 def compute_lengthscale_bounds_from_global_radius(
@@ -566,353 +462,19 @@ def compute_lengthscale_bounds_from_global_radius(
     return lower, upper
 
 
-def build_rbf_kernel_global(
-    X_stdized: np.ndarray,
-    Y_stdized: np.ndarray,
-    input_dim: int = 2,
-    lower_frac: float = 0.02,
-    upper_frac: float = 0.20,
-) -> tuple[GPy.kern.RBF, dict]:
-    """
-    Construct an RBF kernel whose ARD lengthscale bounds are derived from the
-    global radius of the standardized training coordinates.
-
-    Parameters
-    ----------
-    X_stdized : numpy.ndarray
-        Standardized training coordinates, shape ``(N, 2)``.
-    Y_stdized : numpy.ndarray
-        Standardized training targets, shape ``(N, 1)``.
-    input_dim : int, optional
-        Dimensionality of the input space. Default is 2.
-    lower_frac : float, optional
-        Fraction of the global radius used as the lower lengthscale bound.
-    upper_frac : float, optional
-        Fraction of the global radius used as the upper lengthscale bound.
-
-    Returns
-    -------
-    (GPy.kern.RBF, dict)
-        The constructed RBF kernel and a dictionary describing the applied
-        constraints and initialization values.
-
-    Notes
-    -----
-    - The global radius stabilizes ARD lengthscale bounds across datasets
-      with different spatial extents.
-    - Variance is initialized based on the variance of `Y_stdized` and
-      constrained with a Gamma prior.
-    """
-    # ------------------------------------------------------------------
-    # Compute global-radius-based lengthscale bounds
-    # ------------------------------------------------------------------
-    R = compute_global_radius(X_stdized)
-    lower, upper = compute_lengthscale_bounds_from_global_radius(
-        R, lower_frac, upper_frac
-    )
-
-    # ------------------------------------------------------------------
-    # Create RBF kernel with ARD
-    # ------------------------------------------------------------------
-    kern = GPy.kern.RBF(input_dim=input_dim, ARD=True)
-
-    # ------------------------------------------------------------------
-    # Kernel variance setup
-    # ------------------------------------------------------------------
-    Y_var = float(np.var(Y_stdized))
-    kern.variance[:] = max(Y_var, 1e-6)
-    kern.variance.set_prior(GPy.priors.Gamma(2.0, Y_var / 2.0))
-    kern.variance.constrain_bounded(Y_var * 0.01, Y_var * 10.0)
-
-    # ------------------------------------------------------------------
-    # Lengthscale initialization
-    # ------------------------------------------------------------------
-    init_ls = 0.5 * (lower + upper)
-    kern.lengthscale[:] = np.full(input_dim, init_ls)
-    kern.lengthscale.constrain_bounded(lower, upper)
-
-    # ------------------------------------------------------------------
-    # Record applied constraints
-    # ------------------------------------------------------------------
-    constraints = {
-        "R": R,
-        "ls_lower": lower,
-        "ls_upper": upper,
-        "ls_init": init_ls,
-        "var": kern.variance.values.copy(),  # noqa: PD011
-    }
-
-    return kern, constraints
-
-
-def build_matern32_kernel_global(
-    X_stdized: np.ndarray,
-    Y_stdized: np.ndarray,
-    input_dim: int = 2,
-    lower_frac: float = 0.02,
-    upper_frac: float = 0.20,
-) -> tuple[GPy.kern.Matern32, dict]:
-    """
-    Construct a Matern 3/2 kernel with ARD lengthscales constrained by the
-    global radius of the dataset in standardized space.
-
-    Parameters
-    ----------
-    X_stdized : numpy.ndarray
-        Standardized training coordinates, shape ``(N, 2)``.
-    Y_stdized : numpy.ndarray
-        Standardized training targets, shape ``(N, 1)``.
-    input_dim : int, optional
-        Dimensionality of the input space. Default is 2.
-    lower_frac : float, optional
-        Fraction of the global radius used for the lower lengthscale bound.
-    upper_frac : float, optional
-        Fraction of the global radius used for the upper lengthscale bound.
-
-    Returns
-    -------
-    (GPy.kern.Matern32, dict)
-        The Matern 3/2 kernel and a dictionary of initialization
-        values and bound settings.
-
-    Notes
-    -----
-    - Variance is initialized to half the variance of Y and given
-      a Gamma prior, matching the original implementation.
-    - Lengthscales are constrained to dataset-scaled bounds.
-    """
-    # ------------------------------------------------------------------
-    # Global-radius lengthscale bounds
-    # ------------------------------------------------------------------
-    R = compute_global_radius(X_stdized)
-    lower, upper = compute_lengthscale_bounds_from_global_radius(
-        R, lower_frac, upper_frac
-    )
-
-    # ------------------------------------------------------------------
-    # Base Matern32 kernel
-    # ------------------------------------------------------------------
-    kern = GPy.kern.Matern32(input_dim=input_dim, ARD=True)
-
-    # ------------------------------------------------------------------
-    # Variance initialization and prior
-    # ------------------------------------------------------------------
-    Y_var = float(np.var(Y_stdized))
-    kern.variance[:] = max(0.5 * Y_var, 1e-6)
-    kern.variance.set_prior(GPy.priors.Gamma(2.0, (0.5 * Y_var) / 2.0))
-    kern.variance.constrain_bounded(Y_var * 0.01, Y_var * 10.0)
-
-    # ------------------------------------------------------------------
-    # Lengthscale initialization from midpoint of bounds
-    # ------------------------------------------------------------------
-    init_ls = 0.5 * (lower + upper)
-    kern.lengthscale[:] = np.full(input_dim, init_ls)
-    kern.lengthscale.constrain_bounded(lower, upper)
-
-    # ------------------------------------------------------------------
-    # Export constraint info
-    # ------------------------------------------------------------------
-    constraints = {
-        "R": R,
-        "ls_lower": lower,
-        "ls_upper": upper,
-        "ls_init": init_ls,
-        "var": kern.variance.values.copy(),  # noqa: PD011
-    }
-
-    return kern, constraints
-
-
-def build_combined_kernel(  # noqa: PLR0913, PLR0917
-    X_stdized: np.ndarray,
-    Y_stdized: np.ndarray,
-    use_matern: bool = True,
-    use_rbf: bool = True,
-    bias: bool = True,
-    white: bool = True,
-    longscale: bool = True,
-    lower_frac: float = 0.02,
-    upper_frac: float = 0.20,
-) -> tuple[GPy.kern.Kern, dict]:
-    """
-    Construct a composite kernel consisting of optional components:
-    RBF, Matern 3/2, long-scale RBF, Bias, and White noise kernels.
-
-    Parameters
-    ----------
-    X_stdized : numpy.ndarray
-        Standardized training coordinates.
-    Y_stdized : numpy.ndarray
-        Standardized training targets.
-    use_matern : bool, optional
-        Whether to include a Matern 3/2 component.
-    use_rbf : bool, optional
-        Whether to include a short/medium-scale RBF component.
-    bias : bool, optional
-        Whether to include a constant Bias kernel.
-    white : bool, optional
-        Whether to include a White noise kernel.
-    longscale : bool, optional
-        Whether to include a very smooth long-scale RBF background kernel.
-    lower_frac : float, optional
-        Lower bound fraction (of global radius) for ARD lengthscales.
-    upper_frac : float, optional
-        Upper bound fraction (of global radius) for ARD lengthscales.
-
-    Returns
-    -------
-    kernel : GPy.kern.Kern
-        Combined kernel created by summing enabled components.
-    info : dict
-        Diagnostic information for each component, including learned bounds
-        and initialization values.
-
-    Notes
-    -----
-    - Behavior is identical to the original implementation.
-    - The long-scale RBF kernel is fixed to very smooth lengthscales and
-      tiny variance, acting as a gentle background component.
-    """
-    parts: list[GPy.kern.Kern] = []
-    info: dict = {}
-
-    # ------------------------------------------------------------------
-    # Global radius (useful for long-scale kernel and subkernels)
-    # ------------------------------------------------------------------
-    R = compute_global_radius(X_stdized)
-    info["global_radius"] = R
-
-    # ------------------------------------------------------------------
-    # RBF kernel
-    # ------------------------------------------------------------------
-    if use_rbf:
-        rbf, rbf_info = build_rbf_kernel_global(
-            X_stdized,
-            Y_stdized,
-            lower_frac=lower_frac,
-            upper_frac=upper_frac,
-        )
-        parts.append(rbf)
-        info["rbf"] = rbf_info
-
-    # ------------------------------------------------------------------
-    # Matern 3/2 kernel
-    # ------------------------------------------------------------------
-    if use_matern:
-        m32, m32_info = build_matern32_kernel_global(
-            X_stdized,
-            Y_stdized,
-            lower_frac=lower_frac,
-            upper_frac=upper_frac,
-        )
-        parts.append(m32)
-        info["matern32"] = m32_info
-
-    # ------------------------------------------------------------------
-    # Long-scale RBF (fixed ultra-smooth component)
-    # ------------------------------------------------------------------
-    if longscale:
-        K_long = GPy.kern.RBF(input_dim=2, ARD=True)
-
-        # Very small fixed variance
-        K_long.variance[:] = 0.05
-        K_long.variance.fix()
-
-        # Very large fixed lengthscale
-        long_ls = 2.0 * R
-        K_long.lengthscale[:] = np.full(2, long_ls)
-        K_long.lengthscale.fix()
-
-        parts.append(K_long)
-        info["longscale"] = {"variance": 0.05, "lengthscale": long_ls}
-
-    # ------------------------------------------------------------------
-    # Bias kernel: constant offset
-    # ------------------------------------------------------------------
-    if bias:
-        b = GPy.kern.Bias(input_dim=2)
-        b.variance.fix(1.0)
-        parts.append(b)
-        info["bias"] = {"variance": 1.0}
-
-    # ------------------------------------------------------------------
-    # White noise kernel
-    # ------------------------------------------------------------------
-    if white:
-        w = GPy.kern.White(input_dim=2, variance=1e-5)
-        w.variance.fix()
-        parts.append(w)
-        info["white"] = {"variance": 1e-5}
-
-    # ------------------------------------------------------------------
-    # Combine components
-    # ------------------------------------------------------------------
-    if not parts:
-        raise ValueError("No kernel components were enabled.")
-
-    if len(parts) == 1:
-        return parts[0], info
-
-    kernel = reduce(operator.add, parts)
-    return kernel, info
-
-
-def get_gaussian_noise_bounds(
-    lik_params: dict,
-) -> dict:
-    """
-    Extract Gaussian noise variance bounds from a likelihood-parameter dictionary.
-
-    Parameters
-    ----------
-    lik_params : dict
-        Dictionary returned by :func:`recommend_likelihood_params`, containing
-        keys such as ``'variance' : {'init', 'prior', 'bounds'}``.
-
-    Returns
-    -------
-    dict
-        Dictionary containing:
-            - ``'value'`` : float
-                Initial noise variance.
-            - ``'lower'`` : float
-                Lower bound on the noise variance.
-            - ``'upper'`` : float
-                Upper bound on the noise variance.
-
-        The returned structure mirrors the shape used for kernel constraint
-        introspection throughout the codebase.
-    """
-    return {
-        "variance": {
-            "value": lik_params["variance"]["init"],
-            "lower": lik_params["variance"]["bounds"][0],
-            "upper": lik_params["variance"]["bounds"][1],
-        }
-    }
-
-
 def build_and_fit_gp(  # noqa: PLR0913, PLR0917
     X_train_stdized: np.ndarray,
     Y_train_stdized: np.ndarray,
-    optimize_restarts: int = 0,
-    verbose: bool = False,
-    save_path: str | None = None,
-    n_inducing: int = 300,
-    lower_frac: float = 0.02,
-    upper_frac: float = 0.20,
-) -> tuple[GPy.models.SparseGPRegression, dict]:
+    optimize_restarts: int = 0,  # noqa: ARG001
+    verbose: bool = False,  # noqa: ARG001
+    save_path: str | None = None,  # noqa: ARG001
+    n_inducing: int = 300,  # noqa: ARG001
+    lower_frac: float = 0.02,  # noqa: ARG001
+    upper_frac: float = 0.20,  # noqa: ARG001
+    backend: str = "latticekrigx",  # noqa: ARG001
+) -> tuple:
     """
-    Build and train a Sparse Gaussian Process regression model using a globally
-    stabilized multi-kernel combination (RBF + Matern32 + optional Bias/White).
-
-    This method improves extrapolation stability by:
-
-    - Constraining ARD lengthscales based on global radius,
-    - Distributing inducing points across the domain via KMeans,
-    - Anchoring the prior with a constant-mean mapping,
-    - Adding bias and white kernels to reduce drift,
-    - Using a Gamma prior on the Gaussian likelihood noise variance.
+    Build and train a Sparse Gaussian Process regression model using LatticeKrigX.
 
     Parameters
     ----------
@@ -921,138 +483,44 @@ def build_and_fit_gp(  # noqa: PLR0913, PLR0917
     Y_train_stdized : numpy.ndarray
         Standardized training targets, shape ``(N, 1)``.
     optimize_restarts : int, optional
-        Number of multi-start optimization attempts. Default is 0.
+        Unused; kept for API compatibility.
     verbose : bool, optional
         Whether to print optimization diagnostics.
     save_path : str or None, optional
-        If provided, the model is saved to this path via joblib.
+        Unused; kept for API compatibility.
     n_inducing : int, optional
-        Target number of inducing points for SparseGPRegression.
+        Target number of inducing points.
     lower_frac : float, optional
         Fraction of global radius used for lower lengthscale bounds.
     upper_frac : float, optional
         Fraction of global radius used for upper lengthscale bounds.
+    backend : str, default="latticekrigx"
+        Spatial regression backend. Only ``"latticekrigx"`` is supported.
 
     Returns
     -------
-    model : GPy.models.SparseGPRegression
-        Trained sparse Gaussian Process model.
+    model : LkxModel
+        Trained LatticeKrigX spatial model.
     constraint_info : dict
-        Dictionary containing kernel and likelihood constraint diagnostics.
+        Dictionary containing model constraint diagnostics.
     """
-    # ----------------------------------------------------------------------
-    # 1. Build combined kernel using global-radius constraints
-    # ----------------------------------------------------------------------
-    kernel, kernel_info = build_combined_kernel(
-        X_train_stdized,
-        Y_train_stdized,
-        use_matern=True,
-        use_rbf=True,
-        bias=True,
-        white=True,
-        lower_frac=lower_frac,
-        upper_frac=upper_frac,
+    cfg = spatial_lkx.compute_lkx_config(
+        X_train_stdized, n_train=X_train_stdized.shape[0]
     )
-
-    # ----------------------------------------------------------------------
-    # 2. Constant mean function (frozen)
-    # ----------------------------------------------------------------------
-    mean_func = GPy.mappings.Constant(
-        input_dim=X_train_stdized.shape[1],
-        output_dim=1,
+    cfg.find_lambda = True
+    lkx_model = spatial_lkx.fit_lkx_field(
+        X_train_stdized, Y_train_stdized, config=cfg
     )
-    mean_func.C[:] = float(Y_train_stdized.mean())
-    mean_func.C.fix()
-
-    # ----------------------------------------------------------------------
-    # 3. Inducing point initialization via KMeans
-    # ----------------------------------------------------------------------
-    N = X_train_stdized.shape[0]
-    M = min(n_inducing, max(20, N // 10))
-
-    km = KMeans(n_clusters=M, n_init="auto")
-    Z = km.fit(X_train_stdized).cluster_centers_
-
-    # ----------------------------------------------------------------------
-    # 4. Construct sparse GP model
-    # ----------------------------------------------------------------------
-    model = GPy.models.SparseGPRegression(
-        X=X_train_stdized,
-        Y=Y_train_stdized,
-        kernel=kernel,
-        mean_function=mean_func,
-        Z=Z,
-        normalizer=False,
-    )
-
-    # ----------------------------------------------------------------------
-    # 5. Gaussian likelihood setup
-    # ----------------------------------------------------------------------
-    Y_var = float(np.var(Y_train_stdized))
-    lik_params = recommend_likelihood_params(Y_train_stdized, Y_var=Y_var)
-
-    model.Gaussian_noise.variance = lik_params["variance"]["init"]
-    model.Gaussian_noise.variance.constrain_bounded(
-        *lik_params["variance"]["bounds"]
-    )
-    model.Gaussian_noise.variance.set_prior(lik_params["variance"]["prior"])
-
-    constraint_info = {
-        "kernel": kernel_info,
-        "Gaussian_noise": get_gaussian_noise_bounds(lik_params),
-    }
-
-    # ----------------------------------------------------------------------
-    # 6. Optimize
-    # ----------------------------------------------------------------------
-    model.optimize(messages=verbose, max_iters=2000)
-
-    if optimize_restarts > 0:
-        model.optimize_restarts(
-            num_restarts=optimize_restarts,
-            verbose=verbose,
-            robust=True,
-            parallel=False,
-        )
-
-    # ----------------------------------------------------------------------
-    # 7. Optional save to disk
-    # ----------------------------------------------------------------------
-    if save_path:
-        save_gpy_model(model, save_path)
-
-    # ----------------------------------------------------------------------
-    # 8. Diagnostics
-    # ----------------------------------------------------------------------
-    if verbose:
-        print("\n=== Kernel Lengthscale Diagnostics ===")
-        for part in model.kern.parts:
-            if hasattr(part, "lengthscale"):
-                print(
-                    f"{part.name}: lengthscales = {np.array(part.lengthscale.values)}"
-                )
-
-        print("\n=== Inducing Point Ranges ===")
-        print(
-            "X range:",
-            model.Z[:, 0].min(),
-            "→",
-            model.Z[:, 0].max(),
-            "| Y range:",
-            model.Z[:, 1].min(),
-            "→",
-            model.Z[:, 1].max(),
-        )
-
-    return model, constraint_info
+    return lkx_model, lkx_model.constraint_info
 
 
-def get_predictions(
-    model: GPy.models.GPRegression,
+def get_predictions(  # noqa: PLR0913, PLR0917
+    model,
     X: np.ndarray,
     kvals_df: pd.DataFrame | dict | None = None,
     Y_mean: float | None = None,
     Y_std: float | None = None,
+    backend: str = "latticekrigx",  # noqa: ARG001
 ):
     """
     Generate GP predictions, optionally converting back to original Y-units and
@@ -1060,8 +528,8 @@ def get_predictions(
 
     Parameters
     ----------
-    model : GPy.models.GPRegression
-        Trained GP regression model.
+    model : LkxModel
+        Trained LatticeKrigX regression model.
     X : numpy.ndarray
         Input features in the same standardized space used during training,
         shape ``(N, D)``.
@@ -1072,6 +540,8 @@ def get_predictions(
         Mean of Y from the training dataset (for de-standardizing predictions).
     Y_std : float or None, optional
         Standard deviation of Y from the training dataset.
+    backend : str, default="latticekrigx"
+        Spatial regression backend. Only ``"latticekrigx"`` is supported.
 
     Returns
     -------
@@ -1085,36 +555,20 @@ def get_predictions(
 
     Notes
     -----
-    - This function reproduces the original behavior precisely:
-        * No additional sorting is applied beyond pandas pivot ordering.
-        * De-standardization (mean/std) is optional and only applied if both
-          parameters are provided.
+    De-standardization (mean/std) is optional and only applied if both
+    parameters are provided.
     """
-    # ------------------------------------------------------------------
-    # 1. Predict in standardized space
-    # ------------------------------------------------------------------
-    Y_pred, Y_var = model.predict(X)  # shapes: (N, 1)
-
-    # ------------------------------------------------------------------
-    # 2. Optional de-standardization
-    # ------------------------------------------------------------------
+    Y_pred_flat_std, Y_std_flat_std = spatial_lkx.lkx_predict(model, X)
     if Y_mean is not None and Y_std is not None:
-        Y_pred = Y_pred * Y_std + Y_mean
-        Y_var = (Y_std**2) * Y_var
+        Y_pred_flat = Y_pred_flat_std * Y_std + Y_mean
+        Y_std_flat = Y_std_flat_std * Y_std
+    else:
+        Y_pred_flat = Y_pred_flat_std
+        Y_std_flat = Y_std_flat_std
 
-    # Flatten outputs
-    Y_pred_flat = Y_pred.ravel()
-    Y_std_flat = np.sqrt(Y_var).ravel()
-
-    # ------------------------------------------------------------------
-    # 3. If no coordinate grid provided, return flat arrays
-    # ------------------------------------------------------------------
     if kvals_df is None:
         return Y_pred_flat, Y_std_flat
 
-    # ------------------------------------------------------------------
-    # 4. Grid reshape using x/y coordinates supplied by user
-    # ------------------------------------------------------------------
     coords = pd.DataFrame({"x": kvals_df["x"], "y": kvals_df["y"]})
     coords["pred"] = Y_pred_flat
     coords["std"] = Y_std_flat
@@ -1131,7 +585,7 @@ def get_predictions(
 
 
 def check_param_limits_hit_from_constraints(
-    model: GPy.core.GP,
+    model,  # noqa: ARG001
     constraints: dict,
 ) -> list[tuple]:
     r"""
@@ -1140,24 +594,12 @@ def check_param_limits_hit_from_constraints(
 
     Parameters
     ----------
-    model : GPy.core.GP
-        Trained GPy model. Must expose ``parameter_names()`` and allow
-        indexing parameters via ``model[name]``.
+    model : LkxModel
+        Trained LatticeKrigX regression model.
     constraints : dict
-        Dictionary describing parameter bounds (e.g., from ``build_and_fit_gp`` or
-        ``build_combined_kernel``). Expected format::
-
-            {
-                "rbf": {
-                    "variance": {"value": ..., "lower": ..., "upper": ...},
-                    "lengthscale": {...},
-                },
-                "matern32": { ... },
-                "Gaussian_noise": {
-                    "variance": {"value": ..., "lower": ..., "upper": ...}
-                },
-                ...
-            }
+        The ``constraint_info`` dict returned by
+        :func:`~geopfa.spatial_lkx.fit_lkx_field`, which must contain
+        ``lambda_fit`` and ``lambda_bounds`` keys.
 
     Returns
     -------
@@ -1169,69 +611,56 @@ def check_param_limits_hit_from_constraints(
 
     Notes
     -----
-    - Uses substring-prefix mapping (e.g., "rbf" → "sum.rbf") to resolve to
-      GPy's internal parameter names.
-    - Bounds must be present in ``constraints`` for comparison.
+    Checks ``lambda_`` against ``lambda_bounds`` and, when
+    ``a_wght_fit`` is present, checks each per-level ``a_wght`` against
+    ``a_wght_lower_bound``.
+    """
+    return _check_param_limits_lkx(constraints)
+
+
+def _check_param_limits_lkx(constraint_info: dict) -> list[tuple]:
+    """Check LkxModel parameters against their optimisation bounds.
+
+    Parameters
+    ----------
+    constraint_info : dict
+        ``constraint_info`` dict from :func:`~geopfa.spatial_lkx.fit_lkx_field`.
+
+    Returns
+    -------
+    list of tuple
+        Same format as :func:`check_param_limits_hit_from_constraints`:
+        ``(param_name, value_array, (lower, upper))``.
     """
     param_limits_hit: list[tuple] = []
 
-    # ------------------------------------------------------------------
-    # Map short-names to the kernel prefixes used in GPy parameter names
-    # ------------------------------------------------------------------
-    kernel_prefix_map = {
-        "rbf": "sum.rbf",
-        "Mat32": "sum.Mat32",
-        "white": "sum.white",
-        "Gaussian_noise": "Gaussian_noise",
-    }
+    lambda_fit = constraint_info.get("lambda_fit")
+    lambda_bounds = constraint_info.get("lambda_bounds")
 
-    # ------------------------------------------------------------------
-    # Make lookup table of model parameter names (case-insensitive)
-    # ------------------------------------------------------------------
-    model_params = {p.lower(): p for p in model.parameter_names()}
+    if lambda_fit is not None and lambda_bounds is not None:
+        lo, hi = float(lambda_bounds[0]), float(lambda_bounds[1])
+        val = np.array([lambda_fit])
+        at_lower = bool(np.any(np.isclose(val, lo, atol=1e-6)))
+        at_upper = bool(np.any(np.isclose(val, hi, atol=1e-6)))
+        if at_lower or at_upper:
+            param_limits_hit.append(("lambda_", val, (lo, hi)))
 
-    # ------------------------------------------------------------------
-    # Iterate over constraint groups
-    # ------------------------------------------------------------------
-    for short_name, params in constraints.items():
-        prefix = kernel_prefix_map.get(short_name)
-        if prefix is None:
-            continue
+    a_wght_fit = constraint_info.get("a_wght_fit")
+    a_wght_lb = constraint_info.get("a_wght_lower_bound")
 
-        # Each param inside the constraint entry (e.g., variance, lengthscale)
-        for param_name, info in params.items():
-            full_name_key = f"{prefix}.{param_name}".lower()
-            if full_name_key not in model_params:
-                continue
-
-            # Extract parameter from model
-            param_value = model[model_params[full_name_key]].values  # noqa: PD011
-
-            lower = info.get("lower")
-            upper = info.get("upper")
-            if lower is None or upper is None:
-                continue
-
-            # ------------------------------------------------------------------
-            # Check if any element lies extremely close to a bound
-            # ------------------------------------------------------------------
-            at_lower = np.any(np.isclose(param_value, lower, atol=1e-6))
-            at_upper = np.any(np.isclose(param_value, upper, atol=1e-6))
-
-            if at_lower or at_upper:
-                param_limits_hit.append(
-                    (
-                        model_params[full_name_key],
-                        param_value.copy(),
-                        (lower, upper),
-                    )
-                )
+    if a_wght_fit is not None and a_wght_lb is not None:
+        a_vals = np.asarray(a_wght_fit, dtype=float)
+        at_lower = bool(np.any(np.isclose(a_vals, a_wght_lb, atol=1e-3)))
+        if at_lower:
+            param_limits_hit.append(
+                ("a_wght", a_vals, (a_wght_lb, None))
+            )
 
     return param_limits_hit
 
 
-def assess_gp_model_fit(
-    model: GPy.models.GPRegression,
+def assess_gp_model_fit(  # noqa: PLR0914
+    model,
     Y_true: np.ndarray,
     Y_pred: np.ndarray,
     Y_pred_std: np.ndarray,
@@ -1243,8 +672,9 @@ def assess_gp_model_fit(
 
     Parameters
     ----------
-    model : GPy.models.GPRegression
-        Trained GP regression model.
+    model : LkxModel
+        Trained regression model. The profile log-likelihood and
+        free-parameter count are derived from ``constraints``.
     Y_true : numpy.ndarray
         True observed target values. Flattening is handled internally.
     Y_pred : numpy.ndarray
@@ -1253,7 +683,10 @@ def assess_gp_model_fit(
         Predicted standard deviations for the GP predictions.
     constraints : dict
         Constraint information returned during GP construction, used to
-        check whether any hyperparameters lie on their bounds.
+        check whether any hyperparameters lie on their bounds. For
+        :class:`~geopfa.spatial_lkx.LkxModel` this is the
+        ``constraint_info`` dict returned by
+        :func:`~geopfa.spatial_lkx.fit_lkx_field`.
 
     Returns
     -------
@@ -1273,7 +706,8 @@ def assess_gp_model_fit(
             Fraction of observations lying inside ±2 sigma predictive intervals.
 
         - ``LogLikelihood`` : float
-            GP model log marginal likelihood.
+            GP model log marginal likelihood (or profile log-likelihood for
+            LkxModel).
 
         - ``AIC`` : float
             Akaike Information Criterion ``2*k - 2*logL``.
@@ -1290,6 +724,11 @@ def assess_gp_model_fit(
       Inputs should already be in the desired scale.
     - The ±2 sigma coverage statistic provides a simple approximate 95% interval
       assessment for GP predictive uncertainty.
+    - For LkxModel, ``LogLikelihood`` is the profile log-likelihood stored in
+      ``constraint_info["lnProfileLike"]``. The effective parameter count ``k``
+      is 1 for a fixed-lambda fit (only ``sigma2_MLE`` is estimated), 2 when
+      ``lambda_`` is MLE-optimised, and 3 when both ``lambda_`` and ``a_wght``
+      are jointly optimised.
     """
     # Flatten inputs (behavior preserved)
     Y_true = np.asarray(Y_true).ravel()
@@ -1306,8 +745,20 @@ def assess_gp_model_fit(
     # ------------------------------------------------------------------
     # Likelihood and information criteria
     # ------------------------------------------------------------------
-    logL = float(model.log_likelihood())
-    k = model.num_params
+    if isinstance(model, spatial_lkx.LkxModel):
+        logL = float(constraints["lnProfileLike"])
+        mle_kind = constraints.get("mle", "fixed")
+        if mle_kind == "lambda+a_wght":
+            k = 3
+        elif mle_kind == "lambda":
+            k = 2
+        else:
+            k = 1
+    else:
+        raise TypeError(
+            f"Unsupported model type {type(model).__name__!r}; "
+            "assess_gp_model_fit only supports LkxModel."
+        )
     n = len(Y_true)
 
     aic = float(2 * k - 2 * logL)
@@ -2043,6 +1494,7 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
     test_size: float = 0.2,
     seed: int = 42,
     verbose: bool = True,
+    backend: str = "latticekrigx",
 ) -> gpd.GeoDataFrame:
     """
     Perform Gaussian Process-based extrapolation (or interpolation) to fill
@@ -2076,6 +1528,10 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
         Random seed for train/validation splitting.
     verbose : bool, optional
         Whether to print progress, diagnostics, and plots.
+    backend : str, default="latticekrigx"
+        Spatial regression backend passed through to
+        :func:`build_and_fit_gp` and :func:`get_predictions`. Only
+        ``"latticekrigx"`` is supported.
 
     Returns
     -------
@@ -2127,6 +1583,7 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
         Y_train,
         optimize_restarts=0,
         verbose=verbose,
+        backend=backend,
     )
 
     # ------------------------------------------------------------------
@@ -2137,6 +1594,7 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
         X_val,
         Y_mean=Y_train_mean,
         Y_std=Y_train_std,
+        backend=backend,
     )
 
     # ------------------------------------------------------------------
@@ -2174,6 +1632,7 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
         X_missing_stdized,
         Y_mean=Y_train_mean,
         Y_std=Y_train_std,
+        backend=backend,
     )
 
     # ------------------------------------------------------------------
@@ -2216,3 +1675,148 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
         )
 
     return gdf_filled
+
+
+# ---------------------------------------------------------------------------
+# 3D sparse GP extrapolation
+# ---------------------------------------------------------------------------
+
+
+def backfill_gdf_3d(  # noqa: PLR0913, PLR0914
+    gdf: gpd.GeoDataFrame,
+    value_col: str,
+    *,
+    x_col: str = "x",
+    y_col: str = "y",
+    z_col: str = "z",
+    test_size: float = 0.2,
+    seed: int = 42,
+    n_inducing: int = 300,
+    lower_frac: float = 0.02,
+    upper_frac: float = 0.20,
+    verbose: bool = False,
+    backend: str = "latticekrigx",
+) -> gpd.GeoDataFrame:
+    """Extrapolate missing values in a 3-D point cloud using a sparse GP.
+
+    Unlike :func:`backfill_gdf`, which works slice-by-slice at fixed Z
+    values, this function fits a single sparse GP with 3-D inputs
+    ``(x, y, z)`` so that the model captures both lateral and vertical
+    structure simultaneously.
+
+    The same global-radius heuristics (ARD lengthscale bounds, K-Means
+    inducing points, combined RBF+Matérn32 kernel) are used as in the 2D
+    case, generalised to D=3 via the updated :func:`compute_global_radius`
+    and :func:`standardize_xy`.
+
+    Parameters
+    ----------
+    gdf : geopandas.GeoDataFrame
+        GeoDataFrame with columns ``x_col``, ``y_col``, ``z_col``, and
+        ``value_col``.  Rows where ``value_col`` is NaN will be filled.
+    value_col : str
+        Column to extrapolate.
+    x_col, y_col, z_col : str
+        Column names for the three spatial dimensions.
+    test_size : float
+        Fraction of known points held out for validation.
+    seed : int
+        Random seed for train/validation split.
+    n_inducing : int
+        Target number of sparse-GP inducing points.
+    lower_frac, upper_frac : float
+        Lengthscale prior bounds as fractions of the global radius.
+    verbose : bool
+        Print diagnostics and assessment metrics.
+    backend : str, default="latticekrigx"
+        Spatial regression backend passed through to
+        :func:`build_and_fit_gp` and :func:`get_predictions`. Only
+        ``"latticekrigx"`` is supported.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        Copy of ``gdf`` with NaN entries in ``value_col`` filled and
+        the column renamed to ``"value_extrapolated"``.
+    """
+    import warnings  # noqa: PLC0415
+    from sklearn.model_selection import train_test_split  # noqa: PLC0415
+
+    gdf_out = gdf.copy()
+    known_mask = gdf_out[value_col].notna()
+    if known_mask.sum() < 4:  # noqa: PLR2004
+        warnings.warn(
+            "backfill_gdf_3d: fewer than 4 known points; returning input unchanged.",
+            UserWarning,
+            stacklevel=2,
+        )
+        gdf_out = gdf_out.rename(columns={value_col: "value_extrapolated"})
+        return gdf_out
+
+    nan_mask = ~known_mask
+    known_df = gdf_out.loc[known_mask].copy()
+
+    # --- Coordinates ---
+    X_known = known_df[[x_col, y_col, z_col]].to_numpy(dtype=float)
+    Y_known = known_df[value_col].to_numpy(dtype=float).reshape(-1, 1)
+
+    X_nan = gdf_out.loc[nan_mask, [x_col, y_col, z_col]].to_numpy(dtype=float)
+
+    # --- Standardize features and target ---
+    idx_train, idx_val = train_test_split(
+        np.arange(len(X_known)), test_size=test_size, random_state=seed
+    )
+    X_tr_raw, Y_tr_raw = X_known[idx_train], Y_known[idx_train]
+    X_val_raw = X_known[idx_val]
+    Y_val_raw = Y_known[idx_val].ravel()
+
+    # Standardize coordinates using TRAINING-ONLY stats to prevent data leakage.
+    # The full array (train + val + nan) is standardized with the same training stats.
+    X_tr_std, X_all_std, _tr_mean, _tr_std = standardize_xy(
+        X_tr_raw,
+        np.vstack([X_tr_raw, X_val_raw, X_nan]),
+    )
+    n_tr = len(X_tr_raw)
+    n_known = len(X_known)
+    X_val_std = X_all_std[n_tr:n_known]
+    X_nan_std = X_all_std[n_known:]
+
+    Y_mean = float(Y_tr_raw.mean())
+    Y_std_val = float(Y_tr_raw.std()) or 1.0
+    Y_tr_std = (Y_tr_raw - Y_mean) / Y_std_val
+
+    # --- Build and fit 3D GP ---
+    model, constraints = build_and_fit_gp(
+        X_tr_std,
+        Y_tr_std,
+        n_inducing=n_inducing,
+        lower_frac=lower_frac,
+        upper_frac=upper_frac,
+        verbose=verbose,
+        backend=backend,
+    )
+
+    if verbose:
+        Y_pred_val, Y_pred_val_std = get_predictions(
+            model, X_val_std, Y_mean=Y_mean, Y_std=Y_std_val, backend=backend,
+        )
+        assessment = assess_gp_model_fit(
+            model,
+            Y_true=Y_val_raw,
+            Y_pred=Y_pred_val,
+            Y_pred_std=Y_pred_val_std,
+            constraints=constraints,
+        )
+        from pprint import pprint  # noqa: PLC0415
+
+        pprint(assessment)
+
+    # --- Predict at missing locations ---
+    Y_fill, _ = get_predictions(
+        model, X_nan_std, Y_mean=Y_mean, Y_std=Y_std_val, backend=backend,
+    )
+
+    # --- Write back ---
+    gdf_out.loc[nan_mask, value_col] = Y_fill
+    gdf_out = gdf_out.rename(columns={value_col: "value_extrapolated"})
+    return gdf_out

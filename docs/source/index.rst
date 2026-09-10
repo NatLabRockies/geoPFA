@@ -9,6 +9,7 @@ Geothermal Play Fairway Analysis documentation
 
     Installation <install>
     Methodology <methodology>
+    Probabilistic workflow <probabilistic>
     Gallery <gallery>
     API reference <_autosummary/geopfa>
 

@@ -1,4 +1,4 @@
-# geoPFA Coding Agent Onboarding Guide
+# geoPFA Development Guide
 
 ## 1. Project Description
 Geothermal Play Fairway Analysis
