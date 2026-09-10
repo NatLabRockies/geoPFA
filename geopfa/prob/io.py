@@ -17,6 +17,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess  # noqa: S404 -- fixed Git commands capture source provenance
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -1184,7 +1185,45 @@ def _runtime_tree_hash(root: Path) -> str:
     return digest.hexdigest()
 
 
-def _latticekrigx_provenance() -> dict[str, str]:
+def _git_source_provenance(root: Path) -> dict[str, str | bool | None]:
+    """Return the live source revision and worktree state when Git is present."""
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        return {"revision": None, "clean": None}
+    try:
+        top_level = subprocess.run(  # noqa: S603 -- executable is resolved above
+            [git_executable, "-C", str(root), "rev-parse", "--show-toplevel"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"revision": None, "clean": None}
+    if top_level.returncode != 0:
+        return {"revision": None, "clean": None}
+    source_root = Path(top_level.stdout.strip()).resolve()
+    try:
+        revision = subprocess.run(  # noqa: S603
+            [git_executable, "-C", str(source_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+        status = subprocess.run(  # noqa: S603
+            [git_executable, "-C", str(source_root), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return {"revision": None, "clean": None}
+    return {"revision": revision, "clean": not bool(status.strip())}
+
+
+def _latticekrigx_provenance() -> dict[str, Any]:
     spec = importlib.util.find_spec("latticekrigx")
     if spec is None or not spec.submodule_search_locations:
         raise RuntimeError(
@@ -1195,6 +1234,7 @@ def _latticekrigx_provenance() -> dict[str, str]:
         "package": "latticekrigx",
         "version": importlib.metadata.version("latticekrigx"),
         "implementation_sha256": _runtime_tree_hash(root),
+        "source": _git_source_provenance(root),
     }
 
 
@@ -1522,6 +1562,7 @@ def write_manifest(
         "producer": {
             "package": "geoPFA",
             "version": __version__,
+            "source": _git_source_provenance(Path(__file__).parents[1]),
             "dependencies": [_latticekrigx_provenance()],
         },
         "implementation_sha256": implementation_sha256,

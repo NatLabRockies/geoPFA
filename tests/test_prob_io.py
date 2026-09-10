@@ -232,10 +232,16 @@ def test_write_manifest_records_files_and_hashes(tmp_path: Path) -> None:
     assert data["schema_version"] == 1
     assert data["producer"]["package"] == "geoPFA"
     assert data["producer"]["version"]
+    producer_revision = data["producer"]["source"]["revision"]
+    assert len(producer_revision) == 40
+    int(producer_revision, 16)
+    assert isinstance(data["producer"]["source"]["clean"], bool)
     dependency = data["producer"]["dependencies"][0]
     assert dependency["package"] == "latticekrigx"
     assert dependency["version"] == "0.1.0.dev0"
     assert len(dependency["implementation_sha256"]) == 64
+    assert len(dependency["source"]["revision"]) == 40
+    assert isinstance(dependency["source"]["clean"], bool)
     assert data["config"] == cfg.to_dict()
     config_record = next(
         record for record in data["inputs"] if record["name"] == "config"
