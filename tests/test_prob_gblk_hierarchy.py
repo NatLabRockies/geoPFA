@@ -61,7 +61,9 @@ def test_data_rich_shrinkage_near_zero():
     play_types = ["convective"] * 4
     result = pool_regional_coefficients(d_hat, d_var, play_types)
     shrinkage = result.shrinkage.squeeze(-1)
-    assert np.all(shrinkage < 0.01), f"expected shrinkage near 0, got {shrinkage}"
+    assert np.all(shrinkage < 0.01), (
+        f"expected shrinkage near 0, got {shrinkage}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +98,9 @@ def test_data_poor_shrinkage_near_one():
     play_types = ["extensional"] * R
     result = pool_regional_coefficients(d_hat, d_var, play_types)
     shrinkage = result.shrinkage.squeeze(-1)
-    assert np.all(shrinkage > 0.99), f"expected shrinkage near 1, got {shrinkage}"
+    assert np.all(shrinkage > 0.99), (
+        f"expected shrinkage near 1, got {shrinkage}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +135,13 @@ def test_multivariate_coefficients():
     R, p = 5, 3
     d_hat = rng.standard_normal((R, p))
     d_var = np.full((R, p), 0.1)
-    play_types = ["extensional", "extensional", "magmatic", "magmatic", "convective"]
+    play_types = [
+        "extensional",
+        "extensional",
+        "magmatic",
+        "magmatic",
+        "convective",
+    ]
     result = pool_regional_coefficients(d_hat, d_var, play_types)
     assert result.d_pooled.shape == (R, p)
     assert result.group_mean.shape[1] == p

@@ -131,7 +131,9 @@ def test_p_gblk_support_interval_single_point():
 
 def test_p_gblk_support_interval_raises_on_n_quad_zero():
     with pytest.raises(GEOPFAValueError):
-        make_interval_support(np.array([0.0, 0.0]), np.array([1.0, 0.0]), n_quad=0)
+        make_interval_support(
+            np.array([0.0, 0.0]), np.array([1.0, 0.0]), n_quad=0
+        )
 
 
 # ---------------------------------------------------------------------------

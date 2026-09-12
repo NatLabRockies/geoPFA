@@ -5,3 +5,11 @@
    :recursive:
 
    geopfa
+
+Exceptions
+----------
+
+.. autosummary::
+   :toctree: _autosummary
+
+   geopfa.exceptions.GEOPFAValueError

@@ -38,18 +38,14 @@ def smooth_2d():
 
 def test_build_and_fit_gp_lkx_returns_lkx_model(smooth_2d):
     X, Y = smooth_2d
-    model, constraint_info = build_and_fit_gp(
-        X, Y, backend="latticekrigx"
-    )
+    model, constraint_info = build_and_fit_gp(X, Y, backend="latticekrigx")
     assert isinstance(model, LkxModel)
     assert isinstance(constraint_info, dict)
 
 
 def test_build_and_fit_gp_lkx_constraint_info_non_empty(smooth_2d):
     X, Y = smooth_2d
-    model, constraint_info = build_and_fit_gp(
-        X, Y, backend="latticekrigx"
-    )
+    model, constraint_info = build_and_fit_gp(X, Y, backend="latticekrigx")
     assert len(constraint_info) > 0
 
 
@@ -108,6 +104,7 @@ def test_get_predictions_lkx_grid_reshape():
     Y_train = np.sin(X_train[:, 0]).reshape(-1, 1)
     model, _ = build_and_fit_gp(X_train, Y_train, backend="latticekrigx")
     import pandas as pd
+
     kvals_df = pd.DataFrame({"x": X_grid[:, 0], "y": X_grid[:, 1]})
     result = get_predictions(
         model, X_grid, kvals_df=kvals_df, backend="latticekrigx"

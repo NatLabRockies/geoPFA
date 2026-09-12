@@ -91,11 +91,12 @@ probability map.
 
 **Quick start:**
 
-The GBLK dependency is LatticeKrigX (Python 3.11–3.12). A development checkout
-uses the sibling source repository through the `dev-gblk` Pixi environment.
-For public release, publish LatticeKrigX first; geoPFA now declares the
-dependency and therefore fails installation instead of silently producing an
-environment whose default backend cannot import.
+The GBLK dependency is LatticeKrigX (Python 3.11–3.12). The Pixi lock pins an
+exact LatticeKrigX Git revision so authenticated development and
+continuous-integration environments install the same implementation. A public
+geoPFA package release requires that LatticeKrigX revision to be published
+first; geoPFA declares the compatible package version in its distribution
+metadata and does not fall back to a different model.
 
 Raw study downloads, evidence rasters, prepared grids, labels, serialized
 `pfa.pkl` caches, and generated run directories are deliberately excluded from

@@ -22,7 +22,9 @@ def _make_loaded_labels(n: int = 10, with_region: bool = True) -> LoadedLabels:
     from geopfa.prob.config import LabelsConfig
 
     rng = np.random.default_rng(42)
-    geom = [Point(rng.uniform(-120, -110), rng.uniform(35, 45)) for _ in range(n)]
+    geom = [
+        Point(rng.uniform(-120, -110), rng.uniform(35, 45)) for _ in range(n)
+    ]
     data: dict = {
         "geometry": geom,
         "heat_label": [1, 0] * (n // 2),
@@ -75,7 +77,9 @@ def test_check_region_label_coverage_sufficient_returns_true() -> None:
     assert all(coverage.values())
 
 
-def test_check_region_label_coverage_insufficient_warns_and_returns_false() -> None:
+def test_check_region_label_coverage_insufficient_warns_and_returns_false() -> (
+    None
+):
     loaded = _make_loaded_labels(n=10)
     regions = split_by_region(loaded, group_by="region")
     with warnings.catch_warnings(record=True) as w:

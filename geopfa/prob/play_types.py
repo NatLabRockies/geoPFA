@@ -114,7 +114,7 @@ def play_type_defaults(
     Parameters
     ----------
     play_type
-        One of the keys in :data:`PLAY_TYPE_REGISTRY`.
+        One of the keys in ``PLAY_TYPE_REGISTRY``.
     layer_names
         The layer names produced by ``_flatten_component_features``
         (e.g. ``"fault_slip"``). Matching is done case-insensitively against

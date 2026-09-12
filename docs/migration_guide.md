@@ -16,20 +16,20 @@ probabilistic backend (`inference.backend="gblk"`). This guide covers:
 ### What changed
 
 The `sequential` backend fits one component at a time with an independent
-logistic regression + sparse-GPy spatial field per component. The `gblk` backend
+penalized logistic regression and standalone spatial smoother. The `gblk` backend
 fits **all components jointly** in a single multivariate Bernoulli-logit model via
 `latticekrigx.glk.joint.fit_joint`, estimating the cross-component correlation
-$\Omega$ and sharing a LatticeKrig latent field.
+$\Omega$ among component-specific LatticeKrig latent fields.
 
 Key differences:
 
 | Aspect | `sequential` (deprecated) | `gblk` (default) |
 |---|---|---|
-| Fit | Per-component logistic + sparse GP | Joint multivariate GBLK |
-| Spatial field | Per-component sparse GPy GP (`spatial_field.backend`) | Shared LatticeKrig multiresolution basis |
+| Fit | Per-component penalized logistic model + spatial smoother | Joint multivariate GBLK |
+| Spatial field | Independent RBF or LatticeKrig field (`spatial_field.backend`) | Shared LatticeKrig multiresolution basis |
 | Cross-component dependence | Assumed independent | Estimated $\Omega$ |
 | combined surface | Product of independently fit marginals | Product of marginals estimated by the joint fit (conditional plug-in co-occurrence) |
-| Environment | `default` (GPy in env) | `dev-gblk` or `gblk` (latticekrigx + scikit-sparse) |
+| Environment | Any provided Pixi environment | Any provided Pixi environment |
 
 A `DeprecationWarning` is emitted whenever `inference.backend="sequential"` is used.
 
@@ -80,9 +80,11 @@ estimated $Q \times Q$ cross-component correlation matrix.
 
 ### Running in the correct environment
 
-The GBLK backend requires `latticekrigx` and `scikit-sparse`, which are not in the
-default Pixi environment until Phase P9 unifies the environments. Use the
-`dev-gblk` environment:
+The Pixi lock supplies `latticekrigx` and `scikit-sparse` in every environment
+and pins the exact LatticeKrigX Git revision. The Git dependency currently
+requires organization access; public installation requires LatticeKrigX to be
+published first. Use `dev-gblk` for a complete authenticated developer
+environment:
 
 ```bash
 pixi run -e dev-gblk geopfa-prob run --config my_config.json

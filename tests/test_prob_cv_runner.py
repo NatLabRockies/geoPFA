@@ -334,9 +334,10 @@ def test_run_probabilistic_writes_calibration_metrics_json(
     for comp_metrics in payload["per_component"].values():
         for key in ("ECE", "MCE", "brier", "log_loss"):
             assert key in comp_metrics
-        assert sum(row["n"] for row in comp_metrics["reliability"]) == comp_metrics[
-            "n"
-        ]
+        assert (
+            sum(row["n"] for row in comp_metrics["reliability"])
+            == comp_metrics["n"]
+        )
     # Markdown report should also be written
     assert (cfg.output_dir / "calibration_report.md").exists()
     decision_path = cfg.output_dir / "decision_metrics.json"

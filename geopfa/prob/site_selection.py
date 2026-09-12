@@ -217,10 +217,8 @@ def fit_site_selection_model(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         )
         unselected_log_terms = np.vstack(
             [
-                log_expit(eta_y_unselected)
-                + log_expit(-eta_s1_unselected),
-                log_expit(-eta_y_unselected)
-                + log_expit(-eta_s0_unselected),
+                log_expit(eta_y_unselected) + log_expit(-eta_s1_unselected),
+                log_expit(-eta_y_unselected) + log_expit(-eta_s0_unselected),
             ]
         )
         unselected_log_marginal = logsumexp(unselected_log_terms, axis=0)
@@ -239,8 +237,7 @@ def fit_site_selection_model(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
 
         grad_gamma = q_selected.T @ (1.0 - prob_s_selected)
         grad_gamma -= q_unselected.T @ (
-            responsibilities[0] * prob_s1
-            + responsibilities[1] * prob_s0
+            responsibilities[0] * prob_s1 + responsibilities[1] * prob_s0
         )
 
         penalized = log_likelihood - 0.5 * outcome_penalty * float(

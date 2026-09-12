@@ -21,7 +21,9 @@ def _write_fixture(tmp_path: Path, *, seed: int = 0):
     return fixture, wells_path
 
 
-def _write_config(wells_path: Path, output_dir: Path, extra: dict | None = None) -> Path:
+def _write_config(
+    wells_path: Path, output_dir: Path, extra: dict | None = None
+) -> Path:
     cfg = {
         "criteria": {},
         "probabilistic": {
@@ -38,8 +40,16 @@ def _write_config(wells_path: Path, output_dir: Path, extra: dict | None = None)
                 },
             },
             "alpha": {
-                "component_a": {"mode": "layer_logit", "layer": "prior_layer_a", "scalar_fallback_pr0": 0.55},
-                "component_b": {"mode": "layer_logit", "layer": "prior_layer_b", "scalar_fallback_pr0": 0.50},
+                "component_a": {
+                    "mode": "layer_logit",
+                    "layer": "prior_layer_a",
+                    "scalar_fallback_pr0": 0.55,
+                },
+                "component_b": {
+                    "mode": "layer_logit",
+                    "layer": "prior_layer_b",
+                    "scalar_fallback_pr0": 0.50,
+                },
             },
             "spatial_field": {"enabled": True, "backend": "rbf"},
             "inference": {"backend": "sequential"},
@@ -102,7 +112,10 @@ def test_2d_runner_writes_geotiff(tmp_path):
                 "source": str(wells_path),
                 "id_col": "well_id",
                 "layer": "wells",
-                "label_columns": {"component_a": "heat_label", "component_b": "reservoir_label"},
+                "label_columns": {
+                    "component_a": "heat_label",
+                    "component_b": "reservoir_label",
+                },
             },
             "alpha": {
                 "component_a": {"mode": "scalar", "scalar_fallback_pr0": 0.5},
@@ -123,6 +136,7 @@ def test_2d_runner_writes_geotiff(tmp_path):
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text(json.dumps(cfg))
     from geopfa.prob.config import load_probabilistic_config
+
     cfg_obj = load_probabilistic_config(cfg_path)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")

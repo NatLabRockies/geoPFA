@@ -8,9 +8,9 @@ The GBLK method is described in full in *Geothermal Play Fairway Analysis: A
 Generalized Bayesian LatticeKrig Framework for Supercritical Targets* (Hettinger,
 2026). This page is the operational guide and configuration reference.
 
-> **Deprecated:** The early-phase per-component sequential logistic + sparse-GPy
-> field method (`inference.backend="sequential"`) is deprecated and will be removed
-> in a future release. A `DeprecationWarning` is emitted when it is used. Migrate
+> **Deprecated:** The per-component sequential logistic plus standalone spatial
+> smoothing method (`inference.backend="sequential"`) is deprecated and will
+> be removed in a future release. A `DeprecationWarning` is emitted when it is used. Migrate
 > to `inference.backend="gblk"` (the default) using the guide in
 > `docs/migration_guide.md`.
 
@@ -497,15 +497,15 @@ The GBLK method is implemented and is the default backend. Current limitations:
   outcome fitter. GBLK rejects that configuration rather than treating
   unlabeled candidates as negatives.
 
-The following functionality requires the `dev-gblk` or `gblk` Pixi environment
-(`latticekrigx` and `scikit-sparse` are not in the default install):
+All provided Pixi environments include the exact pinned LatticeKrigX revision
+and `scikit-sparse`. Authenticated developers can therefore run both the
+default `inference.backend="gblk"` path and
+`inference.gblk_bayesian.enabled=true` from a standalone checkout. Public
+installation requires the pinned LatticeKrigX revision to be published first.
 
-- `inference.backend="gblk"` (GBLK joint method; the default once the environment
-  is unified in Phase P9)
-- `inference.gblk_bayesian.enabled=true` (Laplace marginal + posterior draws)
-
-The legacy `inference.backend="sequential"` path (sparse-GPy per-component) is
-deprecated and will be removed when Phase P9 retires GPy.
+The legacy `inference.backend="sequential"` path is a per-component penalized
+logistic model with a standalone RBF or LatticeKrig spatial smoother. It is
+deprecated and retained only for explicitly supported diagnostics such as nnPU.
 
 ---
 
@@ -515,8 +515,8 @@ deprecated and will be removed when Phase P9 retires GPy.
 
 `inference.backend` defaults to `"gblk"`. The GBLK method fits all components
 jointly via `latticekrigx.glk.joint.fit_joint`, replacing the sequential
-per-component logistic + sparse-GPy path. No config change is needed if you did
-not previously set `inference.backend` explicitly.
+per-component logistic plus standalone spatial-smoother path. No config change
+is needed if you did not previously set `inference.backend` explicitly.
 
 The `sequential` backend is deprecated: a `DeprecationWarning` is emitted when
 it is used. Remove `inference.backend="sequential"` from any existing configs.

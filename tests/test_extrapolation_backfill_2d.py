@@ -55,7 +55,10 @@ def test_backfill_gdf_lkx_rmse_within_tolerance(campbell_gdf):
     known_mask = ~np.isnan(truth)
 
     filled_lkx = _run(campbell_gdf)
-    rmse_lkx = _rmse(truth[known_mask], filled_lkx["value_extrapolated"].to_numpy()[known_mask])
+    rmse_lkx = _rmse(
+        truth[known_mask],
+        filled_lkx["value_extrapolated"].to_numpy()[known_mask],
+    )
 
     assert rmse_lkx < 0.30, f"latticekrigx RMSE too high: {rmse_lkx}"
 

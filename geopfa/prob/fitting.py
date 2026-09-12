@@ -423,11 +423,11 @@ def fit_component_probability(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         Minimum number of overlapping labelled wells required before fitting
         the regression. The fit fails closed if fewer wells overlap the grid.
         Default is 4; use
-        :attr:`LabelsConfig.min_wells_for_fit` from the config.
+        ``LabelsConfig.min_wells_for_fit`` from the config.
     spatial_n_inducing : int, optional
         Number of sparse-GP inducing points for the spatial residual field
         (``spatial_backend="latticekrigx"``).  Default 300; set via
-        :attr:`SpatialFieldConfig.n_inducing`.
+        ``SpatialFieldConfig.n_inducing``.
 
     Returns
     -------
@@ -646,6 +646,8 @@ def fit_component_probability(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         if include_spatial:
             eta_wells = offset_wells + X_wells @ result.x
             p_wells = expit(eta_wells)
+            # This is the Bernoulli IRLS working residual on the logit scale,
+            # not a Pearson residual. The fitted correction is added to eta.
             variance = np.clip(p_wells * (1.0 - p_wells), 1e-3, None)
             residuals = np.clip((y_wells - p_wells) / variance, -3.0, 3.0)
 

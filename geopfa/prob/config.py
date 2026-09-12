@@ -2312,7 +2312,7 @@ def load_probabilistic_config(path: str | Path) -> ProbabilisticConfig:
     rest of the PFA config (criteria, components, etc.) is ignored by this
     function — it is consumed by the runner separately.
 
-    Calls :meth:`~ProbabilisticConfig.validate_raise` after parsing so
+    Calls ``ProbabilisticConfig.validate_raise`` after parsing so
     range errors and cross-field inconsistencies surface immediately.
     """
 

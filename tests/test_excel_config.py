@@ -48,9 +48,9 @@ def test_excel_to_pfa_json(tmp_path):
 
     pfa = GeospatialDataReaders.excel_to_pfa_json(excel_path, json_path)
 
-    faults = pfa["criteria"]["geologic"]["components"]["structure"][
-        "layers"
-    ]["faults"]
+    faults = pfa["criteria"]["geologic"]["components"]["structure"]["layers"][
+        "faults"
+    ]
     assert faults["data_col"] is None
     assert "x_col" not in faults
     assert faults["weight"] == 1.0
@@ -59,9 +59,7 @@ def test_excel_to_pfa_json(tmp_path):
 
 def test_excel_to_pfa_json_reports_missing_columns(tmp_path):
     excel_path = tmp_path / "config.xlsx"
-    pd.DataFrame({"criteria": ["geologic"]}).to_excel(
-        excel_path, index=False
-    )
+    pd.DataFrame({"criteria": ["geologic"]}).to_excel(excel_path, index=False)
 
     with pytest.raises(ValueError, match="missing required column"):
         GeospatialDataReaders.excel_to_pfa_json(excel_path)

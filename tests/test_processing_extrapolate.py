@@ -104,7 +104,9 @@ def test_extrapolate_2d_lkx_fills_all_nans():
     )
     layer = _layer(result)
     vals = layer["model"]["value_extrapolated"].to_numpy()
-    assert np.all(~np.isnan(vals)), "latticekrigx left NaNs in value_extrapolated"
+    assert np.all(~np.isnan(vals)), (
+        "latticekrigx left NaNs in value_extrapolated"
+    )
 
 
 def test_extrapolate_2d_lkx_pfa_metadata():
@@ -125,7 +127,12 @@ def test_extrapolate_2d_default_backend_is_latticekrigx():
         pfa_default, "crit", "comp", "layer", verbose=False
     )
     result_explicit = Processing.extrapolate_2d(
-        pfa_explicit, "crit", "comp", "layer", backend="latticekrigx", verbose=False
+        pfa_explicit,
+        "crit",
+        "comp",
+        "layer",
+        backend="latticekrigx",
+        verbose=False,
     )
 
     np.testing.assert_array_equal(
@@ -174,7 +181,12 @@ def test_extrapolate_3d_default_backend_is_latticekrigx():
         pfa_default, "crit", "comp", "layer", verbose=False
     )
     result_explicit = Processing.extrapolate_3d(
-        pfa_explicit, "crit", "comp", "layer", backend="latticekrigx", verbose=False
+        pfa_explicit,
+        "crit",
+        "comp",
+        "layer",
+        backend="latticekrigx",
+        verbose=False,
     )
 
     np.testing.assert_array_equal(

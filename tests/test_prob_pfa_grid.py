@@ -59,9 +59,9 @@ def test_component_names_returns_sorted_list() -> None:
 def test_layer_data_column_returns_model_data_col() -> None:
     fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=3)
     col = layer_data_column(
-        fixture.pfa["criteria"]["geologic"]["components"]["component_a"]["layers"][
-            "gradient"
-        ]
+        fixture.pfa["criteria"]["geologic"]["components"]["component_a"][
+            "layers"
+        ]["gradient"]
     )
     assert col == "value_interpolated"
 
@@ -69,9 +69,9 @@ def test_layer_data_column_returns_model_data_col() -> None:
 def test_layer_model_gdf_returns_gdf() -> None:
     fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=4)
     gdf = layer_model_gdf(
-        fixture.pfa["criteria"]["geologic"]["components"]["component_a"]["layers"][
-            "gradient"
-        ]
+        fixture.pfa["criteria"]["geologic"]["components"]["component_a"][
+            "layers"
+        ]["gradient"]
     )
     assert isinstance(gdf, gpd.GeoDataFrame)
 
@@ -88,7 +88,9 @@ def test_component_layers_returns_layers_dict() -> None:
 
 def test_extract_grid_extent_2d() -> None:
     fixture = make_synthetic_pfa(grid_n=8, n_wells=10, seed=6)
-    extent = extract_grid_extent(fixture.pfa, criteria="geologic", dimensions="2d")
+    extent = extract_grid_extent(
+        fixture.pfa, criteria="geologic", dimensions="2d"
+    )
     # SyntheticPFA: linspace(500_000, 600_000) × linspace(4_300_000, 4_400_000)
     xmin, ymin, xmax, ymax = extent
     assert xmin == pytest.approx(500_000.0)
@@ -104,25 +106,33 @@ def test_extract_grid_extent_2d() -> None:
 
 def test_validate_passes_for_synthetic_2d() -> None:
     fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=7)
-    validate_pfa_for_probabilistic(fixture.pfa, criteria="geologic", dimensions="2d")
+    validate_pfa_for_probabilistic(
+        fixture.pfa, criteria="geologic", dimensions="2d"
+    )
 
 
 def test_validate_raises_on_missing_criteria() -> None:
     pfa = {"criteria": {}}
     with pytest.raises(KeyError, match="geologic"):
-        validate_pfa_for_probabilistic(pfa, criteria="geologic", dimensions="2d")
+        validate_pfa_for_probabilistic(
+            pfa, criteria="geologic", dimensions="2d"
+        )
 
 
 def test_validate_raises_on_missing_components() -> None:
     pfa = {"criteria": {"geologic": {"weight": 1.0}}}
     with pytest.raises(KeyError, match="components"):
-        validate_pfa_for_probabilistic(pfa, criteria="geologic", dimensions="2d")
+        validate_pfa_for_probabilistic(
+            pfa, criteria="geologic", dimensions="2d"
+        )
 
 
 def test_validate_accepts_component_without_pr_norm() -> None:
     """pr_norm is optional — VoterVeto is an independent pathway from probabilistic."""
     geom = [Point(0, 0), Point(1, 0)]
-    model_gdf = gpd.GeoDataFrame({"value_interpolated": [0.3, 0.7], "geometry": geom}, crs="EPSG:32611")
+    model_gdf = gpd.GeoDataFrame(
+        {"value_interpolated": [0.3, 0.7], "geometry": geom}, crs="EPSG:32611"
+    )
     pfa = {
         "criteria": {
             "geologic": {
@@ -138,7 +148,9 @@ def test_validate_accepts_component_without_pr_norm() -> None:
 
 def test_validate_raises_on_layer_missing_model() -> None:
     geom = [Point(0, 0), Point(1, 0)]
-    grid = gpd.GeoDataFrame({"favorability": [0.1, 0.2], "geometry": geom}, crs="EPSG:32611")
+    grid = gpd.GeoDataFrame(
+        {"favorability": [0.1, 0.2], "geometry": geom}, crs="EPSG:32611"
+    )
     pfa = {
         "criteria": {
             "geologic": {
@@ -152,7 +164,9 @@ def test_validate_raises_on_layer_missing_model() -> None:
         }
     }
     with pytest.raises(KeyError, match="model"):
-        validate_pfa_for_probabilistic(pfa, criteria="geologic", dimensions="2d")
+        validate_pfa_for_probabilistic(
+            pfa, criteria="geologic", dimensions="2d"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +236,9 @@ def test_3d_extract_grid_extent_returns_xyz_bounds() -> None:
 
 def test_3d_validation_raises_when_geometry_lacks_z() -> None:
     geom = [Point(0, 0), Point(1, 0)]  # 2D
-    grid = gpd.GeoDataFrame({"favorability": [0.1, 0.2], "geometry": geom}, crs="EPSG:32611")
+    grid = gpd.GeoDataFrame(
+        {"favorability": [0.1, 0.2], "geometry": geom}, crs="EPSG:32611"
+    )
     layer_gdf = gpd.GeoDataFrame(
         {"value_interpolated": [0.5, 0.5], "geometry": geom}, crs="EPSG:32611"
     )
@@ -232,11 +248,18 @@ def test_3d_validation_raises_when_geometry_lacks_z() -> None:
                 "components": {
                     "heat": {
                         "pr_norm": grid,
-                        "layers": {"layer_a": {"model": layer_gdf, "model_data_col": "value_interpolated"}},
+                        "layers": {
+                            "layer_a": {
+                                "model": layer_gdf,
+                                "model_data_col": "value_interpolated",
+                            }
+                        },
                     }
                 }
             }
         }
     }
     with pytest.raises(ValueError, match="Z coordinate"):
-        validate_pfa_for_probabilistic(pfa, criteria="geologic", dimensions="3d")
+        validate_pfa_for_probabilistic(
+            pfa, criteria="geologic", dimensions="3d"
+        )

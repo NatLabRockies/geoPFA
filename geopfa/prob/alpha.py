@@ -255,7 +255,8 @@ def build_alpha_c(
         The per-component dict from the PFA tree (``pr_norm``, ``layers``,
         ``pr0``).
     cfg
-        The component's :class:`AlphaModeConfig`.
+        The component's
+        :class:`~geopfa.prob.config.AlphaModeConfig`.
     grid_gdf
         The prediction grid (typically ``component_data['pr_norm']``).
 

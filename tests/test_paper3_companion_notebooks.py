@@ -75,7 +75,9 @@ def test_study_notebooks_use_only_public_geopfa_interfaces() -> None:
         assert 'config_dict["output_dir"] = str(output_dir)' in source
 
 
-def test_study_notebooks_keep_runtime_checks_active_under_optimization() -> None:
+def test_study_notebooks_keep_runtime_checks_active_under_optimization() -> (
+    None
+):
     for path in NOTEBOOKS.values():
         notebook = _load_notebook(path)
         for cell in notebook["cells"]:
@@ -91,8 +93,7 @@ def test_study_notebooks_keep_runtime_checks_active_under_optimization() -> None
 
 def test_study_targets_and_validation_scope_are_explicit() -> None:
     sources = {
-        name: _source(_load_notebook(path))
-        for name, path in NOTEBOOKS.items()
+        name: _source(_load_notebook(path)) for name, path in NOTEBOOKS.items()
     }
     newberry = sources["newberry_superhot_400c"]
     assert "'threshold': 400.0" in newberry

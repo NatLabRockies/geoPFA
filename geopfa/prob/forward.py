@@ -79,7 +79,9 @@ class FrozenGBLKForwardState:
         if n_components == 0 or len(set(self.component_names)) != n_components:
             raise ValueError("component_names must be nonempty and unique")
         if len(self.coordinate_names) != n_dimensions:
-            raise ValueError("coordinate_names must match coordinate dimension")
+            raise ValueError(
+                "coordinate_names must match coordinate dimension"
+            )
         if not self.coordinate_units or not self.structural_scenario:
             raise ValueError(
                 "coordinate_units and structural_scenario must be nonempty"
@@ -87,7 +89,9 @@ class FrozenGBLKForwardState:
         if prior.shape != (n_cells, n_components):
             raise ValueError("prior_logit has an invalid shape")
         if spatial.shape != prior.shape or baseline.shape != prior.shape:
-            raise ValueError("spatial and baseline arrays must match prior_logit")
+            raise ValueError(
+                "spatial and baseline arrays must match prior_logit"
+            )
         if evidence.shape != (n_cells, n_terms):
             raise ValueError("evidence contributions have an invalid shape")
         if term_component.shape != (n_terms,):
@@ -96,22 +100,34 @@ class FrozenGBLKForwardState:
             np.min(term_component) < 0
             or np.max(term_component) >= n_components
         ):
-            raise ValueError("evidence term component indices are out of range")
+            raise ValueError(
+                "evidence term component indices are out of range"
+            )
         arrays = (coordinates, prior, evidence, spatial, baseline)
         if not all(np.all(np.isfinite(value)) for value in arrays):
-            raise ValueError("frozen forward arrays must contain finite values")
+            raise ValueError(
+                "frozen forward arrays must contain finite values"
+            )
         if np.any((baseline <= 0.0) | (baseline >= 1.0)):
-            raise ValueError("baseline component probabilities must lie in (0, 1)")
+            raise ValueError(
+                "baseline component probabilities must lie in (0, 1)"
+            )
 
         prior_only = set(self.prior_only_components)
         if not prior_only <= set(self.component_names):
-            raise ValueError("prior-only components must be declared components")
+            raise ValueError(
+                "prior-only components must be declared components"
+            )
         for name in prior_only:
             index = self.component_names.index(name)
             if np.any(term_component == index):
-                raise ValueError("prior-only components cannot have evidence terms")
+                raise ValueError(
+                    "prior-only components cannot have evidence terms"
+                )
             if not np.allclose(spatial[:, index], 0.0, rtol=0.0, atol=1e-14):
-                raise ValueError("prior-only components cannot have spatial terms")
+                raise ValueError(
+                    "prior-only components cannot have spatial terms"
+                )
 
         eta = prior + spatial
         for term_index, component_index in enumerate(term_component):
@@ -198,7 +214,10 @@ def evaluate_frozen_gblk(
     else:
         innovation = np.asarray(spatial_logit_delta, dtype=np.float64)
         expected_tail = (state.coordinates.shape[0], n_components)
-        if innovation.ndim != _CUBE_NDIM or innovation.shape[1:] != expected_tail:
+        if (
+            innovation.ndim != _CUBE_NDIM
+            or innovation.shape[1:] != expected_tail
+        ):
             raise ValueError(
                 "spatial_logit_delta must have shape "
                 f"(evaluation, {expected_tail[0]}, {expected_tail[1]})"
@@ -206,7 +225,12 @@ def evaluate_frozen_gblk(
         if not np.all(np.isfinite(innovation)):
             raise ValueError("spatial_logit_delta must contain finite values")
 
-    counts = (evidence.shape[0], spatial.shape[0], shift.shape[0], innovation.shape[0])
+    counts = (
+        evidence.shape[0],
+        spatial.shape[0],
+        shift.shape[0],
+        innovation.shape[0],
+    )
     n_evaluations = max(counts)
     if any(count not in {1, n_evaluations} for count in counts):
         raise ValueError("factor blocks have incompatible evaluation counts")
@@ -225,7 +249,9 @@ def evaluate_frozen_gblk(
     eta += state.spatial_logit[np.newaxis, :, :] * spatial[:, np.newaxis, :]
     eta += shift[:, np.newaxis, :]
     eta += innovation
-    for term_index, component_index in enumerate(state.evidence_term_component):
+    for term_index, component_index in enumerate(
+        state.evidence_term_component
+    ):
         eta[:, :, component_index] += (
             evidence[:, term_index, np.newaxis]
             * state.evidence_logit_contribution[np.newaxis, :, term_index]
@@ -255,11 +281,15 @@ def save_frozen_gblk_forward_state(
         ),
         prior_logit=state.prior_logit,
         evidence_logit_contribution=state.evidence_logit_contribution,
-        evidence_term_names=np.asarray(state.evidence_term_names, dtype=np.str_),
+        evidence_term_names=np.asarray(
+            state.evidence_term_names, dtype=np.str_
+        ),
         evidence_term_component=state.evidence_term_component,
         spatial_logit=state.spatial_logit,
         baseline_component_probability=state.baseline_component_probability,
-        structural_scenario=np.asarray(state.structural_scenario, dtype=np.str_),
+        structural_scenario=np.asarray(
+            state.structural_scenario, dtype=np.str_
+        ),
     )
 
 
@@ -274,15 +304,15 @@ def load_frozen_gblk_forward_state(path: str | Path) -> FrozenGBLKForwardState:
         return FrozenGBLKForwardState(
             coordinates=archive["coordinates"],
             coordinate_names=tuple(archive["coordinate_names"].tolist()),
-            coordinate_units=str(np.asarray(archive["coordinate_units"]).item()),
+            coordinate_units=str(
+                np.asarray(archive["coordinate_units"]).item()
+            ),
             component_names=tuple(archive["component_names"].tolist()),
             prior_only_components=tuple(
                 archive["prior_only_components"].tolist()
             ),
             prior_logit=archive["prior_logit"],
-            evidence_logit_contribution=archive[
-                "evidence_logit_contribution"
-            ],
+            evidence_logit_contribution=archive["evidence_logit_contribution"],
             evidence_term_names=tuple(archive["evidence_term_names"].tolist()),
             evidence_term_component=archive["evidence_term_component"],
             spatial_logit=archive["spatial_logit"],

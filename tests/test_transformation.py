@@ -25,7 +25,9 @@ def test_transform_rejects_blank_method(method):
         transformation.transform(np.array([1.0]), method)
 
 
-@pytest.mark.parametrize("gather_method", ["gather_data", "gather_processed_data"])
+@pytest.mark.parametrize(
+    "gather_method", ["gather_data", "gather_processed_data"]
+)
 def test_gather_warns_when_transformation_method_is_missing(
     tmp_path, capsys, gather_method
 ):
@@ -34,9 +36,7 @@ def test_gather_warns_when_transformation_method_is_missing(
     pfa = {
         "criteria": {
             "criterion": {
-                "components": {
-                    "component": {"layers": {"layer": {}}}
-                }
+                "components": {"component": {"layers": {"layer": {}}}}
             }
         }
     }

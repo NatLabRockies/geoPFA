@@ -18,15 +18,15 @@ def _pfa(data_col=...):
     return {
         "criteria": {
             "criterion": {
-                "components": {
-                    "component": {"layers": {"layer": layer}}
-                }
+                "components": {"component": {"layers": {"layer": layer}}}
             }
         }
     }
 
 
-@pytest.mark.parametrize("data_col", [..., None, "", "  ", "None", "none", "NONE"])
+@pytest.mark.parametrize(
+    "data_col", [..., None, "", "  ", "None", "none", "NONE"]
+)
 def test_weighted_distance_accepts_no_data_column(data_col):
     pfa = _pfa(data_col)
 
@@ -77,9 +77,9 @@ def test_configured_missing_data_column_has_clear_error():
 
 def test_weighted_distance_preserves_valid_data_column():
     pfa = _pfa("value")
-    layer = pfa["criteria"]["criterion"]["components"]["component"][
-        "layers"
-    ]["layer"]
+    layer = pfa["criteria"]["criterion"]["components"]["component"]["layers"][
+        "layer"
+    ]
     layer["data"]["value"] = [1.0, 2.0]
 
     Processing.weighted_distance_from_points(
@@ -97,9 +97,9 @@ def test_weighted_distance_preserves_valid_data_column():
 
 def test_weighted_distance_3d_accepts_no_data_column():
     pfa = _pfa("NONE")
-    layer = pfa["criteria"]["criterion"]["components"]["component"][
-        "layers"
-    ]["layer"]
+    layer = pfa["criteria"]["criterion"]["components"]["component"]["layers"][
+        "layer"
+    ]
     layer["data"] = gpd.GeoDataFrame(
         geometry=[Point(0, 0, 0), Point(1, 1, 1)], crs="EPSG:3857"
     )
@@ -119,7 +119,9 @@ def test_weighted_distance_3d_accepts_no_data_column():
     assert np.isfinite(layer["model"]["weighted_point_score"]).all()
 
 
-@pytest.mark.parametrize("gather_method", ["gather_data", "gather_processed_data"])
+@pytest.mark.parametrize(
+    "gather_method", ["gather_data", "gather_processed_data"]
+)
 def test_gather_normalizes_missing_data_column(tmp_path, gather_method):
     component_dir = tmp_path / "criterion" / "component"
     component_dir.mkdir(parents=True)
@@ -130,9 +132,9 @@ def test_gather_normalizes_missing_data_column(tmp_path, gather_method):
     else:
         GeospatialDataReaders.gather_processed_data(tmp_path, pfa, crs=None)
 
-    layer = pfa["criteria"]["criterion"]["components"]["component"][
-        "layers"
-    ]["layer"]
+    layer = pfa["criteria"]["criterion"]["components"]["component"]["layers"][
+        "layer"
+    ]
     assert layer["data_col"] is None
 
 
@@ -162,13 +164,11 @@ def test_gather_optionally_cleans_configured_data_column(tmp_path):
     component_dir = tmp_path / "criterion" / "component"
     component_dir.mkdir(parents=True)
     csv_path = component_dir / "layer.csv"
-    csv_path.write_text(
-        "x,y,value\n0,0,1.5\n1,1,unknown\n", encoding="utf-8"
-    )
+    csv_path.write_text("x,y,value\n0,0,1.5\n1,1,unknown\n", encoding="utf-8")
     pfa = _pfa("value")
-    layer = pfa["criteria"]["criterion"]["components"]["component"][
-        "layers"
-    ]["layer"]
+    layer = pfa["criteria"]["criterion"]["components"]["component"]["layers"][
+        "layer"
+    ]
     layer.update(
         {
             "crs": "EPSG:3857",

@@ -155,7 +155,13 @@ def _make_multiregion_fixture(
         ),
     )
 
-    return fixture.pfa, cfg, region_per_well, region_per_grid, play_type_per_region
+    return (
+        fixture.pfa,
+        cfg,
+        region_per_well,
+        region_per_grid,
+        play_type_per_region,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -166,8 +172,14 @@ def _make_multiregion_fixture(
 def test_returns_probabilistic_result(tmp_path: Path) -> None:
     pfa, cfg, rpw, rpg, ptp = _make_multiregion_fixture(tmp_path)
     result = run_gblk_hierarchical_regional(
-        pfa, cfg, rpw, rpg, ptp,
-        nc=_NC_SMALL, max_outer_iter=_OUTER_SMALL, irls_max_iter=_IRLS_SMALL,
+        pfa,
+        cfg,
+        rpw,
+        rpg,
+        ptp,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
     )
     assert isinstance(result, ProbabilisticResult)
 
@@ -175,8 +187,14 @@ def test_returns_probabilistic_result(tmp_path: Path) -> None:
 def test_result_has_both_components(tmp_path: Path) -> None:
     pfa, cfg, rpw, rpg, ptp = _make_multiregion_fixture(tmp_path)
     result = run_gblk_hierarchical_regional(
-        pfa, cfg, rpw, rpg, ptp,
-        nc=_NC_SMALL, max_outer_iter=_OUTER_SMALL, irls_max_iter=_IRLS_SMALL,
+        pfa,
+        cfg,
+        rpw,
+        rpg,
+        ptp,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
     )
     assert set(result.components) == {"component_a", "component_b"}
     for cp in result.components.values():
@@ -186,8 +204,14 @@ def test_result_has_both_components(tmp_path: Path) -> None:
 def test_result_combined_surface_present(tmp_path: Path) -> None:
     pfa, cfg, rpw, rpg, ptp = _make_multiregion_fixture(tmp_path)
     result = run_gblk_hierarchical_regional(
-        pfa, cfg, rpw, rpg, ptp,
-        nc=_NC_SMALL, max_outer_iter=_OUTER_SMALL, irls_max_iter=_IRLS_SMALL,
+        pfa,
+        cfg,
+        rpw,
+        rpg,
+        ptp,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
     )
     assert isinstance(result.combined, gpd.GeoDataFrame)
     assert "probability" in result.combined.columns
@@ -201,14 +225,22 @@ def test_result_combined_surface_present(tmp_path: Path) -> None:
 def test_zero_label_region_predictions_finite(tmp_path: Path) -> None:
     pfa, cfg, rpw, rpg, ptp = _make_multiregion_fixture(tmp_path)
     result = run_gblk_hierarchical_regional(
-        pfa, cfg, rpw, rpg, ptp,
-        nc=_NC_SMALL, max_outer_iter=_OUTER_SMALL, irls_max_iter=_IRLS_SMALL,
+        pfa,
+        cfg,
+        rpw,
+        rpg,
+        ptp,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
     )
     combined = result.combined
-    east_cell_mask = _region_for_x(
-        combined.geometry.x.to_numpy(dtype=float)
-    ) == "east"
-    east_probs = combined.loc[east_cell_mask, "probability"].to_numpy(dtype=float)
+    east_cell_mask = (
+        _region_for_x(combined.geometry.x.to_numpy(dtype=float)) == "east"
+    )
+    east_probs = combined.loc[east_cell_mask, "probability"].to_numpy(
+        dtype=float
+    )
     assert east_cell_mask.sum() > 0, "expected east grid cells"
     assert np.all(np.isfinite(east_probs)), (
         f"zero-label region contains non-finite predictions: {east_probs}"
@@ -219,8 +251,14 @@ def test_zero_label_region_predictions_finite(tmp_path: Path) -> None:
 def test_zero_label_region_shrinkage_near_one(tmp_path: Path) -> None:
     pfa, cfg, rpw, rpg, ptp = _make_multiregion_fixture(tmp_path)
     result = run_gblk_hierarchical_regional(
-        pfa, cfg, rpw, rpg, ptp,
-        nc=_NC_SMALL, max_outer_iter=_OUTER_SMALL, irls_max_iter=_IRLS_SMALL,
+        pfa,
+        cfg,
+        rpw,
+        rpg,
+        ptp,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
     )
     diag = next(iter(result.components.values())).diagnostics
     shrinkage = np.array(diag["pool_shrinkage"])  # (R, Q)
@@ -242,8 +280,14 @@ def test_data_rich_region_lower_shrinkage_than_zero_label(
 ) -> None:
     pfa, cfg, rpw, rpg, ptp = _make_multiregion_fixture(tmp_path)
     result = run_gblk_hierarchical_regional(
-        pfa, cfg, rpw, rpg, ptp,
-        nc=_NC_SMALL, max_outer_iter=_OUTER_SMALL, irls_max_iter=_IRLS_SMALL,
+        pfa,
+        cfg,
+        rpw,
+        rpg,
+        ptp,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
     )
     diag = next(iter(result.components.values())).diagnostics
     shrinkage = np.array(diag["pool_shrinkage"])  # (R, Q)
@@ -263,8 +307,14 @@ def test_data_rich_region_predictions_differ_from_pool_mean(
 ) -> None:
     pfa, cfg, rpw, rpg, ptp = _make_multiregion_fixture(tmp_path)
     result = run_gblk_hierarchical_regional(
-        pfa, cfg, rpw, rpg, ptp,
-        nc=_NC_SMALL, max_outer_iter=_OUTER_SMALL, irls_max_iter=_IRLS_SMALL,
+        pfa,
+        cfg,
+        rpw,
+        rpg,
+        ptp,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
     )
     combined = result.combined
     probs = combined["probability"].to_numpy(dtype=float)
@@ -279,7 +329,9 @@ def test_data_rich_region_predictions_differ_from_pool_mean(
     west_dev = abs(west_mean - pool_mean)
     east_dev = abs(east_mean - pool_mean)
 
-    assert west_dev > east_dev or not np.isclose(west_mean, east_mean, atol=0.05), (
+    assert west_dev > east_dev or not np.isclose(
+        west_mean, east_mean, atol=0.05
+    ), (
         "data-rich 'west' region should differ from pool; "
         f"west_mean={west_mean:.4f}, east_mean={east_mean:.4f}, "
         f"pool_mean={pool_mean:.4f}"
@@ -294,8 +346,14 @@ def test_data_rich_region_predictions_differ_from_pool_mean(
 def test_diagnostics_contain_hierarchical_fields(tmp_path: Path) -> None:
     pfa, cfg, rpw, rpg, ptp = _make_multiregion_fixture(tmp_path)
     result = run_gblk_hierarchical_regional(
-        pfa, cfg, rpw, rpg, ptp,
-        nc=_NC_SMALL, max_outer_iter=_OUTER_SMALL, irls_max_iter=_IRLS_SMALL,
+        pfa,
+        cfg,
+        rpw,
+        rpg,
+        ptp,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
     )
     diag = next(iter(result.components.values())).diagnostics
     assert diag.get("hierarchical") is True
@@ -315,8 +373,14 @@ def test_disabled_cfg_returns_skipped(tmp_path: Path) -> None:
     pfa, cfg, rpw, rpg, ptp = _make_multiregion_fixture(tmp_path)
     cfg_off = dataclasses.replace(cfg, enabled=False)
     result = run_gblk_hierarchical_regional(
-        pfa, cfg_off, rpw, rpg, ptp,
-        nc=_NC_SMALL, max_outer_iter=_OUTER_SMALL, irls_max_iter=_IRLS_SMALL,
+        pfa,
+        cfg_off,
+        rpw,
+        rpg,
+        ptp,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
     )
     assert result.skipped is True
 
@@ -334,6 +398,12 @@ def test_unknown_region_in_grid_raises(tmp_path: Path) -> None:
     bad_rpg[0] = "unknown_region"
     with pytest.raises(GEOPFAValueError, match="region_per_grid"):
         run_gblk_hierarchical_regional(
-            pfa, cfg, rpw, bad_rpg, ptp,
-            nc=_NC_SMALL, max_outer_iter=_OUTER_SMALL, irls_max_iter=_IRLS_SMALL,
+            pfa,
+            cfg,
+            rpw,
+            bad_rpg,
+            ptp,
+            nc=_NC_SMALL,
+            max_outer_iter=_OUTER_SMALL,
+            irls_max_iter=_IRLS_SMALL,
         )

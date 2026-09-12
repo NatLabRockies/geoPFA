@@ -47,5 +47,7 @@ def make_point_z_gdf(nx=5, ny=5, nz=3, seed=0):
     xs = np.linspace(0.0, 100.0, nx)
     ys = np.linspace(0.0, 100.0, ny)
     zs = np.linspace(-500.0, -100.0, nz)
-    pts = [Point(float(x), float(y), float(z)) for z in zs for y in ys for x in xs]
+    pts = [
+        Point(float(x), float(y), float(z)) for z in zs for y in ys for x in xs
+    ]
     return gpd.GeoDataFrame({"value": rng.random(len(pts)), "geometry": pts})

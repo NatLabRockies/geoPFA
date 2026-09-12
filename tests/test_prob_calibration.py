@@ -288,8 +288,58 @@ def test_calibration_intercept_optimizer_failure_is_not_hidden(
 
     with pytest.raises(RuntimeError, match="sentinel failure"):
         calibration.calibration_intercept_slope(
-            np.array([0, 1, 0, 1]), np.array([0.2, 0.8, 0.4, 0.6])
+            np.array([0, 1, 0, 1]), np.array([0.2, 0.8, 0.9, 0.6])
         )
+
+
+def test_calibration_intercept_slope_reports_complete_separation_as_unidentified() -> (
+    None
+):
+    """A finite calibration MLE does not exist under complete separation."""
+    result = calibration.calibration_intercept_slope(
+        np.array([0, 0, 1, 1]),
+        np.array([0.1, 0.2, 0.8, 0.9]),
+    )
+
+    assert np.isnan(result["intercept"])
+    assert np.isnan(result["slope"])
+
+
+def test_calibration_intercept_slope_accepts_stationary_precision_loss_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Convergence is defined by the score, not optimizer status wording."""
+    import scipy.optimize  # noqa: PLC0415
+
+    stationary = np.array([-1.47412403, 8.04047962])
+    monkeypatch.setattr(
+        scipy.optimize,
+        "minimize",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            success=False,
+            x=stationary,
+            message="precision loss",
+        ),
+    )
+    result = calibration.calibration_intercept_slope(
+        np.array([0, 1, 1, 0, 0, 1, 1, 1]),
+        np.array(
+            [
+                0.3246759441768844,
+                0.5349585632323313,
+                0.6515084518644857,
+                0.46569469713953,
+                0.5623974131076297,
+                0.6569174947776862,
+                0.6251018517902518,
+                0.9001976412800985,
+            ]
+        ),
+    )
+
+    np.testing.assert_allclose(
+        [result["intercept"], result["slope"]], stationary, atol=1e-10
+    )
 
 
 def test_platt_optimizer_failure_is_not_hidden(

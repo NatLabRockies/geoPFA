@@ -70,9 +70,7 @@ def parity_case(request):
         lambda_bounds=cfg.lambda_bounds,
         find_lambda=True,
     )
-    model = fit_lkx_field(
-        fixture["x_train"], fixture["y_train"], config=cfg
-    )
+    model = fit_lkx_field(fixture["x_train"], fixture["y_train"], config=cfg)
     mean, std = lkx_predict(model, fixture["x_test"])
     residual = mean - fixture["y_test"]
     return {

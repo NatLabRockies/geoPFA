@@ -1,6 +1,6 @@
 """Config-driven labelled-well loading for the probabilistic method.
 
-Wraps :class:`geopfa.data_readers.GeospatialDataReaders` so the runner can
+Wraps :class:`geopfa.io.data_readers.GeospatialDataReaders` so the runner can
 load labelled wells from any format the existing geoPFA readers understand
 (GeoPackage, shapefile, CSV with 2D or 3D coordinates) via the
 ``probabilistic.labels`` block of the config.
@@ -112,7 +112,8 @@ def load_labels(  # noqa: PLR0913
     Parameters
     ----------
     cfg
-        :class:`LabelsConfig` block from the user's PFA config.
+        :class:`~geopfa.prob.config.LabelsConfig` block from the user's PFA
+        config.
     source_crs
         CRS of the CSV coordinate columns (required for CSV sources without
         a CRS column).
@@ -172,7 +173,7 @@ def component_labels(loaded: LoadedLabels, component: str) -> gpd.GeoDataFrame:
     Raises
     ------
     KeyError
-        If ``component`` is not in :attr:`LabelsConfig.label_columns`.
+        If ``component`` is not in ``LabelsConfig.label_columns``.
     """
     if component not in loaded.config.label_columns:
         raise KeyError(

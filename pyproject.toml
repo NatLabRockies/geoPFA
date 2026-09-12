@@ -18,15 +18,13 @@ authors = [
 maintainers = [{ name = "Nicole Taverna", email = "Nicole.Taverna@nrel.gov" }]
 license = "BSD-3-Clause"
 keywords = ["geothermal", "PFA"]
-requires-python = ">= 3.11"
+requires-python = ">=3.11,<3.13"
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
   "Natural Language :: English",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
-  "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
   "iapws>=1.5.4",
@@ -118,7 +116,7 @@ dev-gblk = { features = ["dev", "test"], solve-group = "default" }
 
 [tool.pixi.pypi-dependencies]
 geoPFA = { path = ".", editable = true }
-latticekrigx = { path = "../latticekrigx", editable = true }
+latticekrigx = { git = "https://github.com/NatLabRockies/latticekrigx.git", rev = "ae80d4906c3389c44f0872a1cec45b0121224fa8" }
 scikit-sparse = ">=0.5"
 
 [tool.pixi.dependencies]

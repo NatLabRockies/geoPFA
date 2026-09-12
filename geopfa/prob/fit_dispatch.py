@@ -1,11 +1,12 @@
-"""Adapters that translate ProbabilisticConfig sub-blocks into existing demo APIs.
+"""Adapters that translate probabilistic config blocks into fitter inputs.
 
-The runner consumes a :class:`ProbabilisticConfig` and dispatches to the
+The runner consumes a
+:class:`~geopfa.prob.config.ProbabilisticConfig` and dispatches to the
 appropriate fitter. The fitters themselves keep their existing typed
 kwarg-based API (so direct programmatic use stays simple). This module
 bridges the two by translating config sub-blocks into the kwargs the
-existing :func:`fit_component_probability` accepts, without changing that
-function's signature.
+:func:`~geopfa.prob.fitting.fit_component_probability` function accepts,
+without changing its signature.
 
 Each helper here is intentionally thin and side-effect-free so it can be
 unit-tested without spinning up a full fit.
@@ -43,7 +44,7 @@ def build_fit_kwargs(  # noqa: PLR0913
         Top-level ``SpatialFieldConfig`` (``u_c`` configuration).
     pu_mode
         Positive-Unlabeled correction mode forwarded from
-        :attr:`LabelsConfig.pu_mode`.  One of ``"off"``,
+        ``LabelsConfig.pu_mode``. One of ``"off"``,
         ``"naive_pseudo_absence"``, or ``"nnpu"``.
 
     Returns
@@ -96,7 +97,7 @@ def fit_component_from_config(  # noqa: PLR0913
     labeled_wells: gpd.GeoDataFrame | None = None,
     label_column: str | None = None,
 ) -> ComponentProbability:
-    """Run :func:`fit_component_probability` driven by config sub-blocks.
+    """Run :func:`~geopfa.prob.fitting.fit_component_probability` from config.
 
     Parameters
     ----------

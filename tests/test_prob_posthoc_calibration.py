@@ -35,7 +35,9 @@ def test_fit_posthoc_platt_reduces_ece_on_underconfident_predictions() -> None:
     assert cal_ece < raw_ece * 0.8  # at least a 20% reduction
 
 
-def test_fit_posthoc_isotonic_reduces_ece_on_overconfident_predictions() -> None:
+def test_fit_posthoc_isotonic_reduces_ece_on_overconfident_predictions() -> (
+    None
+):
     rng = np.random.default_rng(1)
     n = 1000
     y = rng.binomial(1, 0.5, size=n).astype(int)

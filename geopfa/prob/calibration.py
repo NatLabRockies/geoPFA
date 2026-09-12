@@ -23,6 +23,8 @@ from scipy.optimize import minimize_scalar
 from scipy.special import expit
 from scipy.stats import norm as _scipy_norm
 
+_CALIBRATION_SCORE_TOLERANCE = 1e-7
+
 
 def _as_probability_vector(
     values: Sequence[float] | np.ndarray, *, name: str = "p"
@@ -340,26 +342,55 @@ def calibration_intercept_slope(
     if y_arr.size == 0 or np.unique(y_arr).size < n_classes_required:
         return {"intercept": float("nan"), "slope": float("nan")}
     logits = np.log(p_arr / (1.0 - p_arr))
+    if np.ptp(logits) <= np.sqrt(np.finfo(float).eps):
+        return {"intercept": float("nan"), "slope": float("nan")}
+    positive_logits = logits[y_arr == 1]
+    negative_logits = logits[y_arr == 0]
+    if np.max(negative_logits) <= np.min(positive_logits) or np.max(
+        positive_logits
+    ) <= np.min(negative_logits):
+        return {"intercept": float("nan"), "slope": float("nan")}
+    design = np.column_stack([np.ones(y_arr.size), logits])
 
     def _loss(theta: np.ndarray) -> float:
-        a, b = float(theta[0]), float(theta[1])
-        z = a + b * logits
+        z = design @ theta
         return float(np.mean(np.logaddexp(0.0, z) - y_arr * z))
 
+    def _score(theta: np.ndarray) -> np.ndarray:
+        z = design @ theta
+        fitted = expit(z)
+        return np.asarray(design.T @ (fitted - y_arr) / y_arr.size)
+
     try:
-        res = minimize(_loss, x0=np.array([0.0, 1.0]), method="BFGS")
+        res = minimize(
+            _loss,
+            x0=np.array([0.0, 1.0]),
+            method="BFGS",
+            jac=_score,
+            options={"gtol": 1e-8, "maxiter": 1_000},
+        )
     except Exception as exc:
         raise RuntimeError(
             "calibration intercept/slope optimizer raised an error"
         ) from exc
-    if not res.success or not np.all(np.isfinite(res.x)):
+    theta = np.asarray(res.x, dtype=float)
+    score_norm = (
+        float(np.linalg.norm(_score(theta), ord=np.inf))
+        if np.all(np.isfinite(theta))
+        else float("inf")
+    )
+    if (
+        not np.all(np.isfinite(theta))
+        or score_norm > _CALIBRATION_SCORE_TOLERANCE
+    ):
         raise RuntimeError(
             "calibration intercept/slope optimizer failed: "
-            f"{getattr(res, 'message', 'no diagnostic message')}"
+            f"{getattr(res, 'message', 'no diagnostic message')}; "
+            f"maximum absolute score={score_norm:.6g}"
         )
     return {
-        "intercept": float(res.x[0]),
-        "slope": float(res.x[1]),
+        "intercept": float(theta[0]),
+        "slope": float(theta[1]),
     }
 
 
@@ -522,7 +553,7 @@ def fit_posthoc_calibration(
     Returns
     -------
     CalibrationMap
-        Apply with :meth:`CalibrationMap.predict` to new probability vectors.
+        Apply with ``CalibrationMap.predict`` to new probability vectors.
 
     Raises
     ------

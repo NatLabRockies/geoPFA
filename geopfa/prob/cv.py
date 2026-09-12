@@ -102,6 +102,8 @@ def spatial_block_cv(  # noqa: PLR0912, PLR0913, PLR0915
     ValueError
         If ``block_type`` is not one of ``"grid"`` / ``"kmeans"``.
 
+    Notes
+    -----
     For volumetric models the default surface dimensions intentionally keep
     every depth from one site in the same fold. Callers can select all three
     dimensions for a fully volumetric K-means holdout.

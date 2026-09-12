@@ -241,7 +241,9 @@ def compute_lkx_config(
         max_range = 1.0
     R = 0.5 * max_range
 
-    NC_scale = max(_MIN_NC, int(np.round(max_range / (_COARSE_SCALE_FRAC * R))))
+    NC_scale = max(
+        _MIN_NC, int(np.round(max_range / (_COARSE_SCALE_FRAC * R)))
+    )
 
     M = min(300, max(20, n_train // 10))
     NC_m = max(_MIN_NC, int(np.round(M ** (1.0 / D))))
@@ -323,7 +325,10 @@ def _fit_backend(
             **kwargs,
         )
         result = joint_mle_optim(
-            X, Y, lkinfo, per_level=cfg.a_wght_per_level,
+            X,
+            Y,
+            lkinfo,
+            per_level=cfg.a_wght_per_level,
         )
         return result["optimal_fit"], "lambda+a_wght"
 
@@ -524,10 +529,12 @@ def lkx_predict(
 
     if chunk_size is None or chunk_size <= 0 or m_pred <= chunk_size:
         mean = np.asarray(
-            predict_lkrig(model.fit, X), dtype=np.float64,
+            predict_lkrig(model.fit, X),
+            dtype=np.float64,
         ).ravel()
         latent_std = np.asarray(
-            predict_se(model.fit, X), dtype=np.float64,
+            predict_se(model.fit, X),
+            dtype=np.float64,
         ).ravel()
         observation_variance = model.fit.lambda_ * float(
             np.asarray(model.fit.sigma2_MLE).ravel()[0]
@@ -540,10 +547,12 @@ def lkx_predict(
         stop = min(start + chunk_size, m_pred)
         block = X[start:stop]
         mean[start:stop] = np.asarray(
-            predict_lkrig(model.fit, block), dtype=np.float64,
+            predict_lkrig(model.fit, block),
+            dtype=np.float64,
         ).ravel()
         latent_std = np.asarray(
-            predict_se(model.fit, block), dtype=np.float64,
+            predict_se(model.fit, block),
+            dtype=np.float64,
         ).ravel()
         observation_variance = model.fit.lambda_ * float(
             np.asarray(model.fit.sigma2_MLE).ravel()[0]

@@ -60,7 +60,16 @@ def test_assess_gp_model_fit_lkx_expected_keys(lkx_fit):
     model, ci, X, Y = lkx_fit
     Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
-    for key in ("RMSE", "R2", "MAE", "Coverage_95", "LogLikelihood", "AIC", "BIC", "Params_at_bounds"):
+    for key in (
+        "RMSE",
+        "R2",
+        "MAE",
+        "Coverage_95",
+        "LogLikelihood",
+        "AIC",
+        "BIC",
+        "Params_at_bounds",
+    ):
         assert key in result, f"Missing key: {key}"
 
 
@@ -68,7 +77,15 @@ def test_assess_gp_model_fit_lkx_metrics_finite(lkx_fit):
     model, ci, X, Y = lkx_fit
     Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
-    for key in ("RMSE", "R2", "MAE", "Coverage_95", "LogLikelihood", "AIC", "BIC"):
+    for key in (
+        "RMSE",
+        "R2",
+        "MAE",
+        "Coverage_95",
+        "LogLikelihood",
+        "AIC",
+        "BIC",
+    ):
         assert np.isfinite(result[key]), f"{key} is not finite: {result[key]}"
 
 
@@ -86,11 +103,15 @@ def test_assess_gp_model_fit_lkx_coverage_in_unit_interval(lkx_fit):
     assert 0.0 <= result["Coverage_95"] <= 1.0
 
 
-def test_assess_gp_model_fit_lkx_log_likelihood_matches_constraint_info(lkx_fit):
+def test_assess_gp_model_fit_lkx_log_likelihood_matches_constraint_info(
+    lkx_fit,
+):
     model, ci, X, Y = lkx_fit
     Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
-    assert result["LogLikelihood"] == pytest.approx(ci["lnProfileLike"], rel=1e-6)
+    assert result["LogLikelihood"] == pytest.approx(
+        ci["lnProfileLike"], rel=1e-6
+    )
 
 
 def test_assess_gp_model_fit_lkx_params_at_bounds_is_list(lkx_fit):
@@ -130,7 +151,13 @@ def test_bootstrap_residuals_lkx_expected_rows(lkx_fit):
     result = bootstrap_assess_residuals_stats(
         Y, Y_pred, n_boot=10, sample_size=30, random_state=0
     )
-    expected_tests = {"Shapiro-Wilk", "D'Agostino", "Jarque-Bera", "Levene", "Ljung-Box"}
+    expected_tests = {
+        "Shapiro-Wilk",
+        "D'Agostino",
+        "Jarque-Bera",
+        "Levene",
+        "Ljung-Box",
+    }
     assert set(result["Test"]) == expected_tests
 
 
@@ -190,7 +217,9 @@ def test_check_param_limits_lkx_at_lower_lambda_detected():
         lambda_fit=lo,
         lambda_bounds=(lo, hi),
     )
-    hits = check_param_limits_hit_from_constraints(model, model.constraint_info)
+    hits = check_param_limits_hit_from_constraints(
+        model, model.constraint_info
+    )
     names = [h[0] for h in hits]
     assert "lambda_" in names
 
@@ -228,7 +257,9 @@ def test_check_param_limits_lkx_a_wght_none_when_not_fitted():
     Y = rng.standard_normal(30)
     cfg = LkxConfig(nlevel=3, NC=4, lambda_=0.01, find_a_wght=False)
     model = fit_lkx_field(X, Y, config=cfg)
-    hits = check_param_limits_hit_from_constraints(model, model.constraint_info)
+    hits = check_param_limits_hit_from_constraints(
+        model, model.constraint_info
+    )
     a_wght_hits = [h for h in hits if h[0] == "a_wght"]
     assert len(a_wght_hits) == 0
 
@@ -242,7 +273,9 @@ def test_fit_lkx_stores_lambda_bounds_in_constraint_info():
     rng = np.random.default_rng(99)
     X = rng.uniform(-1.0, 1.0, size=(40, 2))
     Y = rng.standard_normal(40)
-    cfg = LkxConfig(nlevel=3, NC=4, lambda_bounds=(1e-4, 0.5), find_lambda=True)
+    cfg = LkxConfig(
+        nlevel=3, NC=4, lambda_bounds=(1e-4, 0.5), find_lambda=True
+    )
     model = fit_lkx_field(X, Y, config=cfg)
     ci = model.constraint_info
     assert "lambda_bounds" in ci

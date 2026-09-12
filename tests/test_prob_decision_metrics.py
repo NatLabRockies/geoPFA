@@ -174,13 +174,17 @@ def test_top_n_targeting_explicit_ns_clamps_to_total() -> None:
     assert rows[-1].n_picked == 3  # clamped to len(y)
 
 
-def test_top_n_targeting_averages_boundary_ties_without_row_order_bias() -> None:
+def test_top_n_targeting_averages_boundary_ties_without_row_order_bias() -> (
+    None
+):
     y = np.array([1, 0, 1, 0])
     scores = np.array([0.9, 0.9, 0.1, 0.1])
     permutation = np.array([1, 0, 3, 2])
 
     original = dm.top_n_targeting(y, scores, ns=[1, 3])
-    reordered = dm.top_n_targeting(y[permutation], scores[permutation], ns=[1, 3])
+    reordered = dm.top_n_targeting(
+        y[permutation], scores[permutation], ns=[1, 3]
+    )
 
     assert [row.hits for row in original] == pytest.approx([0.5, 1.5])
     assert [row.hits for row in reordered] == pytest.approx([0.5, 1.5])

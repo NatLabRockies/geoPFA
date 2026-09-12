@@ -387,7 +387,9 @@ def test_thermal_layer_exceedance_requires_positive_voxel_uncertainty() -> (
         build_alpha_c(comp, cfg, grid_gdf=comp["pr_norm"])
 
 
-def test_thermal_layer_exceedance_retains_rare_normal_tail_probability() -> None:
+def test_thermal_layer_exceedance_retains_rare_normal_tail_probability() -> (
+    None
+):
     fixture = make_synthetic_pfa_3d(grid_n=2, grid_nz=2, n_wells=8, seed=6)
     comp = fixture.pfa["criteria"]["geologic"]["components"]["component_a"]
     thermal = comp["layers"]["prior_layer_a"]["model"]

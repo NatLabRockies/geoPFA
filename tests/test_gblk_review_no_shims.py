@@ -138,7 +138,10 @@ def test_no_bare_or_broad_except(relpath: str) -> None:
         if exc is None:
             offenders.append((node.lineno, "bare except:"))
             continue
-        if isinstance(exc, ast.Name) and exc.id in {"Exception", "BaseException"}:
+        if isinstance(exc, ast.Name) and exc.id in {
+            "Exception",
+            "BaseException",
+        }:
             offenders.append((node.lineno, f"except {exc.id}:"))
     assert not offenders, f"{relpath}: broad except handlers: {offenders}"
 
@@ -155,7 +158,8 @@ def test_no_not_implemented_placeholders(relpath: str) -> None:
         if isinstance(exc, ast.Call):
             exc = exc.func
         if (isinstance(exc, ast.Name) and exc.id == "NotImplementedError") or (
-            isinstance(exc, ast.Attribute) and exc.attr == "NotImplementedError"
+            isinstance(exc, ast.Attribute)
+            and exc.attr == "NotImplementedError"
         ):
             offenders.append(node.lineno)
     assert not offenders, (
@@ -189,9 +193,7 @@ def test_no_blanket_warning_filters(relpath: str) -> None:
     not swallow.
     """
     executable = _strip_docstrings_and_comments(_read(relpath))
-    pattern = re.compile(
-        r"filterwarnings\(\s*['\"]ignore['\"]\s*(?:\)|,)"
-    )
+    pattern = re.compile(r"filterwarnings\(\s*['\"]ignore['\"]\s*(?:\)|,)")
     hits = pattern.findall(executable)
     assert not hits, f"{relpath}: blanket 'ignore' warning filters: {hits}"
 

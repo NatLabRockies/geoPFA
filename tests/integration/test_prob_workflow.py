@@ -30,7 +30,9 @@ _WELLS_FILE = Path("data/raw/wells.gpkg")  # update to your local path
 
 
 @pytest.mark.realdata
-def test_prob_workflow_on_newberry_pfa(tmp_path: pytest.TempPathFactory) -> None:
+def test_prob_workflow_on_newberry_pfa(
+    tmp_path: pytest.TempPathFactory,
+) -> None:
     """Smoke test: run run_probabilistic on the cached Newberry PFA dict."""
     if not _PFA_PICKLE.exists():
         pytest.skip(f"Newberry PFA pickle not found at {_PFA_PICKLE}")
@@ -67,7 +69,9 @@ def test_prob_workflow_on_newberry_pfa(tmp_path: pytest.TempPathFactory) -> None
     elif _WELLS_FILE.exists():
         wells_source = str(_WELLS_FILE)
     else:
-        pytest.skip("No labeled wells GeoPackage found for Newberry integration test")
+        pytest.skip(
+            "No labeled wells GeoPackage found for Newberry integration test"
+        )
 
     cfg = ProbabilisticConfig(
         enabled=True,
@@ -79,7 +83,11 @@ def test_prob_workflow_on_newberry_pfa(tmp_path: pytest.TempPathFactory) -> None
             id_col="well_id",
             label_columns={components[0]: "heat_label"},
         ),
-        alpha={components[0]: AlphaModeConfig(mode="scalar", scalar_fallback_pr0=0.5)},
+        alpha={
+            components[0]: AlphaModeConfig(
+                mode="scalar", scalar_fallback_pr0=0.5
+            )
+        },
         evidence=EvidenceConfig(),
         spatial_field=SpatialFieldConfig(enabled=True, backend="rbf"),
         inference=InferenceConfig(backend="sequential"),

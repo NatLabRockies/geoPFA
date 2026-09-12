@@ -43,13 +43,19 @@ def _validated_variogram_inputs(
         or np.iscomplexobj(max_distance_frac)
         or not np.isscalar(max_distance_frac)
     ):
-        raise ValueError("max_distance_frac must be a finite fraction in (0, 1]")
+        raise ValueError(
+            "max_distance_frac must be a finite fraction in (0, 1]"
+        )
     fraction = float(max_distance_frac)
     if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
-        raise ValueError("max_distance_frac must be a finite fraction in (0, 1]")
+        raise ValueError(
+            "max_distance_frac must be a finite fraction in (0, 1]"
+        )
     span = np.ptp(coordinates, axis=0)
     if not np.any(span > 0.0):
-        raise ValueError("variogram coordinates must have positive spatial span")
+        raise ValueError(
+            "variogram coordinates must have positive spatial span"
+        )
     return coordinates, observations, int(n_bins), fraction
 
 
@@ -197,6 +203,7 @@ def recommend_block_size_km(  # noqa: PLR0913
     assumed_crs_unit_m
         If ``True``, convert the range from metres to km for the output.
     """
+
     def positive_scalar(value: float, name: str) -> float:
         if (
             isinstance(value, bool | np.bool_)

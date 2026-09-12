@@ -1,7 +1,7 @@
 """Top-level probabilistic-method entry point: ``run_probabilistic(pfa, config)``.
 
-Translates a :class:`ProbabilisticConfig` into the existing
-:func:`fit_component_probability` calls, combines per-component surfaces via
+Translates a :class:`~geopfa.prob.config.ProbabilisticConfig` into
+:func:`~geopfa.prob.fitting.fit_component_probability` calls, combines per-component surfaces via
 the configured rule, runs scenario ablations when requested, and writes the
 configured outputs.
 
@@ -72,13 +72,13 @@ class ProbabilisticResult:
         ``{component_name: CalibrationMap}`` for each component that
         received a calibration fit.
     cv
-        :class:`CVResult` from the block-CV run, when calibration is
+        :class:`~geopfa.prob.cv_runner.CVResult` from the block-CV run, when calibration is
         configured. Empty when calibration is off.
     scenarios
         ``{scenario_name: {component_name: ComponentProbability}}``
         when scenarios were configured; ``{}`` otherwise.
     config
-        The :class:`ProbabilisticConfig` that drove this run (carried for
+        The :class:`~geopfa.prob.config.ProbabilisticConfig` that drove this run (carried for
         downstream consumers).
     skipped
         ``True`` if the run short-circuited because ``config.enabled`` was
@@ -530,8 +530,8 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
     pfa
         The geoPFA dict (output of the preprocessing pipeline).
     config
-        Validated :class:`ProbabilisticConfig` (e.g. from
-        :func:`load_probabilistic_config`).
+        Validated :class:`~geopfa.prob.config.ProbabilisticConfig` (e.g. from
+        :func:`~geopfa.prob.config.load_probabilistic_config`).
     criteria
         Criteria key to operate on. Defaults to ``"geologic"``.
     input_artifacts

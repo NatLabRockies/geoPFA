@@ -14,7 +14,9 @@ from geopfa.prob.runner import run_probabilistic
 from tests.fixtures.synthetic_prob import make_synthetic_pfa
 
 
-def _fixture_and_config(tmp_path: Path, scenarios: list[dict] | None = None) -> tuple:
+def _fixture_and_config(
+    tmp_path: Path, scenarios: list[dict] | None = None
+) -> tuple:
     fixture = make_synthetic_pfa(grid_n=8, n_wells=25, seed=0)
     wells_path = tmp_path / "wells.gpkg"
     fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
@@ -35,8 +37,16 @@ def _fixture_and_config(tmp_path: Path, scenarios: list[dict] | None = None) -> 
                 },
             },
             "alpha": {
-                "component_a": {"mode": "layer_logit", "layer": "prior_layer_a", "scalar_fallback_pr0": 0.55},
-                "component_b": {"mode": "layer_logit", "layer": "prior_layer_b", "scalar_fallback_pr0": 0.50},
+                "component_a": {
+                    "mode": "layer_logit",
+                    "layer": "prior_layer_a",
+                    "scalar_fallback_pr0": 0.55,
+                },
+                "component_b": {
+                    "mode": "layer_logit",
+                    "layer": "prior_layer_b",
+                    "scalar_fallback_pr0": 0.50,
+                },
             },
             "spatial_field": {"enabled": True, "backend": "rbf"},
             "inference": {"backend": "sequential"},
@@ -67,8 +77,18 @@ def test_no_scenarios_gives_empty_scenarios_dict(tmp_path):
 
 def test_two_scenarios_produces_both_results(tmp_path):
     scenarios = [
-        {"name": "full", "include_priors": True, "include_spatial": True, "drop_layers": []},
-        {"name": "no_spatial", "include_priors": True, "include_spatial": False, "drop_layers": []},
+        {
+            "name": "full",
+            "include_priors": True,
+            "include_spatial": True,
+            "drop_layers": [],
+        },
+        {
+            "name": "no_spatial",
+            "include_priors": True,
+            "include_spatial": False,
+            "drop_layers": [],
+        },
     ]
     fixture, cfg = _fixture_and_config(tmp_path, scenarios)
     with warnings.catch_warnings():
@@ -81,23 +101,45 @@ def test_two_scenarios_produces_both_results(tmp_path):
 
 def test_no_spatial_scenario_differs_from_full(tmp_path):
     scenarios = [
-        {"name": "full", "include_priors": True, "include_spatial": True, "drop_layers": []},
-        {"name": "no_spatial", "include_priors": True, "include_spatial": False, "drop_layers": []},
+        {
+            "name": "full",
+            "include_priors": True,
+            "include_spatial": True,
+            "drop_layers": [],
+        },
+        {
+            "name": "no_spatial",
+            "include_priors": True,
+            "include_spatial": False,
+            "drop_layers": [],
+        },
     ]
     fixture, cfg = _fixture_and_config(tmp_path, scenarios)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         result = run_probabilistic(fixture.pfa, cfg)
-    p_full = result.scenarios["full"]["component_a"].probability["probability"].to_numpy()
-    p_nospatial = result.scenarios["no_spatial"]["component_a"].probability["probability"].to_numpy()
+    p_full = (
+        result.scenarios["full"]["component_a"]
+        .probability["probability"]
+        .to_numpy()
+    )
+    p_nospatial = (
+        result.scenarios["no_spatial"]["component_a"]
+        .probability["probability"]
+        .to_numpy()
+    )
     # Spatial field changes the surface — must differ somewhere.
     assert not (p_full == p_nospatial).all()
 
 
 def test_drop_layers_scenario_excludes_layer(tmp_path):
     scenarios = [
-        {"name": "no_sparse", "include_priors": True, "include_spatial": False,
-         "drop_layers": ["sparse_indicator"]},
+        {
+            "name": "no_sparse",
+            "include_priors": True,
+            "include_spatial": False,
+            "drop_layers": ["sparse_indicator"],
+        },
     ]
     fixture, cfg = _fixture_and_config(tmp_path, scenarios)
     with warnings.catch_warnings():

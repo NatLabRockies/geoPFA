@@ -33,7 +33,9 @@ def test_per_feature_weights_zero_recovers_unregularized_fit() -> None:
     offset = np.zeros(n)
     # Zero weights on all features means very weak regularization
     result = _fit_offset_logit(
-        X, y, offset,
+        X,
+        y,
+        offset,
         per_feature_weights=np.zeros(k),
     )
     # Coefficients should be close to truth (within sample noise)
@@ -51,7 +53,9 @@ def test_per_feature_weights_large_shrinks_to_prior_mean() -> None:
     offset = np.zeros(n)
     # Compare: large weight on feature 1 toward prior mean 3.0 vs no weight.
     result_penalised = _fit_offset_logit(
-        X, y, offset,
+        X,
+        y,
+        offset,
         per_feature_weights=np.array([1e-4, 50.0]),
         prior_means=np.array([0.0, 3.0]),
     )
@@ -76,7 +80,9 @@ def test_available_play_types_lists_registered_types() -> None:
 
 
 def test_play_type_defaults_returns_known_signature() -> None:
-    defaults = play_type_defaults("extensional", layer_names=("fault_slip", "thermal_gradient", "random"))
+    defaults = play_type_defaults(
+        "extensional", layer_names=("fault_slip", "thermal_gradient", "random")
+    )
     assert "per_feature_weights" in defaults
     assert "prior_means" in defaults
     # The known fault layer should pick up an entry from the registry
@@ -114,7 +120,9 @@ def test_play_type_defaults_no_matching_layers_returns_empty_weights() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fit_component_probability_uses_per_feature_weights_from_config() -> None:
+def test_fit_component_probability_uses_per_feature_weights_from_config() -> (
+    None
+):
     fixture = make_synthetic_pfa(grid_n=10, n_wells=40, seed=2)
     comp = fixture.pfa["criteria"]["geologic"]["components"]["component_a"]
     with warnings.catch_warnings():

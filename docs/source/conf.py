@@ -42,16 +42,16 @@ exclude_patterns = []
 # -- Extension configuration -------------------------------------------------
 
 # -- Autodoc configuration --
-autoclass_content = "both"          # Merge __init__ docstring into the class page
-autodoc_member_order = "bysource"   # Keep methods in source-code order
-autodoc_inherit_docstrings = True   # Inherit docstrings from base classes
+autoclass_content = "both"  # Merge __init__ docstring into the class page
+autodoc_member_order = "bysource"  # Keep methods in source-code order
+autodoc_inherit_docstrings = True  # Inherit docstrings from base classes
 autodoc_typehints = "none"
-add_module_names = False            # Drop "geopfa." prefix from signatures
+add_module_names = False  # Drop "geopfa." prefix from signatures
 
 # -- Autosummary configuration --
-autosummary_generate = True                   # Auto-generate stub pages
-autosummary_generate_overwrite = True         # Regenerate stubs on every build
-autosummary_imported_members = False          # Skip re-exported names
+autosummary_generate = True  # Auto-generate stub pages
+autosummary_generate_overwrite = True  # Regenerate stubs on every build
+autosummary_imported_members = False  # Skip re-exported names
 
 # -- BibTeX configuration --
 bibtex_bibfiles = ["references.bib"]
@@ -75,11 +75,16 @@ intersphinx_mapping = {
 #
 # - "optional" is standard NumPy docstring convention (e.g. "float, optional")
 #   and Napoleon always tries to cross-reference it as a class.
-# - numpy.ndarray and numpy.random.Generator are registered under different
-#   roles (py:data, py:attr) in NumPy's inventory, but Napoleon emits py:class.
+# - NumPy annotation aliases and scalar/dtype objects are registered under
+#   different roles than the py:class links emitted by autodoc and Napoleon.
 # - geopandas.GeoDataFrame and pandas.DataFrame are either registered under a
 #   different role or a different qualified path in their inventories.
 # - GPy has no Sphinx inventory at all.
+# - LatticeKrigX does not yet publish a Sphinx inventory. Its fully qualified
+#   public types remain visible in the generated API documentation, but cannot
+#   be linked until that inventory exists.
+# - NumPy-style ``default=...`` and ``sequence`` parameter annotations are
+#   descriptive text, not Python class names.
 #
 # Suppress intersphinx network errors in air-gapped/VPN environments where
 # external inventory URLs are unreachable due to SSL certificate inspection.
@@ -89,12 +94,18 @@ intersphinx_mapping = {
 # The build has 0 content warnings on internet-connected CI environments.
 
 nitpick_ignore_regex = [
-    (r"py:class", r"optional"),              # NumPy docstring convention ", optional"
-    (r"py:class", r"numpy\.ndarray"),        # role mismatch: registered as py:data
-    (r"py:class", r"numpy\.random\..*"),     # role mismatch in numpy inventory
-    (r"py:class", r"pandas\.DataFrame"),     # role/path mismatch in pandas inventory
-    (r"py:class", r"geopandas\.GeoDataFrame"),  # role/path mismatch in geopandas inventory
-    (r"py:class", r"GPy\..*"),               # no inventory available
+    (r"py:class", r"optional"),
+    (r"py:class", r"default=.*"),
+    (r"py:class", r"sequence"),
+    (r"py:class", r"NDArray"),
+    (r"py:class", r"np\.(ndarray|float64)"),
+    (r"py:class", r"numpy\.(ndarray|dtype|float64|bool)"),
+    (r"py:class", r"numpy\.random\..*"),
+    (r"py:class", r"pandas\.DataFrame"),
+    (r"py:class", r"geopandas\.(GeoDataFrame|geodataframe\.GeoDataFrame)"),
+    (r"py:class", r"GPy\..*"),
+    (r"py:class", r"JointResult"),
+    (r"py:(class|func|mod)", r"latticekrigx\..*"),
 ]
 
 # -- Napoleon configuration --

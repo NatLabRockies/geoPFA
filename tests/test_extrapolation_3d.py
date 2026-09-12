@@ -1,4 +1,5 @@
 """Tests for 3D extrapolation and the generalized compute_global_radius."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -101,8 +102,12 @@ def synthetic_3d_gdf():
 
 
 def test_backfill_gdf_3d_fills_nans(synthetic_3d_gdf):
-    result = backfill_gdf_3d(synthetic_3d_gdf, value_col="value", verbose=False)
-    assert "value_extrapolated" not in synthetic_3d_gdf.columns  # original unchanged
+    result = backfill_gdf_3d(
+        synthetic_3d_gdf, value_col="value", verbose=False
+    )
+    assert (
+        "value_extrapolated" not in synthetic_3d_gdf.columns
+    )  # original unchanged
     assert "value_extrapolated" in result.columns
     assert result["value_extrapolated"].notna().all()
 
@@ -110,7 +115,9 @@ def test_backfill_gdf_3d_fills_nans(synthetic_3d_gdf):
 def test_backfill_gdf_3d_preserves_known_values(synthetic_3d_gdf):
     """Known values should not be modified (only NaN rows are filled)."""
     known_mask = synthetic_3d_gdf["value"].notna()
-    result = backfill_gdf_3d(synthetic_3d_gdf, value_col="value", verbose=False)
+    result = backfill_gdf_3d(
+        synthetic_3d_gdf, value_col="value", verbose=False
+    )
     orig_known = synthetic_3d_gdf.loc[known_mask, "value"].to_numpy()
     filled_known = result.loc[known_mask, "value_extrapolated"].to_numpy()
     np.testing.assert_array_almost_equal(orig_known, filled_known)

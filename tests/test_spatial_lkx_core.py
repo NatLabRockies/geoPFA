@@ -31,9 +31,7 @@ def _smooth_field_2d(xy: np.ndarray) -> np.ndarray:
 
 def _smooth_field_3d(xyz: np.ndarray) -> np.ndarray:
     x, y, z = xyz[:, 0], xyz[:, 1], xyz[:, 2]
-    return (
-        np.sin(1.2 * x) * np.cos(0.9 * y) + 0.5 * np.tanh(0.8 * z)
-    )
+    return np.sin(1.2 * x) * np.cos(0.9 * y) + 0.5 * np.tanh(0.8 * z)
 
 
 def _standardize(a: np.ndarray, ref: np.ndarray | None = None):
@@ -113,13 +111,9 @@ def test_recovers_holdout_better_than_mean_baseline_2d(synthetic_2d_split):
         config=LkxConfig(nlevel=2, NC=6, lambda_=0.05),
     )
     mean, _ = lkx_predict(model, data["x_test"])
-    rmse_model = float(
-        np.sqrt(np.mean((mean - data["y_test"]) ** 2))
-    )
+    rmse_model = float(np.sqrt(np.mean((mean - data["y_test"]) ** 2)))
     baseline = float(np.mean(data["y_train"]))
-    rmse_mean = float(
-        np.sqrt(np.mean((baseline - data["y_test"]) ** 2))
-    )
+    rmse_mean = float(np.sqrt(np.mean((baseline - data["y_test"]) ** 2)))
     assert rmse_model < 0.5 * rmse_mean, (
         f"LKX RMSE {rmse_model} not better than mean baseline {rmse_mean}"
     )
@@ -244,7 +238,9 @@ def test_mle_improves_holdout_rmse_vs_fixed_lambda(synthetic_2d_split):
     bad_cfg = LkxConfig(nlevel=2, NC=6, lambda_=5.0)
     mle_cfg = LkxConfig(nlevel=2, NC=6, lambda_=5.0, find_lambda=True)
 
-    fixed_model = fit_lkx_field(data["x_train"], data["y_train"], config=bad_cfg)
+    fixed_model = fit_lkx_field(
+        data["x_train"], data["y_train"], config=bad_cfg
+    )
     mle_model = fit_lkx_field(data["x_train"], data["y_train"], config=mle_cfg)
 
     fixed_mean, _ = lkx_predict(fixed_model, data["x_test"])

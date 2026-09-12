@@ -119,6 +119,16 @@ def test_p_gblk_cv_returns_result_per_component_plus_joint(
     assert set(results.keys()) == expected_keys
     for res in results.values():
         assert isinstance(res, CalibrationCVResult)
+        distributions = res.metric_distributions()
+        assert set(distributions) == {
+            "brier_score",
+            "brier_skill_score",
+            "log_score",
+            "expected_calibration_error",
+            "calibration_intercept",
+            "calibration_slope",
+        }
+        assert all(values.shape == (3,) for values in distributions.values())
 
 
 def test_p_gblk_cv_uses_shared_fold_ids(tmp_path: Path) -> None:

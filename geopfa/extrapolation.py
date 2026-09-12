@@ -652,9 +652,7 @@ def _check_param_limits_lkx(constraint_info: dict) -> list[tuple]:
         a_vals = np.asarray(a_wght_fit, dtype=float)
         at_lower = bool(np.any(np.isclose(a_vals, a_wght_lb, atol=1e-3)))
         if at_lower:
-            param_limits_hit.append(
-                ("a_wght", a_vals, (a_wght_lb, None))
-            )
+            param_limits_hit.append(("a_wght", a_vals, (a_wght_lb, None)))
 
     return param_limits_hit
 
@@ -1798,7 +1796,11 @@ def backfill_gdf_3d(  # noqa: PLR0913, PLR0914
 
     if verbose:
         Y_pred_val, Y_pred_val_std = get_predictions(
-            model, X_val_std, Y_mean=Y_mean, Y_std=Y_std_val, backend=backend,
+            model,
+            X_val_std,
+            Y_mean=Y_mean,
+            Y_std=Y_std_val,
+            backend=backend,
         )
         assessment = assess_gp_model_fit(
             model,
@@ -1813,7 +1815,11 @@ def backfill_gdf_3d(  # noqa: PLR0913, PLR0914
 
     # --- Predict at missing locations ---
     Y_fill, _ = get_predictions(
-        model, X_nan_std, Y_mean=Y_mean, Y_std=Y_std_val, backend=backend,
+        model,
+        X_nan_std,
+        Y_mean=Y_mean,
+        Y_std=Y_std_val,
+        backend=backend,
     )
 
     # --- Write back ---

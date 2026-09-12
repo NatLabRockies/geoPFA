@@ -1,7 +1,8 @@
 """Assembler that maps geoPFA data structures to ``fit_joint`` inputs.
 
-Translates :class:`PFAGridAdapter`, :class:`LoadedLabels`, and per-component
-:class:`AlphaCResult` objects into the array-level inputs consumed by
+Translates :class:`~geopfa.prob.pfa_grid.PFAGridAdapter`,
+:class:`~geopfa.prob.labels.LoadedLabels`, and per-component
+:class:`~geopfa.prob.alpha.AlphaCResult` objects into the array-level inputs consumed by
 :func:`latticekrigx.glk.joint.fit_joint`:
 
 * ``y (n, Q)``     — binary component labels at well locations.
@@ -406,7 +407,8 @@ def assemble_gblk_inputs(
     Parameters
     ----------
     adapter
-        Bound :class:`PFAGridAdapter` wrapping the PFA dict.
+        Bound :class:`~geopfa.prob.pfa_grid.PFAGridAdapter` wrapping the PFA
+        dict.
     loaded_labels
         Labelled wells returned by
         :func:`~geopfa.prob.labels.load_labels`.
@@ -530,7 +532,7 @@ def make_interval_support(
 
     Raises
     ------
-    GEOPFAValueError
+    geopfa.exceptions.GEOPFAValueError
         If ``n_quad`` is less than 1.
     """
     if n_quad < 1:
@@ -613,7 +615,7 @@ def pool_regional_coefficients(
 
     Raises
     ------
-    GEOPFAValueError
+    geopfa.exceptions.GEOPFAValueError
         If ``play_type_per_region`` has a different length from ``d_hat``,
         or if any ``d_var`` value is negative.
     """
@@ -660,7 +662,7 @@ def build_observation_basis(
 
     Raises
     ------
-    GEOPFAValueError
+    geopfa.exceptions.GEOPFAValueError
         If ``supports`` is empty.
     """
     if not supports:

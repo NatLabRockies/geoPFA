@@ -86,6 +86,9 @@ trap - EXIT
 echo ">>> Ruff check"
 ruff check geopfa tests
 
+echo ">>> Ruff format --check"
+ruff format --check geopfa tests
+
 echo ">>> Compile source and tests"
 python -m compileall -q geopfa tests
 

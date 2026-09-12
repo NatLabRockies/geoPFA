@@ -133,7 +133,7 @@ def validate_pfa_for_probabilistic(
     combination pathway, but ``run_probabilistic`` is an independent pathway
     that derives its spatial grid from layer ``model`` GeoDataFrames directly.
     When ``pr_norm`` is present it is used; when absent the first layer model
-    is used as the grid (see :func:`_component_grid`).
+    is used as the grid (see ``_component_grid``).
     """
     if criteria not in pfa.get("criteria", {}):
         raise KeyError(

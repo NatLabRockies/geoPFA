@@ -22,7 +22,9 @@ def _grid_coords(n: int = 50) -> np.ndarray:
 
 def _smooth_values(coords: np.ndarray) -> np.ndarray:
     """Linear spatial trend — variogram should increase monotonically."""
-    return coords[:, 0] * 0.01 + np.random.default_rng(_SEED).normal(0, 0.1, len(coords))
+    return coords[:, 0] * 0.01 + np.random.default_rng(_SEED).normal(
+        0, 0.1, len(coords)
+    )
 
 
 def test_empirical_variogram_returns_midpoints_and_gamma() -> None:

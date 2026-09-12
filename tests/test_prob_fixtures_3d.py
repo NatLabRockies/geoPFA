@@ -84,4 +84,7 @@ def test_3d_fixture_wells_have_labels_and_depth() -> None:
 def test_3d_fixture_is_deterministic_under_same_seed() -> None:
     fixture_a = make_synthetic_pfa_3d(grid_n=4, grid_nz=3, n_wells=8, seed=42)
     fixture_b = make_synthetic_pfa_3d(grid_n=4, grid_nz=3, n_wells=8, seed=42)
-    assert (fixture_a.wells["heat_label"].to_numpy() == fixture_b.wells["heat_label"].to_numpy()).all()
+    assert (
+        fixture_a.wells["heat_label"].to_numpy()
+        == fixture_b.wells["heat_label"].to_numpy()
+    ).all()

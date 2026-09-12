@@ -42,5 +42,7 @@ def test_gp_noise_constraints_respected(small_training_set):
     assert isinstance(model, LkxModel)
     lambda_fit = float(constraints["lambda_fit"])
     assert lambda_fit > 0, f"lambda_fit should be positive, got {lambda_fit}"
-    assert np.isfinite(lambda_fit), f"lambda_fit should be finite, got {lambda_fit}"
+    assert np.isfinite(lambda_fit), (
+        f"lambda_fit should be finite, got {lambda_fit}"
+    )
     assert "lambda_bounds" in constraints

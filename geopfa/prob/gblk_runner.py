@@ -35,6 +35,7 @@ from scipy.special import expit
 
 from geopfa.exceptions import GEOPFAValueError
 from geopfa.prob.alpha import AlphaCResult, build_alpha_c
+from geopfa.prob.calibration import calibration_intercept_slope, log_loss
 from geopfa.prob.config import GBLKBayesianConfig, ProbabilisticConfig
 from geopfa.prob.cv import spatial_block_cv
 from geopfa.prob.fitting import ComponentProbability
@@ -1897,7 +1898,7 @@ def _make_fit_fn(  # noqa: PLR0913
     return fit_fn
 
 
-def _calibration_cv_from_splits(
+def _calibration_cv_from_splits(  # noqa: PLR0914
     fit_fn: Any,
     labels: NDArray[np.float64],
     *,
@@ -1956,16 +1957,37 @@ def _calibration_cv_from_splits(
             )
         else:
             skill = float(1.0 - score / reference_score)
+        reliability = reliability_diagram(
+            probabilities, labels_test, n_bins=n_bins
+        )
+        occupied = reliability.bin_counts > 0
+        calibration_error = float(
+            np.sum(
+                reliability.bin_counts[occupied]
+                * np.abs(
+                    reliability.bin_mean_pred[occupied]
+                    - reliability.bin_fracs[occupied]
+                )
+            )
+            / reliability.bin_counts.sum()
+        )
+        calibration_parameters = calibration_intercept_slope(
+            labels_test, probabilities
+        )
         folds.append(
             FoldMetrics(
                 fold_id=fold,
+                n_train=int(train.sum()),
                 n_test=int(test.sum()),
+                n_buffered=int((~train & ~test).sum()),
                 prevalence=float(labels_test.mean()),
                 brier_score=score,
                 brier_skill_score=skill,
-                reliability=reliability_diagram(
-                    probabilities, labels_test, n_bins=n_bins
-                ),
+                log_score=log_loss(labels_test, probabilities),
+                expected_calibration_error=calibration_error,
+                calibration_intercept=calibration_parameters["intercept"],
+                calibration_slope=calibration_parameters["slope"],
+                reliability=reliability,
                 extra=extra,
             )
         )
@@ -2058,7 +2080,7 @@ def run_gblk_calibration_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
 
     Raises
     ------
-    GEOPFAValueError
+    geopfa.exceptions.GEOPFAValueError
         If ``cfg.enabled`` is ``False``, no labeled wells are available,
         or ``components`` contains a name that is not a model component
         name and is not ``"joint"``.
@@ -2300,7 +2322,7 @@ def run_gblk_hierarchical_regional(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
 
     Raises
     ------
-    GEOPFAValueError
+    geopfa.exceptions.GEOPFAValueError
         If ``cfg.enabled`` is ``False``, if any region label is missing
         from ``play_type_per_region``, or if no labeled wells are
         available after filtering.

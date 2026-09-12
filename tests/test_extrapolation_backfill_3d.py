@@ -94,10 +94,15 @@ def test_backfill_gdf_3d_lkx_captures_lateral_and_vertical(synthetic_3d):
 def test_backfill_gdf_3d_default_backend_is_latticekrigx(synthetic_3d):
     gdf, _truth, _nan_mask = synthetic_3d
     explicit = backfill_gdf_3d(
-        gdf.copy(), value_col="value", verbose=False, backend="latticekrigx",
+        gdf.copy(),
+        value_col="value",
+        verbose=False,
+        backend="latticekrigx",
     )
     default = backfill_gdf_3d(
-        gdf.copy(), value_col="value", verbose=False,
+        gdf.copy(),
+        value_col="value",
+        verbose=False,
     )
     np.testing.assert_array_equal(
         explicit["value_extrapolated"].to_numpy(),

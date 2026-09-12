@@ -119,7 +119,9 @@ def test_empty_per_region_does_not_crash(tmp_path: Path) -> None:
 
 
 def test_returns_path_tuple(tmp_path: Path) -> None:
-    result = write_hierarchical_diagnostics({"heat": _minimal_diag()}, tmp_path)
+    result = write_hierarchical_diagnostics(
+        {"heat": _minimal_diag()}, tmp_path
+    )
     assert isinstance(result, tuple)
     assert len(result) == 2
     assert all(isinstance(p, Path) for p in result)

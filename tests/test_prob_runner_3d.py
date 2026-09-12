@@ -42,10 +42,14 @@ def _3d_config(wells_path: Path, output_dir: Path) -> ProbabilisticConfig:
         ),
         alpha={
             "component_a": AlphaModeConfig(
-                mode="layer_logit", layer="prior_layer_a", scalar_fallback_pr0=0.55
+                mode="layer_logit",
+                layer="prior_layer_a",
+                scalar_fallback_pr0=0.55,
             ),
             "component_b": AlphaModeConfig(
-                mode="layer_logit", layer="prior_layer_b", scalar_fallback_pr0=0.50
+                mode="layer_logit",
+                layer="prior_layer_b",
+                scalar_fallback_pr0=0.50,
             ),
         },
         evidence=EvidenceConfig(),
