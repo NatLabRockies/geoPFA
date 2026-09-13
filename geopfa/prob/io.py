@@ -16,6 +16,7 @@ import importlib.metadata
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess  # noqa: S404 -- fixed Git commands capture source provenance
 import tempfile
@@ -1424,6 +1425,81 @@ def _git_source_provenance(root: Path) -> dict[str, str | bool | None]:
     return {"revision": revision, "clean": not bool(status.strip())}
 
 
+def _release_version_at_head(root: Path) -> str | None:
+    """Return the unique semantic release version tagging ``HEAD``."""
+    git_executable = shutil.which("git")
+    if git_executable is None:
+        return None
+    try:
+        result = subprocess.run(  # noqa: S603
+            [
+                git_executable,
+                "-C",
+                str(root),
+                "tag",
+                "--points-at",
+                "HEAD",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    versions = {
+        match.group(1)
+        for tag in result.stdout.splitlines()
+        if (match := re.fullmatch(r"v(\d+\.\d+\.\d+)", tag.strip()))
+    }
+    if len(versions) > 1:
+        raise RuntimeError(
+            "geoPFA HEAD has multiple semantic release tags; source version "
+            "provenance is ambiguous"
+        )
+    return next(iter(versions), None)
+
+
+def _require_version_matches_source(
+    version: str,
+    source: Mapping[str, str | bool | None],
+    root: Path,
+) -> None:
+    """Reject stale generated version metadata for a clean Git checkout."""
+    revision = source.get("revision")
+    if source.get("clean") is not True or revision is None:
+        return
+    if (
+        not isinstance(revision, str)
+        or re.fullmatch(r"[0-9a-fA-F]{40}", revision) is None
+    ):
+        raise RuntimeError("geoPFA Git source revision is malformed")
+
+    release_version = _release_version_at_head(root)
+    if release_version is not None:
+        if version != release_version:
+            raise RuntimeError(
+                "geoPFA package version does not match the semantic release "
+                "tag on the clean Git source"
+            )
+        return
+
+    revision_lower = revision.lower()
+    version_revision_tokens = (
+        token[1:]
+        for token in re.split(r"[.+-]", version.lower())
+        if re.fullmatch(r"g[0-9a-f]{7,40}", token)
+    )
+    if not any(
+        revision_lower.startswith(token) for token in version_revision_tokens
+    ):
+        raise RuntimeError(
+            "geoPFA package version does not identify clean Git source "
+            f"revision {revision}; refresh the installed package from this "
+            "checkout before running"
+        )
+
+
 def _latticekrigx_provenance() -> dict[str, Any]:
     spec = importlib.util.find_spec("latticekrigx")
     if spec is None or not spec.submodule_search_locations:
@@ -2259,6 +2335,11 @@ def write_manifest(
             "geoPFA or LatticeKrigX runtime source changed during run; "
             "discard the incomplete artifacts and rerun from a stable checkout"
         )
+    source_root = Path(__file__).parents[1]
+    source = _git_source_provenance(source_root)
+    from geopfa import __version__  # noqa: PLC0415
+
+    _require_version_matches_source(__version__, source, source_root)
     output_dir.mkdir(parents=True, exist_ok=True)
     files: list[dict[str, Any]] = [
         {
@@ -2274,15 +2355,13 @@ def write_manifest(
         )
     ]
     inputs = _manifest_input_records(config, input_artifacts)
-    from geopfa import __version__  # noqa: PLC0415
-
     payload = {
         "schema_version": 1,
         "run_id": run_id or datetime.now(UTC).isoformat(),
         "producer": {
             "package": "geoPFA",
             "version": __version__,
-            "source": _git_source_provenance(Path(__file__).parents[1]),
+            "source": source,
             "dependencies": [_latticekrigx_provenance()],
         },
         "implementation_sha256": implementation_sha256,

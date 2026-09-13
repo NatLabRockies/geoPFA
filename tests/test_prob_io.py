@@ -30,6 +30,7 @@ from geopfa.prob.config import (
 from geopfa.prob.io import (
     PosteriorDrawBlockWriter,
     _gdf_to_raster,
+    _require_version_matches_source,
     load_posterior_draw_state,
     write_geotiff_outputs,
     write_manifest,
@@ -470,6 +471,105 @@ def test_write_manifest_records_files_and_hashes(tmp_path: Path) -> None:
             config=cfg,
             input_artifacts={"config": config_source},
         )
+
+
+def test_version_source_check_accepts_matching_development_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "e24dd74" + "0" * 33
+    monkeypatch.setattr(
+        "geopfa.prob.io._release_version_at_head", lambda _root: None
+    )
+
+    _require_version_matches_source(
+        "0.0.22.dev20+ge24dd74",
+        {"revision": revision, "clean": True},
+        Path("/unused"),
+    )
+
+
+def test_version_source_check_rejects_stale_development_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "e24dd74" + "0" * 33
+    monkeypatch.setattr(
+        "geopfa.prob.io._release_version_at_head", lambda _root: None
+    )
+
+    with pytest.raises(
+        RuntimeError, match="does not identify clean Git source"
+    ):
+        _require_version_matches_source(
+            "0.0.22.dev18+g904e78b2f.d20260913",
+            {"revision": revision, "clean": True},
+            Path("/unused"),
+        )
+
+
+def test_write_manifest_rejects_stale_installed_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=0)
+    wells_path = tmp_path / "wells.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    cfg = _2d_cfg(wells_path, tmp_path / "out", formats=("csv",))
+    revision = "e24dd74" + "0" * 33
+    monkeypatch.setattr(
+        "geopfa.prob.io._probabilistic_implementation_hash", lambda: "a" * 64
+    )
+    monkeypatch.setattr(
+        "geopfa.prob.io._git_source_provenance",
+        lambda _root: {"revision": revision, "clean": True},
+    )
+    monkeypatch.setattr(
+        "geopfa.prob.io._release_version_at_head", lambda _root: None
+    )
+    monkeypatch.setattr(
+        "geopfa.__version__", "0.0.22.dev18+g904e78b2f.d20260913"
+    )
+
+    with pytest.raises(
+        RuntimeError, match="does not identify clean Git source"
+    ):
+        write_manifest(cfg.output_dir, config=cfg)
+    assert not (cfg.output_dir / "manifest.json").exists()
+
+
+def test_version_source_check_accepts_exact_release_tag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revision = "a" * 40
+    monkeypatch.setattr(
+        "geopfa.prob.io._release_version_at_head", lambda _root: "0.0.22"
+    )
+
+    _require_version_matches_source(
+        "0.0.22",
+        {"revision": revision, "clean": True},
+        Path("/unused"),
+    )
+
+
+def test_version_source_check_skips_non_git_and_dirty_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_called(_root: Path) -> None:
+        raise AssertionError("release tag lookup should not run")
+
+    monkeypatch.setattr(
+        "geopfa.prob.io._release_version_at_head", fail_if_called
+    )
+
+    _require_version_matches_source(
+        "installed-wheel",
+        {"revision": None, "clean": None},
+        Path("/unused"),
+    )
+    _require_version_matches_source(
+        "dirty-development-tree",
+        {"revision": "b" * 40, "clean": False},
+        Path("/unused"),
+    )
 
 
 def test_manifest_omits_absent_prior_only_label_source(
