@@ -1480,7 +1480,6 @@ class Processing:
         data_col="value_interpolated",
         training_size=0.2,
         verbose=False,
-        backend: str = "latticekrigx",
     ):
         """Function to extrapolate 2D fields to max extent grid using Gaussian Process Regression.
 
@@ -1503,10 +1502,6 @@ class Processing:
             Percent of randomly select input observations to train on.
         verbose : bool
             Display training progress, assessment metrics, and final plots.
-        backend : str, default="latticekrigx"
-            Spatial regression backend passed through to
-            :func:`geopfa.extrapolation.backfill_gdf`. Only
-            ``"latticekrigx"`` is supported.
         Returns
         -------
         pfa : dict
@@ -1528,7 +1523,6 @@ class Processing:
             z_value=None,
             verbose=verbose,
             test_size=test_size,
-            backend=backend,
         )
 
         # Update the PFA dictionary with extrapolation results
@@ -1559,9 +1553,7 @@ class Processing:
         z_col: str = "z",
         data_col: str = "value_interpolated",
         training_size: float = 0.2,
-        n_inducing: int = 300,
         verbose: bool = False,
-        backend: str = "latticekrigx",
     ):
         """Extrapolate a 3D layer to the full grid using a sparse GP.
 
@@ -1587,14 +1579,8 @@ class Processing:
             Column to extrapolate (default ``"value_interpolated"``).
         training_size : float
             Fraction of known points used for GP training.
-        n_inducing : int
-            Max number of sparse-GP inducing points.
         verbose : bool
             Print GP diagnostics.
-        backend : str, default="latticekrigx"
-            Spatial regression backend passed through to
-            :func:`geopfa.extrapolation.backfill_gdf_3d`. Only
-            ``"latticekrigx"`` is supported.
 
         Returns
         -------
@@ -1615,9 +1601,7 @@ class Processing:
             y_col=y_col,
             z_col=z_col,
             test_size=test_size,
-            n_inducing=n_inducing,
             verbose=verbose,
-            backend=backend,
         )
 
         pfa["criteria"][criteria]["components"][component]["layers"][layer][

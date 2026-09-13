@@ -9,7 +9,11 @@ import pandas as pd
 from shapely.geometry import Point
 
 from geopfa.prob.alpha import AlphaCResult
-from geopfa.prob.config import EvidenceConfig, LabelsConfig
+from geopfa.prob.config import (
+    EvidenceConfig,
+    LabelsConfig,
+    ObservationModelConfig,
+)
 from geopfa.prob.gblk_assemble import (
     AssembledInputs,
     assemble_gblk_inputs as _assemble_gblk_inputs,
@@ -30,6 +34,7 @@ def assemble_gblk_inputs(
     alpha: dict[str, AlphaCResult],
     *,
     evidence_config: EvidenceConfig | None = None,
+    reference_grid: gpd.GeoDataFrame | None = None,
 ) -> AssembledInputs:
     """Test helper that makes the evidence contract explicit."""
     return _assemble_gblk_inputs(
@@ -39,6 +44,7 @@ def assemble_gblk_inputs(
         evidence_config=(
             EvidenceConfig() if evidence_config is None else evidence_config
         ),
+        reference_grid=reference_grid,
     )
 
 
@@ -327,6 +333,99 @@ def test_p_gblk_assemble_well_coords_shape():
 def test_p_gblk_assemble_grid_coords_shape():
     result, meta = _assemble()
     assert result.grid_coords.shape == (meta["G"], 2)
+
+
+def test_p_gblk_assemble_preserves_well_identity_and_configured_depth():
+    rng = np.random.default_rng(105)
+    components = ["heat"]
+    grid = gpd.GeoDataFrame(
+        {
+            "geometry": [
+                Point(500_000.0, 4_300_000.0, -1_000.0),
+                Point(500_000.0, 4_300_000.0, -2_000.0),
+                Point(510_000.0, 4_310_000.0, -1_000.0),
+            ]
+        },
+        crs="EPSG:32611",
+    )
+    pfa = _make_pfa(components, grid, n_layers=1, rng=rng)
+    wells = gpd.GeoDataFrame(
+        {
+            "well_id": ["PROFILE_A", "PROFILE_A", "POINT_B"],
+            "depth_m": [1_000.0, 2_000.0, 1_000.0],
+            "heat_label": [120.0, 180.0, 140.0],
+            "geometry": grid.geometry.to_list(),
+        },
+        crs=grid.crs,
+    )
+    config = LabelsConfig(
+        source="/synthetic/wells.gpkg",
+        id_col="well_id",
+        depth_col="depth_m",
+        label_columns={"heat": "heat_label"},
+        observation_models={
+            "heat": ObservationModelConfig(
+                family="gaussian", response_scale=50.0
+            )
+        },
+    )
+    result = assemble_gblk_inputs(
+        PFAGridAdapter(pfa, criteria="geologic", dimensions="3d"),
+        LoadedLabels(gdf=wells, config=config),
+        _make_alpha_results(components, grid, rng=rng),
+    )
+
+    np.testing.assert_array_equal(
+        result.well_ids,
+        np.array(["PROFILE_A", "PROFILE_A", "POINT_B"], dtype=object),
+    )
+    np.testing.assert_array_equal(
+        result.well_depths_m,
+        np.array([1_000.0, 2_000.0, 1_000.0]),
+    )
+
+
+def test_p_gblk_assemble_rejects_missing_configured_depth_column():
+    rng = np.random.default_rng(106)
+    components = ["heat"]
+    grid = _make_grid_gdf(3)
+    pfa = _make_pfa(components, grid, n_layers=1, rng=rng)
+    wells = _make_wells_gdf(6, components, rng=rng, unlabeled_count=0)
+    config = LabelsConfig(
+        source="/synthetic/wells.gpkg",
+        id_col="well_id",
+        depth_col="depth_m",
+        label_columns={"heat": "heat_label"},
+    )
+
+    with pytest.raises(ValueError, match="depth_m"):
+        assemble_gblk_inputs(
+            PFAGridAdapter(pfa, criteria="geologic", dimensions="2d"),
+            LoadedLabels(gdf=wells, config=config),
+            _make_alpha_results(components, grid, rng=rng),
+        )
+
+
+def test_p_gblk_assemble_rejects_negative_positive_down_depth():
+    rng = np.random.default_rng(107)
+    components = ["heat"]
+    grid = _make_grid_gdf(3)
+    pfa = _make_pfa(components, grid, n_layers=1, rng=rng)
+    wells = _make_wells_gdf(6, components, rng=rng, unlabeled_count=0)
+    wells["depth_m"] = [0.0, 500.0, -1.0, 1_500.0, 2_000.0, 2_500.0]
+    config = LabelsConfig(
+        source="/synthetic/wells.gpkg",
+        id_col="well_id",
+        depth_col="depth_m",
+        label_columns={"heat": "heat_label"},
+    )
+
+    with pytest.raises(ValueError, match="nonnegative positive-down"):
+        assemble_gblk_inputs(
+            PFAGridAdapter(pfa, criteria="geologic", dimensions="2d"),
+            LoadedLabels(gdf=wells, config=config),
+            _make_alpha_results(components, grid, rng=rng),
+        )
 
 
 def test_p_gblk_assemble_evidence_shape():
@@ -759,6 +858,78 @@ def test_p_gblk_assemble_resamples_component_offsets_to_reference_grid():
         rtol=1e-12,
         atol=1e-8,
     )
+
+
+def test_p_gblk_assemble_uses_caller_reference_grid_for_each_family():
+    rng = np.random.default_rng(95)
+    components = ["heat", "hydraulic"]
+    canonical = _make_grid_gdf(4)
+    permutation = np.random.default_rng(96).permutation(len(canonical))
+    reordered = canonical.iloc[permutation].reset_index(drop=True)
+    pfa = _make_pfa(components, canonical, n_layers=1, rng=rng)
+    hydraulic = pfa["criteria"]["geologic"]["components"]["hydraulic"]
+    hydraulic["pr_norm"] = reordered.copy()
+
+    wells = _make_wells_gdf(8, components, rng=rng, unlabeled_count=0)
+    expected_coordinates = np.column_stack(
+        [canonical.geometry.x.to_numpy(), canonical.geometry.y.to_numpy()]
+    )
+    assembled = []
+    for component, component_grid in (
+        ("heat", canonical),
+        ("hydraulic", reordered),
+    ):
+        offset = component_grid.geometry.x.to_numpy(
+            dtype=float
+        ) + component_grid.geometry.y.to_numpy(dtype=float)
+        config = LabelsConfig(
+            source="/synthetic/wells.gpkg",
+            id_col="well_id",
+            label_columns={component: f"{component}_label"},
+        )
+        assembled.append(
+            assemble_gblk_inputs(
+                PFAGridAdapter(pfa, criteria="geologic", dimensions="2d"),
+                LoadedLabels(gdf=wells, config=config),
+                {
+                    component: AlphaCResult(
+                        grid_offset=offset,
+                        scalar_fallback=0.0,
+                    )
+                },
+                reference_grid=canonical,
+            )
+        )
+
+    for result in assembled:
+        np.testing.assert_array_equal(result.grid_coords, expected_coordinates)
+        np.testing.assert_allclose(
+            result.grid_offsets[:, 0],
+            expected_coordinates[:, 0] + expected_coordinates[:, 1],
+        )
+
+
+def test_p_gblk_assemble_rejects_duplicate_reference_coordinates():
+    rng = np.random.default_rng(97)
+    components = ["comp_a"]
+    grid = _make_grid_gdf(3)
+    duplicate_reference = grid.copy()
+    duplicate_reference.geometry.iloc[-1] = duplicate_reference.geometry.iloc[
+        0
+    ]
+    pfa = _make_pfa(components, grid, n_layers=1, rng=rng)
+    wells = _make_wells_gdf(6, components, rng=rng, unlabeled_count=0)
+
+    with pytest.raises(ValueError, match="duplicate.*reference"):
+        assemble_gblk_inputs(
+            PFAGridAdapter(pfa, criteria="geologic", dimensions="2d"),
+            LoadedLabels(
+                gdf=wells,
+                config=_make_labels_config(components),
+            ),
+            _make_alpha_results(components, grid, rng=rng),
+            reference_grid=duplicate_reference,
+        )
 
 
 def test_p_gblk_assemble_rejects_evidence_grid_without_full_coverage():

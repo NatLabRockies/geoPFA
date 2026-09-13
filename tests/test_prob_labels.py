@@ -143,10 +143,13 @@ def test_load_labels_from_csv_2d(tmp_path: Path) -> None:
     df.to_csv(csv_path, index=False)
     cfg = LabelsConfig(
         source=str(csv_path),
+        source_crs="EPSG:32611",
+        x_col="longitude",
+        y_col="latitude",
         id_col="well_id",
         label_columns={"heat": "heat_label"},
     )
-    loaded = load_labels(cfg, source_crs="EPSG:32611")
+    loaded = load_labels(cfg)
     assert len(loaded.gdf) == 4
     assert isinstance(loaded.gdf, gpd.GeoDataFrame)
     assert loaded.gdf.crs.to_epsg() == 32611
@@ -166,14 +169,61 @@ def test_load_labels_csv_with_xy_columns(tmp_path: Path) -> None:
     df.to_csv(csv_path, index=False)
     cfg = LabelsConfig(
         source=str(csv_path),
+        source_crs="EPSG:32611",
+        x_col="easting",
+        y_col="northing",
         id_col="well_id",
         label_columns={"heat": "heat_label"},
     )
-    loaded = load_labels(
-        cfg, source_crs="EPSG:32611", x_col="easting", y_col="northing"
-    )
+    loaded = load_labels(cfg)
     assert loaded.gdf.geometry.iloc[0].x == pytest.approx(100.0)
     assert loaded.gdf.geometry.iloc[0].y == pytest.approx(400.0)
+
+
+def test_csv_loading_requires_source_crs_in_config(tmp_path: Path) -> None:
+    frame = pd.DataFrame(
+        {
+            "well_id": ["A"],
+            "x_m": [100.0],
+            "y_m": [400.0],
+            "heat_label": [1],
+        }
+    )
+    csv_path = tmp_path / "wells.csv"
+    frame.to_csv(csv_path, index=False)
+    cfg = LabelsConfig(
+        source=str(csv_path),
+        x_col="x_m",
+        y_col="y_m",
+        id_col="well_id",
+        label_columns={"heat": "heat_label"},
+    )
+
+    with pytest.raises(ValueError, match="labels.source_crs"):
+        load_labels(cfg)
+
+
+def test_csv_loading_requires_coordinate_columns_in_config(
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "wells.csv"
+    pd.DataFrame(
+        {
+            "well_id": ["A"],
+            "longitude": [100.0],
+            "latitude": [400.0],
+            "heat_label": [1],
+        }
+    ).to_csv(csv_path, index=False)
+    cfg = LabelsConfig(
+        source=str(csv_path),
+        source_crs="EPSG:32611",
+        id_col="well_id",
+        label_columns={"heat": "heat_label"},
+    )
+
+    with pytest.raises(ValueError, match="labels.x_col.*labels.y_col"):
+        load_labels(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +245,110 @@ def test_load_labels_from_csv_3d(tmp_path: Path) -> None:
     df.to_csv(csv_path, index=False)
     cfg = LabelsConfig(
         source=str(csv_path),
+        source_crs="EPSG:32611",
+        x_col="longitude",
+        y_col="latitude",
+        z_col="depth_m",
         id_col="well_id",
         label_columns={"heat": "heat_label"},
     )
-    loaded = load_labels(cfg, source_crs="EPSG:32611", z_col="depth_m")
+    loaded = load_labels(cfg)
     assert loaded.gdf.geometry.iloc[0].has_z
     assert loaded.gdf.geometry.iloc[0].z == pytest.approx(-1000.0)
+
+
+def test_csv_depth_column_is_positive_down_and_converted_to_z(
+    tmp_path: Path,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "well_id": ["A", "B"],
+            "x_m": [100.0, 200.0],
+            "y_m": [400.0, 500.0],
+            "depth_m": [1_000.0, 2_000.0],
+            "temperature_c": [150.0, 225.0],
+        }
+    )
+    csv_path = tmp_path / "wells.csv"
+    frame.to_csv(csv_path, index=False)
+    cfg = LabelsConfig(
+        source=str(csv_path),
+        source_crs="EPSG:32611",
+        x_col="x_m",
+        y_col="y_m",
+        depth_col="depth_m",
+        id_col="well_id",
+        label_columns={"heat": "temperature_c"},
+        observation_models={
+            "heat": ObservationModelConfig(
+                family="gaussian", response_scale=50.0
+            )
+        },
+    )
+
+    loaded = load_labels(cfg)
+
+    assert loaded.gdf.geometry.iloc[0].has_z
+    assert loaded.gdf.geometry.iloc[0].z == pytest.approx(-1_000.0)
+    assert loaded.gdf["depth_m"].tolist() == [1_000.0, 2_000.0]
+
+
+def test_csv_z_column_controls_geometry_when_depth_is_also_declared(
+    tmp_path: Path,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "well_id": ["A", "B"],
+            "x_m": [100.0, 200.0],
+            "y_m": [400.0, 500.0],
+            "elevation_m": [1_500.0, 1_450.0],
+            "depth_m": [1_000.0, 2_000.0],
+            "heat_label": [1, 0],
+        }
+    )
+    csv_path = tmp_path / "wells.csv"
+    frame.to_csv(csv_path, index=False)
+    cfg = LabelsConfig(
+        source=str(csv_path),
+        source_crs="EPSG:32611",
+        x_col="x_m",
+        y_col="y_m",
+        z_col="elevation_m",
+        depth_col="depth_m",
+        id_col="well_id",
+        label_columns={"heat": "heat_label"},
+    )
+
+    loaded = load_labels(cfg)
+
+    assert loaded.gdf.geometry.iloc[0].z == pytest.approx(1_500.0)
+    assert loaded.gdf["depth_m"].tolist() == [1_000.0, 2_000.0]
+
+
+def test_csv_depth_column_rejects_negative_depth(tmp_path: Path) -> None:
+    frame = pd.DataFrame(
+        {
+            "well_id": ["A", "B"],
+            "x_m": [100.0, 200.0],
+            "y_m": [400.0, 500.0],
+            "depth_m": [1_000.0, -2_000.0],
+            "heat_label": [1, 0],
+        }
+    )
+    csv_path = tmp_path / "wells.csv"
+    frame.to_csv(csv_path, index=False)
+    cfg = LabelsConfig(
+        source=str(csv_path),
+        source_crs="EPSG:32611",
+        x_col="x_m",
+        y_col="y_m",
+        depth_col="depth_m",
+        id_col="well_id",
+        label_columns={"heat": "heat_label"},
+    )
+
+    with pytest.raises(ValueError, match="nonnegative positive-down"):
+        load_labels(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -327,11 +475,14 @@ def test_load_labels_rejects_nonnumeric_observed_label(tmp_path: Path) -> None:
     frame.to_csv(csv_path, index=False)
     cfg = LabelsConfig(
         source=str(csv_path),
+        source_crs="EPSG:32611",
+        x_col="longitude",
+        y_col="latitude",
         id_col="well_id",
         label_columns={"heat": "heat_label"},
     )
     with pytest.raises(ValueError, match="nonnumeric"):
-        load_labels(cfg, source_crs="EPSG:32611")
+        load_labels(cfg)
 
 
 # ---------------------------------------------------------------------------

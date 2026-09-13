@@ -31,6 +31,7 @@ from geopfa.prob.config import (  # noqa: E402
     SpatialFieldConfig,
 )
 from geopfa.prob.gblk_runner import run_gblk_calibration_cv  # noqa: E402
+from geopfa.prob.gblk_assemble import AssembledInputs  # noqa: E402
 from tests.fixtures.synthetic_prob import make_synthetic_pfa  # noqa: E402
 
 
@@ -68,7 +69,10 @@ def _cfg(wells_path: Path, output_dir: Path) -> ProbabilisticConfig:
             ),
         },
         evidence=EvidenceConfig(),
-        spatial_field=SpatialFieldConfig(enabled=False),
+        spatial_field=SpatialFieldConfig(
+            enabled=False,
+            lattice_centers_per_dimension=_NC_SMALL,
+        ),
         inference=InferenceConfig(backend="gblk"),
         calibration=CalibrationConfig(method="none"),
         cross_validation=CrossValidationConfig(),
@@ -97,14 +101,16 @@ def _run_cv(
     fixture = make_synthetic_pfa(grid_n=grid_n, n_wells=n_wells, seed=seed)
     wells_path = tmp_path / "wells.gpkg"
     fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
-    cfg = _cfg(wells_path, tmp_path / "out")
+    base = _cfg(wells_path, tmp_path / "out")
+    cfg = replace(
+        base,
+        calibration=replace(base.calibration, n_bins=n_bins),
+        cross_validation=replace(base.cross_validation, n_folds=n_folds),
+    )
     return run_gblk_calibration_cv(
         fixture.pfa,
         cfg,
-        n_folds=n_folds,
-        n_bins=n_bins,
         random_state=0,
-        nc=_NC_SMALL,
         a_wght=4.5,
         max_outer_iter=_OUTER_SMALL,
         irls_max_iter=_IRLS_SMALL,
@@ -159,6 +165,7 @@ def test_p_gblk_cv_honors_geoPFA_block_and_buffer_contract(
     cfg = _cfg(wells_path, tmp_path / "out")
     cfg = replace(
         cfg,
+        calibration=replace(cfg.calibration, n_bins=4),
         cross_validation=CrossValidationConfig(
             n_folds=4,
             block_type="grid",
@@ -168,19 +175,26 @@ def test_p_gblk_cv_honors_geoPFA_block_and_buffer_contract(
         ),
     )
     captured: list[dict] = []
+    fit_contracts: list[dict] = []
 
     def fake_calibration_cv(*_args, **kwargs):
         captured.append(dict(kwargs))
         return SimpleNamespace(fold_ids=np.asarray(kwargs["fold_ids"]))
 
+    real_make_fit_fn = runner_module._make_fit_fn  # noqa: SLF001
+
+    def capture_make_fit_fn(*args, **kwargs):
+        fit_contracts.append(dict(kwargs))
+        return real_make_fit_fn(*args, **kwargs)
+
     monkeypatch.setattr(
         runner_module, "_calibration_cv_from_splits", fake_calibration_cv
     )
+    monkeypatch.setattr(runner_module, "_make_fit_fn", capture_make_fit_fn)
 
     result = run_gblk_calibration_cv(
         fixture.pfa,
         cfg,
-        n_bins=4,
         random_state=7,
         components=["component_a"],
     )
@@ -206,6 +220,8 @@ def test_p_gblk_cv_honors_geoPFA_block_and_buffer_contract(
 
     assert set(result) == {"component_a"}
     assert len(captured) == 1
+    assert captured[0]["n_bins"] == 4
+    assert fit_contracts[0]["nc"] == _NC_SMALL
     np.testing.assert_array_equal(captured[0]["fold_ids"], expected)
     assert len(captured[0]["splits"]) == len(expected_splits)
     for actual, expected_split in zip(
@@ -213,6 +229,190 @@ def test_p_gblk_cv_honors_geoPFA_block_and_buffer_contract(
     ):
         np.testing.assert_array_equal(actual[0], expected_split[0])
         np.testing.assert_array_equal(actual[1], expected_split[1])
+
+
+def test_gblk_calibration_refits_full_partial_label_model_once_per_union_fold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every target score must come from one shared full-model fold fit."""
+    from geopfa.prob import gblk_runner as runner_module
+
+    coordinates = np.column_stack(
+        [np.arange(8, dtype=float) * 1_000.0, np.zeros(8)]
+    )
+    observed = np.array(
+        [
+            [True, True],
+            [True, True],
+            [True, False],
+            [True, True],
+            [True, True],
+            [True, True],
+            [False, True],
+            [True, True],
+        ]
+    )
+    outcomes = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+            [0.0, 0.0],
+            [1.0, 1.0],
+        ]
+    )
+    assembled = AssembledInputs(
+        component_names=_COMPONENTS,
+        y=outcomes,
+        observed_mask=observed,
+        labeled_mask=np.all(observed, axis=1),
+        well_offsets=np.zeros((8, 2)),
+        grid_offsets=np.zeros((2, 2)),
+        well_coords=coordinates,
+        grid_coords=np.array([[0.0, 0.0], [7_000.0, 0.0]]),
+        well_ids=np.array([f"well-{index}" for index in range(8)]),
+        well_depths_m=None,
+        evidence={name: np.empty((8, 0)) for name in _COMPONENTS},
+        grid_evidence={name: np.empty((2, 0)) for name in _COMPONENTS},
+        layer_names={name: [] for name in _COMPONENTS},
+    )
+    splits = (
+        (
+            np.array([False, False, False, False, False, True, True, True]),
+            np.array([True, True, True, True, False, False, False, False]),
+        ),
+        (
+            np.array([True, True, True, False, False, False, False, False]),
+            np.array([False, False, False, False, True, True, True, True]),
+        ),
+    )
+    base = _cfg(tmp_path / "unused.gpkg", tmp_path / "out")
+    cfg = replace(
+        base,
+        labels=replace(base.labels, min_wells_for_fit=2),
+        spatial_field=replace(base.spatial_field, enabled=True),
+        calibration=replace(base.calibration, n_bins=2),
+        cross_validation=replace(base.cross_validation, n_folds=2),
+    )
+    fold_plan_calls: list[tuple[np.ndarray, np.ndarray]] = []
+    fit_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        runner_module,
+        "_assemble_from_config",
+        lambda *_args, **_kwargs: assembled,
+    )
+
+    def fixed_union_folds(coords, well_ids, **_kwargs):
+        fold_plan_calls.append((np.asarray(coords), np.asarray(well_ids)))
+        return splits
+
+    def fake_joint_fit(coords_train, y_train, coords_test, **kwargs):
+        fit_calls.append(
+            {
+                "coords_train": np.asarray(coords_train).copy(),
+                "y_train": np.asarray(y_train).copy(),
+                "coords_test": np.asarray(coords_test).copy(),
+                "component_names": kwargs["component_names"],
+                "labeled_mask": np.asarray(kwargs["labeled_mask"]).copy(),
+                "observed_mask": np.asarray(kwargs["observed_mask"]).copy(),
+            }
+        )
+        x_index = np.asarray(coords_test)[:, 0] / 1_000.0
+        return SimpleNamespace(
+            p_q_grid=np.column_stack(
+                [0.15 + 0.08 * x_index, 0.80 - 0.07 * x_index]
+            )
+        )
+
+    monkeypatch.setattr(
+        runner_module, "_grouped_spatial_folds", fixed_union_folds
+    )
+    monkeypatch.setattr(runner_module, "fit_gblk_joint", fake_joint_fit)
+
+    results = run_gblk_calibration_cv({}, cfg)
+
+    assert len(fold_plan_calls) == 1
+    np.testing.assert_array_equal(fold_plan_calls[0][0], coordinates)
+    np.testing.assert_array_equal(fold_plan_calls[0][1], assembled.well_ids)
+    assert len(fit_calls) == len(splits)
+    for call, (train_mask, test_mask) in zip(fit_calls, splits, strict=True):
+        assert call["component_names"] == _COMPONENTS
+        np.testing.assert_array_equal(
+            call["coords_train"], coordinates[train_mask]
+        )
+        np.testing.assert_array_equal(call["y_train"], outcomes[train_mask])
+        np.testing.assert_array_equal(
+            call["coords_test"], coordinates[test_mask]
+        )
+        np.testing.assert_array_equal(
+            call["observed_mask"], observed[train_mask]
+        )
+        np.testing.assert_array_equal(
+            call["labeled_mask"], np.any(observed[train_mask], axis=1)
+        )
+        train_ids = set(assembled.well_ids[train_mask])
+        excluded_ids = set(assembled.well_ids[~train_mask])
+        assert train_ids.isdisjoint(excluded_ids)
+
+    expected_probability = np.column_stack(
+        [
+            0.15 + 0.08 * np.arange(8, dtype=float),
+            0.80 - 0.07 * np.arange(8, dtype=float),
+        ]
+    )
+    union_fold_ids = np.repeat(np.arange(2), 4)
+    for q_idx, name in enumerate(_COMPONENTS):
+        component_rows = observed[:, q_idx]
+        np.testing.assert_array_equal(
+            results[name].fold_ids, union_fold_ids[component_rows]
+        )
+        for fold, metrics in enumerate(results[name].folds):
+            score_rows = component_rows & (union_fold_ids == fold)
+            expected_brier = np.mean(
+                (
+                    expected_probability[score_rows, q_idx]
+                    - outcomes[score_rows, q_idx]
+                )
+                ** 2
+            )
+            assert metrics.brier_score == pytest.approx(expected_brier)
+
+    complete = np.all(observed, axis=1)
+    np.testing.assert_array_equal(
+        results["joint"].fold_ids, union_fold_ids[complete]
+    )
+    joint_probability = np.prod(expected_probability, axis=1)
+    joint_outcome = np.prod(outcomes, axis=1)
+    for fold, metrics in enumerate(results["joint"].folds):
+        score_rows = complete & (union_fold_ids == fold)
+        expected_brier = np.mean(
+            (joint_probability[score_rows] - joint_outcome[score_rows]) ** 2
+        )
+        assert metrics.brier_score == pytest.approx(expected_brier)
+
+
+@pytest.mark.parametrize(
+    ("override", "value", "match_text"),
+    [
+        ("n_bins", 4, "n_bins.*conflicts.*calibration.n_bins"),
+        ("nc", _NC_SMALL + 1, "nc.*conflicts.*spatial_field"),
+    ],
+)
+def test_direct_gblk_calibration_rejects_config_conflicting_overrides(
+    tmp_path: Path,
+    override: str,
+    value: int,
+    match_text: str,
+) -> None:
+    cfg = _cfg(tmp_path / "missing.gpkg", tmp_path / "out")
+
+    with pytest.raises(GEOPFAValueError, match=match_text):
+        run_gblk_calibration_cv({}, cfg, **{override: value})
 
 
 def test_p_gblk_cv_respects_spatial_field_disabled(
@@ -225,6 +425,7 @@ def test_p_gblk_cv_respects_spatial_field_disabled(
     fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
     cfg = replace(
         _cfg(wells_path, tmp_path / "out"),
+        calibration=CalibrationConfig(method="none", n_bins=3),
         cross_validation=CrossValidationConfig(
             n_folds=3,
             block_type="grid",
@@ -241,7 +442,6 @@ def test_p_gblk_cv_respects_spatial_field_disabled(
         fixture.pfa,
         cfg,
         components=["component_a"],
-        n_bins=3,
     )
 
     assert set(result) == {"component_a"}
@@ -355,15 +555,10 @@ def test_p_gblk_cv_raises_when_disabled(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# PB-1: restrict calibration-CV to a subset of components
+# PB-1: restrict reported calibration metrics to a subset of components
 #
-# Real, sparsely-labeled datasets (e.g. Newberry: 31 wells, 8 heat-positive,
-# a single non-NaN producibility label, zero insulation labels) cannot
-# support calibration-CV for every component in a multivariate GBLK fit —
-# a class-degenerate or all-NaN label column makes the per-component metric
-# meaningless (or raises). ``components`` lets a caller request calibration
-# only for the component(s) that can actually support it, while the joint
-# multivariate fit itself still sees every component's evidence layers.
+# ``components`` controls only which metrics are returned. It must not silently
+# remove a weakly labeled component from the model evaluated by cross-validation.
 # ---------------------------------------------------------------------------
 
 
@@ -385,24 +580,26 @@ def _make_sparse_second_component_fixture(tmp_path: Path):
     return fixture, cfg
 
 
-def test_p_gblk_cv_components_filter_restricts_returned_keys(
+def test_p_gblk_cv_components_filter_does_not_switch_to_a_smaller_model(
     tmp_path: Path,
 ) -> None:
     fixture, cfg = _make_sparse_second_component_fixture(tmp_path)
-    results = run_gblk_calibration_cv(
-        fixture.pfa,
-        cfg,
-        n_folds=3,
-        n_bins=4,
-        random_state=0,
-        nc=_NC_SMALL,
-        a_wght=4.5,
-        max_outer_iter=_OUTER_SMALL,
-        irls_max_iter=_IRLS_SMALL,
-        components=["component_a"],
-    )
-    assert set(results.keys()) == {"component_a"}
-    assert results["component_a"].fold_ids.shape == (len(fixture.wells),)
+    cfg = replace(cfg, calibration=replace(cfg.calibration, n_bins=4))
+    with pytest.raises(
+        GEOPFAValueError,
+        match="full calibration model component 'component_b'.*fewer than 4",
+    ):
+        run_gblk_calibration_cv(
+            fixture.pfa,
+            cfg,
+            n_folds=3,
+            random_state=0,
+            nc=_NC_SMALL,
+            a_wght=4.5,
+            max_outer_iter=_OUTER_SMALL,
+            irls_max_iter=_IRLS_SMALL,
+            components=["component_a"],
+        )
 
 
 def test_p_gblk_cv_without_filter_rejects_unidentifiable_component(
@@ -410,15 +607,15 @@ def test_p_gblk_cv_without_filter_rejects_unidentifiable_component(
 ) -> None:
     """Calibration fails closed instead of converting absent labels to zero."""
     fixture, cfg = _make_sparse_second_component_fixture(tmp_path)
+    cfg = replace(cfg, calibration=replace(cfg.calibration, n_bins=4))
     with pytest.raises(
         GEOPFAValueError,
-        match="component_b.*fewer than 3 observed labels",
+        match="full calibration model component 'component_b'.*fewer than 4",
     ):
         run_gblk_calibration_cv(
             fixture.pfa,
             cfg,
             n_folds=3,
-            n_bins=4,
             random_state=0,
             nc=_NC_SMALL,
             a_wght=4.5,

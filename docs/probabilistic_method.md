@@ -23,11 +23,11 @@ independent `backend="bayesian"` model.
 
 The GBLK method supports binary component outcomes and continuous Gaussian
 heat observations. Components with the same response family are fit jointly.
-For a binary component $q$ (e.g. reservoir or seal) at well location $i$ with
-observation support $H_{qi}$:
+The config-driven workflow treats each label-table row as a point observation
+at location $s_i$. For a binary component $q$ (e.g. reservoir or seal):
 
 $$
-\text{logit}\, p_{qi} \;=\; o_q(s_i) \;+\; Z_{qi}\, d_{qr} \;+\; [H_{qi}\, g_q]
+\text{logit}\, p_{qi} \;=\; o_q(s_i) \;+\; Z_{qi}\, d_q \;+\; B(s_i)^\mathsf{T}g_q
 $$
 
 where:
@@ -38,18 +38,18 @@ where:
 - **$Z_{qi}\, d_q$ — evidence regression.** Evidence-layer values at the well
   multiplied by component-specific coefficients. The empirical-Bayes GBLK path
   estimates these coefficients with the spatial field in one likelihood under
-  the declared Gaussian coefficient prior. The separate hierarchical regional
-  runner can pool regional coefficients by play type.
-- **$[H_{qi}\, g_q]$ — latent spatial field.** Multiresolution LatticeKrig basis
-  $H_{qi}$ (averaged over the observation support) times latent field coefficients
-  $g_q$. All components share the same LatticeKrig basis; cross-component dependence
-  is captured by the estimated $Q \times Q$ correlation matrix $\Omega$ within
-  a same-family fit.
+  the declared Gaussian coefficient prior. Regional hierarchical coefficients
+  are not currently implemented in the joint likelihood.
+- **$B(s_i)^\mathsf{T}g_q$ — latent spatial field.** The multiresolution
+  LatticeKrig basis is evaluated at the row's point location and multiplied by
+  latent field coefficients $g_q$. All components share the same LatticeKrig
+  basis; cross-component dependence is captured by the estimated $Q \times Q$
+  correlation matrix $\Omega$ within a same-family fit.
 
 For a Gaussian heat component, the corresponding model is
 
 $$
-T_i / a_T = \mu_T(s_i) / a_T + Z_{Ti}d_T + [H_{Ti}g_T] + \epsilon_i,
+T_i / a_T = \mu_T(s_i) / a_T + Z_{Ti}d_T + B(s_i)^\mathsf{T}g_T + \epsilon_i,
 $$
 
 where $T_i$ is the continuous temperature observation, $\mu_T(s_i)$ is the
@@ -63,6 +63,26 @@ $\Pr(T(s)>T^*)$ at the configured threshold. Those probability draws then pass
 to the same component-combination step used for binary outcomes. Gaussian and
 Bernoulli components are fit separately, so geoPFA does not claim estimated
 cross-response-family dependence.
+
+Gaussian component tables report `response_predictive_mean`,
+`response_predictive_lo`, and `response_predictive_hi` in physical response
+units. For a fitted component, the posterior-predictive interval includes
+Gaussian likelihood variation and latent-field uncertainty. For a component
+declared with `force_prior_predictive=true`, the interval is the analytic
+Normal interval from the configured thermal mean and required thermal-model
+standard deviation; it contains no outcome update or fitted-likelihood
+variance. If predictive stacking is enabled for a fitted component, these
+summaries describe the same selected mixture of the configured prior
+predictive distribution and fitted posterior predictive distribution used for
+the component event probability.
+
+A temperature profile is represented by one point-observation row per sampled
+depth. Rows from the same physical well repeat the configured well identifier,
+which keeps the complete profile together in grouped spatial validation. The
+canonical config workflow does not currently expose interval, trajectory, or
+areal observation supports. Low-level support-quadrature utilities remain
+available for direct development use, but they are not connected to
+`run_probabilistic`.
 
 The default combined surface is the **conditional plug-in co-occurrence score**:
 
@@ -85,13 +105,12 @@ declared conditional combination rule. This is the `combined` surface in the
 | components $q$ | `heat`, `reservoir`, `seal`, … | `y` columns / `n_components` |
 | prior offset $o_q$ | `alpha.py::build_alpha_c` | `offsets` |
 | continuous heat response | `labels.observation_models` | Gaussian family + identity link |
-| evidence $Z_q d_{qr}$ | processed evidence layers | design matrix + `glk.hierarchy` |
+| evidence $Z_q d_q$ | processed evidence layers | design matrix + declared Gaussian coefficient prior |
 | latent field $g_q$, $\Omega$ | — | `glk.multivariate` + `fit_joint` |
-| support operator $H_{qi}$ | well point/interval/trajectory/areal | `glk.support` averaged rows |
+| observation geometry | point rows; profiles are depth-specific rows grouped by well id | basis evaluated at each point |
 | PU / undrilled unlabeled | `pu.py` (non-negative PU risk; sequential outcome path only) | not part of the GBLK likelihood |
 | preferential site collection | `site_selection.py` (finite-candidate sensitivity model) | deliberately separate from LatticeKrigX |
 | plug-in co-occurrence | `result.combined` | product of joint-fit marginals |
-| regional pooling by play-type | `regions.py` / `play_types.py` | `glk.hierarchy` |
 | calibration (Brier/BSS, spatial-block CV) | `calibration.py`, `cv.py` | `glk.calibration` |
 | sole Bayesian option | `gblk_bayesian.enabled=true` | public Paige/INLA joint draws for 2-D or 3-D geometry |
 
@@ -138,8 +157,7 @@ The whole pipeline is driven by a single JSON config. Drop a `probabilistic` blo
       "backend": "gblk",
       "gblk_bayesian": {"enabled": true},
       "predictive_stacking": {
-        "enabled": true,
-        "validation_depths_m": {"heat": 3000.0}
+        "enabled": true
       }
     },
 
@@ -163,16 +181,23 @@ thermal, uncertainty, and candidate-frame paths—are resolved relative to the
 config file, not the shell's working directory. The run manifest records the
 resolved inputs with byte counts and SHA-256 digests, the full effective config,
 the producing geoPFA and LatticeKrigX versions, and a SHA-256 fingerprint of
-both runtime source trees. A non-empty output directory is accepted only for a
-compatible completed run or resumable posterior workspace. Use a fresh
-directory when the config or implementation changes so artifacts from
-different runs cannot mix.
+both runtime source trees. Completed output namespaces are immutable and are
+never accepted for another execution, even when their manifests still verify.
+Only a verified incomplete posterior workspace with a valid progress record
+may resume its completed block prefix. Use a fresh directory when the config or
+implementation changes, or when abrupt termination leaves an incompletely
+published state or derived product, so artifacts from different runs cannot
+mix.
 The runner also compares its start/end runtime fingerprints and rejects an
 artifact if either source tree changes while the model is executing.
 
 That call:
 
-1. Loads the labelled wells from the configured source (GeoPackage / shapefile / CSV).
+1. When an outcome update or site-selection analysis is configured, loads
+   point-observation rows from the configured source (GeoPackage / shapefile /
+   CSV). A profile contains repeated depth-specific rows with a shared well id.
+   An all-prior-predictive run does not require a label source; omit it so the
+   manifest does not bind unused data.
 2. Builds the configured event prior per component and retains the physical
    thermal mean for Gaussian heat components.
 3. Assembles component responses, missingness masks, evidence, and offsets via
@@ -186,10 +211,11 @@ That call:
 6. Produces per-component probability surfaces `p_q(s)` and the conditional
    plug-in co-occurrence surface `∏_q p_q(s)`.
 7. Runs any configured ablation scenarios.
-8. Writes outputs to `output_dir/`: per-component CSV + GeoTIFF + Parquet
-   (and VTK for 3D), optional paired Bayesian posterior-probability blocks,
-   `alpha_provenance.json`, and `manifest.json` (input/output SHA-256 hashes +
-   config and implementation hashes + run id).
+8. Writes only the formats selected by `outputs.format` to `output_dir/`:
+   GeoTIFF for 2-D grids, VTK for 3-D point volumes, and CSV or Parquet for
+   either dimension. Optional products include paired Bayesian probability
+   blocks. The run also writes `alpha_provenance.json` and `manifest.json`
+   (input/output SHA-256 hashes + config and implementation hashes + run id).
 
 ## Config reference
 
@@ -200,14 +226,23 @@ are summarized below.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `source` | required | Path to a GPKG / SHP / CSV holding labelled wells. |
-| `id_col` | required | Unique-id column on the wells file. |
-| `layer` | `null` | Sub-layer for GPKG sources. |
-| `label_columns` | required | Per-component label-column mapping (e.g. `{"heat": "heat_label", "reservoir": "reservoir_label"}`). |
-| `observation_models` | `{}` | Optional per-component likelihood. Omitted components are Bernoulli. A Gaussian component requires `family="gaussian"` and a positive `response_scale`. |
+| `source` | required for fitted or site-selection paths | Path to a GPKG / SHP / CSV holding labelled wells. |
+| `id_col` | required for fitted or site-selection paths | Unique-id column on the wells file. |
+| `layer` | `null` | Sub-layer for GPKG sources. Rejected for CSV sources. |
+| `source_crs` | `null` | CRS of CSV coordinates; required for CSV. For vector files, this may supply missing CRS metadata but must agree with an embedded CRS. |
+| `x_col`, `y_col` | `null` | Cartesian coordinate columns; both are required for CSV and are not used for vector sources. |
+| `z_col` | `null` | Optional Cartesian model-Z column for CSV. Values are used unchanged. |
+| `depth_col` | `null` | Optional nonnegative, positive-down scientific depth. If CSV `z_col` is omitted, model geometry uses `z = -depth`; if both are present, `z_col` controls geometry and depth remains available for target-depth validation. |
+| `label_columns` | required for fitted or site-selection paths | Per-component label-column mapping (e.g. `{"heat": "heat_label", "reservoir": "reservoir_label"}`). |
+| `observation_models` | `{}` | Optional per-component response family. Omitted labelled components are Bernoulli. A fitted Gaussian component requires `family="gaussian"` and a positive `response_scale`. A Gaussian component with `force_prior_predictive=true` is already in physical units, must declare thermal response uncertainty, and omits `response_scale`. An alpha-only declaration is valid only when that component sets `force_prior_predictive=true`. |
 | `min_wells_for_fit` | `4` | Minimum observed support required by the selected fit; insufficient support raises rather than silently changing models. |
 | `pu_mode` | `"off"` | `"off"`, `"naive_pseudo_absence"`, or modern non-negative PU risk estimation (`"nnpu"`; sequential outcome path only). |
 | `pu_class_prior` | `null` | Externally identified population prevalence required by `pu_mode="nnpu"`; a scalar or per-component mapping with values strictly inside `(0, 1)`. |
+
+The `labels` block may be omitted when every component sets
+`force_prior_predictive=true` and `site_selection.mode="off"`. A prior-only
+Gaussian component can provide only its `observation_models` entry; no label
+source is read or recorded as an input in that case.
 
 Positive--unlabeled correction is opt-in. The nnPU estimator minimizes the
 non-negative logistic PU risk of Kiryo et al. (2017) under the
@@ -232,16 +267,23 @@ envelope. This analysis does not alter or wrap the LatticeKrigX likelihood.
 | Mode | Required keys | What it does |
 | --- | --- | --- |
 | `scalar` | `scalar_fallback_pr0` | Uniform $\alpha = \text{logit}(p_0)$. |
-| `layer_logit` | `layer`, `p_min`, `p_max` | Min-max rescale a named layer to $[p_{\min}, p_{\max}]$ and apply `logit`. Layer is auto-excluded from regression. |
-| `thermal_exceedance` | `thermal_raster`, `threshold` (`uncertainty_raster` optional) | Step function or $\Phi$-integration of `P(T > T*)`. Clipped then `logit`. |
-| `thermal_layer_exceedance` | `layer`, `threshold` (`uncertainty_column` optional) | Compute `P(T > T*)` from temperature mean/SD columns already carried by a PFA layer. |
+| `layer_logit` | `layer` | Min-max rescale a named layer to $[p_{\min}, p_{\max}]$ and apply `logit`. Layer is auto-excluded from regression. |
+| `thermal_exceedance` | `thermal_raster`, `threshold` (`uncertainty_raster` required for a Gaussian prior-only component) | Step function or $\Phi$-integration of `P(T > T*)`. Clipped then `logit`. |
+| `thermal_layer_exceedance` | `layer`, `threshold` (`uncertainty_column` required for a Gaussian prior-only component) | Compute `P(T > T*)` from temperature mean/SD columns already carried by a PFA layer. |
 | `multi_layer` | `layers` | Sum of `layer_logit` offsets in logit space; all named layers auto-excluded. |
 
 `p_min` and `p_max` must be finite and strictly inside `(0, 1)` so every
-logit offset is finite. `force_prior_predictive=true` explicitly prevents an
-outcome update. With `use_evidence_prior=true`, named Gaussian coefficient
-priors are sampled; otherwise the component is a fixed prior prediction and
-does not produce replicated uncertainty draws.
+logit offset is finite. Layer and multi-layer rescaling defaults to
+`[0.2, 0.8]`. Thermal exceedance defaults to the near-open finite interval
+`[1e-12, 1 - 1e-12]` so a computed thermal probability is not materially
+truncated. `force_prior_predictive=true` explicitly prevents an outcome
+update. For a Bernoulli component, `use_evidence_prior=true` samples
+named Gaussian coefficient priors on the event-logit scale; otherwise the
+component is a fixed prior prediction and does not produce replicated
+uncertainty draws. A Gaussian prior-only component rejects
+`use_evidence_prior` because that logit update is not a continuous-response
+model. Fields outside the selected mode's row in the table are rejected rather
+than ignored.
 
 ### `evidence`
 
@@ -250,7 +292,6 @@ does not produce replicated uncertainty draws.
 | `regularization.C` | `1.0` | Sklearn-style `1/lambda`. |
 | `regularization.per_feature_weights` | `{}` | Per-layer L2 weight overrides. |
 | `regularization.prior_means`, `prior_precisions` | `{}`, `{}` | Named Gaussian coefficient priors, required for prior-predictive evidence coefficients. |
-| `regularization.play_type` | `null` | Optional key into the play-type defaults registry (Phase C.2, future). |
 | `include_layers` | `null` | Whitelist (default: all non-excluded). |
 | `exclude_layers` | `[]` | Blacklist; alpha layers are auto-added. |
 | `sparse_binary_threshold` | `0.90` | Reject layers where ≥90% of cells share one value. |
@@ -259,18 +300,14 @@ does not produce replicated uncertainty draws.
 
 ### `spatial_field`
 
-The GBLK backend uses `enabled`, `n_levels`, and
-`lattice_centers_per_dimension` to define its joint LatticeKrig field. The
-remaining options configure the deprecated sequential spatial smoother.
+The GBLK backend uses these controls to define its joint LatticeKrig field.
+The deprecated sequential path accepts the backend toggle but does not expose
+unsupported sparse-GP tuning vocabulary.
 
 | Key | Default | Purpose |
 | --- | --- | --- |
 | `enabled` | `true` | Toggle `u_c`. |
 | `backend` | `"latticekrigx"` | `"latticekrigx"` for GBLK, `"rbf"` for the lightweight sequential smoother, or `"none"`. |
-| `kernel` | `"rbf_matern32"` | `"rbf"` / `"matern32"` / `"rbf_matern32"`. |
-| `n_inducing` | `300` | Inducing-point target for the sparse GP. |
-| `lengthscale_lower_frac`, `lengthscale_upper_frac` | `0.02`, `0.20` | ARD lengthscale bound fractions of the coordinate radius. |
-| `optimize_restarts` | `0` | Multi-start ML-II restarts. |
 | `n_levels` | `2` | Number of multiresolution LatticeKrig levels. In 3D, the basis is constructed jointly over x, y, and z. |
 | `lattice_centers_per_dimension` | `6` | Coarsest-level centers per spatial dimension for GBLK. Choose this before outcome evaluation and keep the resulting basis commensurate with the effective training sample. |
 | `coordinate_scaling` | `"axis_range"` | `"axis_range"` gives domain-relative axes; `"physical_isotropic"` preserves metre-scale axis ratios and requires commensurate coordinate units. |
@@ -283,7 +320,7 @@ remaining options configure the deprecated sequential spatial smoother.
 | `gblk_bayesian.enabled` | `false` | Select the sole Bayesian dispatch: public Paige/INLA. |
 | `gblk_bayesian.n_draws` | `200` | Number of paired posterior draws. |
 | `gblk_bayesian.seed` | `0` | RNG seed for reproducible draws. |
-| `gblk_bayesian.ci_level` | `0.9` | Credible-interval level for `probability_lo` / `probability_hi` surfaces. |
+| `gblk_bayesian.ci_level` | `0.9` | Credible-interval level for Bayesian probability surfaces and the analytic response interval returned by a fixed Gaussian prior, including when Bayesian fitting is disabled. |
 | `gblk_bayesian.cor_scale_median` | `0.1` | Paige correlation-scale prior median in model coordinates. |
 | `gblk_bayesian.spatial_sd_u` | `1.0` | Paige spatial standard-deviation threshold. |
 | `gblk_bayesian.spatial_sd_tail_probability` | `0.05` | Prior probability above `spatial_sd_u`. |
@@ -291,6 +328,7 @@ remaining options configure the deprecated sequential spatial smoother.
 | `gblk_bayesian.kleiber_r0`, `kleiber_r1` | `null` | Required frozen profile parameters for a bivariate fit. |
 | `predictive_stacking.enabled` | `false` | Select a component-specific mixture of the configured event prior and full Bayesian update by buffered or blocked out-of-fold logarithmic score. Zero retains the prior and one retains the full update. |
 | `predictive_stacking.validation_depths_m` | `{}` | In a 3-D analysis, optionally map component names to positive-down target depths. Each mapped component selects its stacking weight only from held-out observations at that depth. If fewer than `labels.min_wells_for_fit` distinct wells occur there, that component retains its prior. Unmapped components use all of their held-out observations. |
+| `predictive_stacking.minimum_training_wells` | `null` | Optional positive minimum for each fold's training support. `null` uses `labels.min_wells_for_fit` unchanged. |
 
 Predictive stacking uses the spatial split declared in `cross_validation` and
 never scores in-sample predictions. Bernoulli components use held-out binary
@@ -305,9 +343,11 @@ Gaussian fit can still use complete temperature profiles and other components
 retain their appropriate validation support. Gaussian predictive stacking
 requires the thermal prior to supply an uncertainty raster or column so its
 continuous predictive density is defined.
-Incremental posterior-block storage is not currently available with Gaussian
-components or predictive stacking; those combinations fail during config
-validation instead of silently omitting either operation.
+Incremental posterior-block storage is not currently available with fitted
+Gaussian components or predictive stacking. Fixed Gaussian prior-only
+components are supported because their response distribution is configured
+rather than fitted. Unsupported combinations fail during config validation
+instead of silently omitting either operation.
 
 ### `calibration`
 
@@ -315,7 +355,6 @@ validation instead of silently omitting either operation.
 | --- | --- | --- |
 | `method` | `"none"` | `"platt"`, `"isotonic"`, `"temperature"`, `"none"`. GBLK currently requires `"none"`. |
 | `fit_on` | `"block_cv"` | Calibration maps are fit only from held-out block-CV predictions. |
-| `report_temperature` | `true` | Include diagnostic temperature in reports. |
 | `n_bins` | `5` | Equal-frequency reliability bin count. |
 
 ### `cross_validation`
@@ -343,25 +382,30 @@ A list of ablation scenarios; each is `{name, include_priors, include_spatial, d
 | `scenarios` | `true` | Emit each configured scenario beneath `output_dir/scenarios/<name>/`; scenarios remain available in memory when this is false. |
 | `posterior_draw_blocks` | `false` | Persist paired, decomposed probability draws for Bayesian posterior, prior-predictive, or mixed runs beneath `output_dir/posterior_draws/`. All-fixed runs are rejected because replicated constants are not uncertainty draws. |
 | `posterior_draw_block_size` | `20` | Number of posterior draws projected and persisted per compressed block; bounds draw-by-grid working memory without changing the estimand. |
-| `format` | `["geotiff", "csv"]` | Any subset of `geotiff` / `csv` / `parquet` / `vtk`. |
+| `format` | 2-D: `["geotiff", "csv"]`; 3-D: `["vtk", "csv"]` | GeoTIFF is 2-D only and VTK is 3-D only. CSV and Parquet support either dimension. |
 
 Draw blocks are available only when `inference.backend="gblk"`,
 `inference.gblk_bayesian.enabled=true`, and
 `inference.gblk_bayesian.cluster_effect=false`. The last condition prevents
 INLA from materializing the complete draw-by-grid predictor. geoPFA instead
 persists the immutable field/fixed/prior coefficient draws and prediction
-design, then projects one configured draw block at a time. A restart reopens
-that exact hash-verified state before fitting; it never appends draws from a
-second posterior fit.
+design, then projects one configured draw block at a time. After an ordinary
+execution error, only a verified incomplete posterior workspace can resume; it
+reopens the exact hash-verified state and completed block prefix before
+projecting the missing draw blocks.
+It never appends draws from a second posterior fit. Abrupt termination inside
+state or final-product publication is rejected rather than repaired or silently
+mixed.
 
 The schema-version-2 `index.json` fixes the run/scenario scope, component order,
-coordinate columns and CRS, posterior seed, draw IDs, combination rule, and
-SHA-256 hash of every coordinate, state, and draw payload. Each `.npz` block
+coordinate columns and CRS, posterior seed, draw IDs, product combination
+contract, and SHA-256 hash of every coordinate, state, and draw payload. Each
+`.npz` block
 contains `prior_logit`, `evidence_logit`, `spatial_logit`,
 `component_probability`, and `combined_probability`. The writer and
 `verify_posterior_draw_bundle` independently verify
 `component_probability = logit^{-1}(prior + evidence + spatial)` and the
-configured within-draw product or geometric mean. Its
+within-draw product. Its
 `uncertainty_semantics` is derived from the component roles and distinguishes
 posterior, prior-predictive, and mixed draws. Exact draw means and
 quantiles are reconstructed through disk-backed cell chunks, not a resident
@@ -371,10 +415,14 @@ These posterior or prior-predictive draws are coupled model states, not
 independent Sobol factors.
 Sensitivity analyses must keep a whole draw fixed, use an identified independent
 innovation representation, or otherwise document a valid dependent-input
-estimand. Configured scenarios are fitted and persisted in separate namespaces
-under `output_dir/scenarios/<name>/posterior_draws/`. Their indexes explicitly
-declare cross-scenario pairing unidentified; equal integer draw IDs do not imply
-a common-innovation coupling across separately fitted scenarios.
+estimand. When `outputs.scenarios=true`, configured scenario products are
+persisted in separate namespaces under `output_dir/scenarios/<name>/`. Paired
+draw blocks appear beneath each namespace only when
+`outputs.posterior_draw_blocks=true`. Their indexes explicitly declare
+cross-scenario pairing unidentified; equal integer draw IDs do not imply a
+common-innovation coupling across separately fitted scenarios. When scenario
+output is disabled, the scenario surfaces remain in memory and no scenario
+artifacts are written.
 
 > Note: comparing the probabilistic surface against the deterministic
 > `VoterVeto` favorability is a separate workflow. Run `VoterVeto.do_voter_veto`
@@ -391,10 +439,14 @@ The runner exposes `geopfa.prob.calibration_summary(y, p, n_bins=5)` (already me
 - `T > 1` → predictions were *over-confident*.
 - `T ≈ 1` → already well-calibrated.
 
-For GBLK, keep `calibration.method = "none"` in the map-runner config and call
-`geopfa.prob.gblk_runner.run_gblk_calibration_cv` for explicit raw spatial-block
-CV diagnostics. The top-level GBLK runner fails closed if a post-hoc method is
-configured because it does not yet apply that map to GBLK outputs. The generic
+For deterministic Bernoulli GBLK, keep `calibration.method = "none"` in the
+map-runner config and call
+`geopfa.prob.run_gblk_calibration_cv` for explicit raw spatial-block
+CV diagnostics. That function derives its lattice size and reliability-bin count
+from the config and rejects conflicting call-time overrides. Bayesian and
+Gaussian GBLK calibration is not implemented by this helper and fails closed.
+The GBLK configuration also fails closed if a post-hoc method is configured
+because the map runner does not apply one to GBLK outputs. The generic
 `fit_posthoc_calibration(p_oof, y_oof, method=...)` primitive remains available
 for workflows that explicitly construct and preserve out-of-fold predictions.
 
@@ -424,7 +476,7 @@ Every helper accepts a `PlotStyle` dataclass for theme overrides (cmaps, point c
 
 ## 3D usage
 
-Set `dimensions: "3d"` in the config. The runner expects the PFA dict to carry 3D `Point(x, y, z)` geometries on every `pr_norm` and layer `model`. The labelled wells file must include a depth column referenced by `labels.z_col` (or named `depth_m` by default). All other knobs work the same way.
+Set `dimensions: "3d"` in the config. The runner expects the PFA dict to carry 3D `Point(x, y, z)` geometries on every `pr_norm` and layer `model`. For CSV labels, declare either Cartesian `labels.z_col`, positive-down `labels.depth_col`, or both. With depth alone the loader constructs `z = -depth`; with both, Cartesian Z defines model geometry and the separate depth column supports scientific target-depth validation. All other knobs work the same way.
 
 The GBLK backend fits a genuine 3-D LKBox field using `(x, y, z)` point
 geometries in both prediction and labelled-well inputs. For numerical
@@ -433,7 +485,8 @@ to a unit cube before basis construction; the transform is recorded in fit
 diagnostics. Predictions can therefore vary with depth even when offsets are
 constant.
 
-Outputs in 3D mode include a `.vtp` file per component for direct loading into PyVista / ParaView.
+When `vtk` is selected for a 3-D run, outputs include a `.vtp` point-cloud file
+per component for direct loading into PyVista / ParaView.
 
 ## Public API
 
@@ -462,6 +515,7 @@ from geopfa.prob import (
     # validation
     SpatialBlockKFold,
     spatial_block_cv,
+    run_gblk_calibration_cv,
     CalibrationMap,
     fit_posthoc_calibration,
     calibration_summary,
@@ -583,19 +637,20 @@ is needed if you did not previously set `inference.backend` explicitly.
 The `sequential` backend is deprecated: a `DeprecationWarning` is emitted when
 it is used. Remove `inference.backend="sequential"` from any existing configs.
 
-### `run_probabilistic_pfa(pfa)` — single-file entry point
+### `run_probabilistic_pfa(pfa_pickle)` — single-file entry point
 
-The recommended way to run the workflow when your geoPFA dict already
-contains a ``"probabilistic"`` config block:
+The recommended way to run the workflow when a serialized geoPFA dictionary
+already contains a ``"probabilistic"`` config block:
 
 ```python
 from geopfa.prob import run_probabilistic_pfa
 
-# pfa must contain pfa["probabilistic"] = { ... config ... }
-result = run_probabilistic_pfa(pfa)
+result = run_probabilistic_pfa("outputs/pfa.pkl")
 ```
 
-This is equivalent to `ProbabilisticConfig.from_pfa(pfa)` + `run_probabilistic(pfa, cfg)`.
+The function loads the trusted pickle, reads its embedded configuration with
+`ProbabilisticConfig.from_pfa(pfa)`, calls `run_probabilistic(pfa, cfg)`, and
+binds the exact pickle into the run manifest.
 
 ### `ProbabilisticConfig.from_pfa(pfa)` — pfa-dict integration
 
@@ -613,7 +668,8 @@ cfg.validate_raise()          # raises ValueError on first error
 Checks performed by `validate()`:
 - `output_dir` is non-empty
 - `alpha` dict is non-empty; `scalar_fallback_pr0` in (0, 1)
-- `labels.min_wells_for_fit >= 2`
+- the data-informed support meets the minimum required by the selected
+  inference mode; prior-only components do not require wells
 - `cross_validation.n_folds >= 2`
 - Bayesian GBLK prior scales, draw count, and interval level are in valid ranges
 - Cross-field constraints between labels, priors, and resource-model settings

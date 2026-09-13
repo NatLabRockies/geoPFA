@@ -12,6 +12,7 @@ alignment, spatial fitting, blocked validation, and output generation.
 
 from __future__ import annotations
 
+import pickle  # noqa: S403 -- trusted geoPFA preprocessing artifact
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -43,6 +44,7 @@ from .fitting import (
 )
 from .fit_dispatch import build_fit_kwargs
 from .io import (
+    _begin_streamed_run_resume,
     _probabilistic_implementation_hash,
     validate_output_namespace,
     write_manifest,
@@ -50,6 +52,7 @@ from .io import (
 )
 from .labels import LoadedLabels, available_components, load_labels
 from .pfa_grid import PFAGridAdapter, validate_declared_components
+from .predictive_stacking import PredictiveStackingResult
 
 
 @dataclass(frozen=True)
@@ -95,12 +98,14 @@ class ProbabilisticResult:
     scenarios: dict[str, dict[str, ComponentProbability]] = field(
         default_factory=dict,
     )
-    per_region_beta: dict[str, dict[str, Any]] = field(default_factory=dict)
     site_selection: dict[str, Any] = field(default_factory=dict)
     component_probability_draws: dict[str, np.ndarray] = field(
         default_factory=dict
     )
     combined_probability_draws: np.ndarray | None = None
+    predictive_stacking: dict[str, PredictiveStackingResult] = field(
+        default_factory=dict
+    )
     posterior_draw_index: Path | None = None
     config: ProbabilisticConfig | None = None
     skipped: bool = False
@@ -158,19 +163,6 @@ def _fit_component(
         pu_class_prior=cfg.labels.class_prior_for(component),
         min_wells=cfg.labels.min_wells_for_fit,
     )
-    # Resolve play-type defaults with actual layer names from this component.
-    play_type = kwargs.pop("_play_type", None)
-    if play_type:
-        from .play_types import play_type_defaults  # noqa: PLC0415
-
-        layer_names = list(component_data.get("layers", {}).keys())
-        pt_defaults = play_type_defaults(play_type, layer_names=layer_names)
-        merged_weights = {**pt_defaults["per_feature_weights"]}
-        merged_weights.update(kwargs.get("per_feature_weights") or {})
-        merged_means = {**pt_defaults["prior_means"]}
-        kwargs["per_feature_weights"] = merged_weights or None
-        kwargs["prior_means"] = merged_means or None
-
     extra_excluded = set(alpha_result.excluded_layer_names) | set(
         kwargs.get("excluded_layer_names", ())
     )
@@ -186,59 +178,101 @@ def _fit_component(
     )
 
 
+def _validate_probability_grid(
+    reference: gpd.GeoDataFrame,
+    candidate: gpd.GeoDataFrame,
+    *,
+    context: str,
+) -> None:
+    """Require exact CRS, geometry, and row-order agreement."""
+    if "probability" not in candidate.columns:
+        raise GEOPFAValueError(f"{context} lacks a probability column")
+    for name, grid in (("canonical", reference), ("candidate", candidate)):
+        geometry = grid.geometry
+        if geometry.isna().any() or geometry.is_empty.any():
+            raise GEOPFAValueError(
+                f"{context} {name} grid contains missing or empty geometry"
+            )
+    if reference.crs != candidate.crs:
+        raise GEOPFAValueError(
+            f"{context} CRS differs from the canonical grid"
+        )
+    reference_wkb = reference.geometry.to_wkb().to_numpy(dtype=object)
+    candidate_wkb = candidate.geometry.to_wkb().to_numpy(dtype=object)
+    if not np.array_equal(reference_wkb, candidate_wkb):
+        raise GEOPFAValueError(
+            f"{context} differs from the canonical grid order"
+        )
+
+
+def _validated_probability_arrays(
+    surfaces: Mapping[str, gpd.GeoDataFrame],
+    *,
+    context: str,
+) -> tuple[gpd.GeoDataFrame, list[np.ndarray]]:
+    """Return aligned arrays only after validating one exact common grid."""
+    if not surfaces:
+        return gpd.GeoDataFrame(), []
+    reference = next(iter(surfaces.values()))
+    arrays: list[np.ndarray] = []
+    for name, surface in surfaces.items():
+        _validate_probability_grid(
+            reference,
+            surface,
+            context=f"{context} component {name!r}",
+        )
+        arrays.append(surface["probability"].astype(float).to_numpy())
+    return reference[[reference.geometry.name]].copy(), arrays
+
+
+def _validate_result_surface_grids(
+    components: Mapping[str, ComponentProbability],
+    combined: gpd.GeoDataFrame,
+    *,
+    context: str,
+) -> None:
+    """Validate component and paired-combination grids without recomputing draws."""
+    surfaces = {
+        name: component.probability for name, component in components.items()
+    }
+    reference, _ = _validated_probability_arrays(surfaces, context=context)
+    if len(combined) > 0:
+        if len(reference) == 0:
+            raise GEOPFAValueError(
+                f"{context} has a combined surface but no component surfaces"
+            )
+        _validate_probability_grid(
+            reference,
+            combined,
+            context=f"{context} combined surface",
+        )
+
+
 def _combine_components(
     components: dict[str, ComponentProbability],
-    cfg: ProbabilisticConfig,
 ) -> gpd.GeoDataFrame:
-    """Combine per-component surfaces into a single combined GeoDataFrame."""
+    """Multiply component probabilities on their shared canonical grid."""
     if not components:
         return gpd.GeoDataFrame()
-    rule = cfg.combination.rule
-    component_arrays: list[np.ndarray] = []
-    base_gdf: gpd.GeoDataFrame | None = None
-    for surface in components.values():
-        gdf = surface.probability
-        if base_gdf is None:
-            base_gdf = gdf[["geometry"]].copy()
-        component_arrays.append(gdf["probability"].astype(float).to_numpy())
-    if rule == "product":
-        combined_arr = combine_probability_surfaces(component_arrays)
-    elif rule == "geometric_mean":
-        stacked = np.stack(component_arrays, axis=0)
-        combined_arr = np.exp(
-            np.mean(np.log(np.clip(stacked, 1e-12, 1.0)), axis=0)
-        )
-    else:  # pragma: no cover - config validation prevents unknown rules
-        raise AssertionError(f"unexpected combination rule {rule!r}")
-    if base_gdf is None:  # pragma: no cover - guarded by nonempty components
-        raise RuntimeError("component combination produced no base geometry")
-    base_gdf["probability"] = combined_arr
+    base_gdf, component_arrays = _validated_probability_arrays(
+        {name: surface.probability for name, surface in components.items()},
+        context="component combination",
+    )
+    base_gdf["probability"] = combine_probability_surfaces(component_arrays)
     return base_gdf
 
 
-def _write_one_csv(gdf: gpd.GeoDataFrame, path: Path) -> None:
-    if len(gdf) == 0:
-        return
-    out = gdf.copy()
-    out["x"] = out.geometry.x
-    out["y"] = out.geometry.y
-    if out.geometry.has_z.any():
-        out["z"] = out.geometry.z
-    out.drop(columns=["geometry"]).to_csv(path, index=False)
-
-
-def _write_csv_outputs(
-    components: dict[str, ComponentProbability],
-    combined: gpd.GeoDataFrame,
-    output_dir: Path,
-) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for name, surface in components.items():
-        _write_one_csv(
-            surface.probability, output_dir / f"{name}_probability.csv"
+def _validate_output_format_request(config: ProbabilisticConfig) -> None:
+    """Reject contradictory output toggles before model fitting begins."""
+    requested_spatial = tuple(
+        fmt for fmt in config.outputs.format if fmt in {"geotiff", "vtk"}
+    )
+    if requested_spatial and not config.outputs.probability_rasters:
+        requested = ", ".join(requested_spatial)
+        raise GEOPFAValueError(
+            "outputs.probability_rasters=false conflicts with requested "
+            f"spatial format(s): {requested}"
         )
-    if len(combined) > 0:
-        _write_one_csv(combined, output_dir / "combined_probability.csv")
 
 
 def _write_configured_probability_outputs(
@@ -248,15 +282,8 @@ def _write_configured_probability_outputs(
     output_dir: Path,
 ) -> None:
     """Write tabular and spatial probability products under output toggles."""
-    if "csv" in config.outputs.format:
-        _write_csv_outputs(components, combined, output_dir)
-    formats_for_writer = tuple(
-        fmt
-        for fmt in config.outputs.format
-        if fmt == "parquet"
-        or (config.outputs.probability_rasters and fmt in {"geotiff", "vtk"})
-    )
-    if not formats_for_writer:
+    _validate_output_format_request(config)
+    if not config.outputs.format:
         return
     all_surfaces: dict[str, gpd.GeoDataFrame] = {
         name: surface.probability for name, surface in components.items()
@@ -266,20 +293,9 @@ def _write_configured_probability_outputs(
     write_probability_outputs(
         all_surfaces,
         output_dir,
-        formats=formats_for_writer,
+        formats=config.outputs.format,
         include_uncertainty=config.outputs.uncertainty_rasters,
     )
-
-
-def _write_calibrated_csv_outputs(
-    calibrated: dict[str, gpd.GeoDataFrame],
-    output_dir: Path,
-) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for name, gdf in calibrated.items():
-        if len(gdf) == 0:
-            continue
-        _write_one_csv(gdf, output_dir / f"{name}_probability.csv")
 
 
 def _write_calibration_metrics(
@@ -419,29 +435,36 @@ def _apply_scenario(
     cfg: ProbabilisticConfig, scenario: ScenarioConfig
 ) -> ProbabilisticConfig:
     """Return a new config with the given scenario's overrides applied."""
+    if not scenario.include_priors:
+        gaussian = sorted(
+            name
+            for name in cfg.alpha
+            if (
+                (observation := cfg.labels.observation_models.get(name))
+                is not None
+                and observation.family == "gaussian"
+            )
+        )
+        if gaussian:
+            raise GEOPFAValueError(
+                "Gaussian scenario include_priors=false is undefined because "
+                "the physical response mean and uncertainty are supplied by "
+                "the prior; offending components: " + ", ".join(gaussian)
+            )
     new_alpha = {}
     for name, alpha in cfg.alpha.items():
         if scenario.include_priors:
             new_alpha[name] = alpha
         else:
-            # Disable spatial/layer priors → fall back to scalar mode
+            # A neutral Bernoulli offset removes alpha without changing whether
+            # the component is fitted or remains prior predictive.
             new_alpha[name] = type(alpha)(
-                mode="scalar", scalar_fallback_pr0=alpha.scalar_fallback_pr0
+                mode="scalar",
+                scalar_fallback_pr0=0.5,
+                force_prior_predictive=alpha.force_prior_predictive,
+                use_evidence_prior=alpha.use_evidence_prior,
             )
-    new_spatial = type(cfg.spatial_field)(
-        enabled=scenario.include_spatial,
-        backend=cfg.spatial_field.backend,
-        kernel=cfg.spatial_field.kernel,
-        n_inducing=cfg.spatial_field.n_inducing,
-        lengthscale_lower_frac=cfg.spatial_field.lengthscale_lower_frac,
-        lengthscale_upper_frac=cfg.spatial_field.lengthscale_upper_frac,
-        optimize_restarts=cfg.spatial_field.optimize_restarts,
-        n_levels=cfg.spatial_field.n_levels,
-        lattice_centers_per_dimension=(
-            cfg.spatial_field.lattice_centers_per_dimension
-        ),
-        coordinate_scaling=cfg.spatial_field.coordinate_scaling,
-    )
+    new_spatial = replace(cfg.spatial_field, enabled=scenario.include_spatial)
     new_exclude = tuple(
         sorted(
             set(cfg.evidence.exclude_layers)
@@ -457,12 +480,11 @@ def _apply_scenario(
             }
         )
     )
-    new_evidence = type(cfg.evidence)(
-        regularization=cfg.evidence.regularization,
-        include_layers=cfg.evidence.include_layers,
-        exclude_layers=new_exclude,
-        sparse_binary_threshold=cfg.evidence.sparse_binary_threshold,
-        coordinate_blacklist=cfg.evidence.coordinate_blacklist,
+    new_evidence = replace(cfg.evidence, exclude_layers=new_exclude)
+    new_outputs = (
+        cfg.outputs
+        if cfg.outputs.scenarios
+        else replace(cfg.outputs, posterior_draw_blocks=False)
     )
     return type(cfg)(
         enabled=cfg.enabled,
@@ -478,7 +500,7 @@ def _apply_scenario(
         cross_validation=cfg.cross_validation,
         combination=cfg.combination,
         scenarios=(),
-        outputs=cfg.outputs,
+        outputs=new_outputs,
         site_selection=cfg.site_selection,
     )
 
@@ -516,6 +538,22 @@ def _validate_evidence_layer_references(
             )
 
 
+def _build_alphas(
+    adapter: PFAGridAdapter,
+    config: ProbabilisticConfig,
+) -> dict[str, AlphaCResult]:
+    """Build every configured component prior on its prediction grid."""
+    return {
+        name: build_alpha_c(
+            adapter.component_data(name),
+            config.alpha[name],
+            grid_gdf=adapter.pr_norm(name),
+        )
+        for name in adapter.components()
+        if name in config.alpha
+    }
+
+
 def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
     pfa: dict,
     config: ProbabilisticConfig,
@@ -546,12 +584,10 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
         ablations (when configured), and the originating config.
     """
     config.validate_raise()
+    _validate_output_format_request(config)
     if not config.enabled:
         return ProbabilisticResult(config=config, skipped=True)
     implementation_sha256 = _probabilistic_implementation_hash()
-    validate_output_namespace(
-        config.output_dir, config, input_artifacts=input_artifacts
-    )
     adapter = PFAGridAdapter(
         pfa, criteria=criteria, dimensions=config.dimensions
     )
@@ -560,12 +596,41 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
         set(config.labels.label_columns) | set(config.alpha),
     )
     _validate_evidence_layer_references(adapter, config)
-    scenario_configs = [
-        (scenario, _apply_scenario(config, scenario))
-        for scenario in config.scenarios
-    ]
-    for _, scenario_config in scenario_configs:
+    scenario_configs = []
+    for scenario in config.scenarios:
+        scenario_config = replace(
+            _apply_scenario(config, scenario),
+            output_dir=config.output_dir / "scenarios" / scenario.name,
+        )
         scenario_config.validate_raise()
+        scenario_configs.append((scenario, scenario_config))
+    scope_configs = {
+        "baseline": config,
+        **{
+            f"scenario:{scenario.name}": scenario_config
+            for scenario, scenario_config in scenario_configs
+        },
+    }
+    streamed_run = (
+        config.inference.backend == "gblk"
+        and config.inference.gblk_bayesian.enabled
+        and config.outputs.posterior_draw_blocks
+    )
+    resume_guard = None
+    if streamed_run:
+        resume_guard = _begin_streamed_run_resume(
+            config.output_dir,
+            config,
+            scope_configs=scope_configs,
+            input_artifacts=input_artifacts,
+            expected_implementation_sha256=implementation_sha256,
+        )
+    else:
+        validate_output_namespace(
+            config.output_dir,
+            config,
+            input_artifacts=input_artifacts,
+        )
 
     if config.inference.backend == "gblk":
         if config.calibration.method != "none":
@@ -576,28 +641,38 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
             )
         from .gblk_runner import run_gblk_probabilistic  # noqa: PLC0415
 
+        alphas = _build_alphas(adapter, config)
         gblk_result = run_gblk_probabilistic(
             pfa,
             config,
             criteria=criteria,
             nc=config.spatial_field.lattice_centers_per_dimension,
         )
-        gblk_scenarios: dict[str, dict[str, ComponentProbability]] = {}
+        _validate_result_surface_grids(
+            gblk_result.components,
+            gblk_result.combined,
+            context="GBLK baseline",
+        )
+        gblk_scenario_results: dict[str, ProbabilisticResult] = {}
         for scenario, scenario_config in scenario_configs:
-            scenario_output_dir = (
-                config.output_dir / "scenarios" / scenario.name
-            )
-            scenario_run_config = replace(
-                scenario_config, output_dir=scenario_output_dir
-            )
+            scope = f"scenario:{scenario.name}"
             scenario_result = run_gblk_probabilistic(
                 pfa,
-                scenario_run_config,
+                scenario_config,
                 criteria=criteria,
                 nc=scenario_config.spatial_field.lattice_centers_per_dimension,
-                posterior_scope=f"scenario:{scenario.name}",
+                posterior_scope=scope,
             )
-            gblk_scenarios[scenario.name] = scenario_result.components
+            _validate_result_surface_grids(
+                scenario_result.components,
+                scenario_result.combined,
+                context=f"GBLK scenario {scenario.name!r}",
+            )
+            gblk_scenario_results[scenario.name] = scenario_result
+        gblk_scenarios = {
+            name: scenario_result.components
+            for name, scenario_result in gblk_scenario_results.items()
+        }
         gblk_result = replace(
             gblk_result,
             scenarios=gblk_scenarios,
@@ -612,23 +687,27 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
             )
             if config.outputs.scenarios:
                 for scenario, scenario_config in scenario_configs:
-                    scenario_components = gblk_scenarios[scenario.name]
+                    scenario_result = gblk_scenario_results[scenario.name]
                     _write_configured_probability_outputs(
-                        scenario_components,
-                        _combine_components(
-                            scenario_components,
-                            scenario_config,
-                        ),
+                        scenario_result.components,
+                        scenario_result.combined,
                         scenario_config,
                         config.output_dir / "scenarios" / scenario.name,
                     )
-            if any(config.output_dir.glob("*")):
-                write_manifest(
-                    config.output_dir,
-                    config=config,
-                    input_artifacts=input_artifacts,
-                    expected_implementation_sha256=implementation_sha256,
+            if alphas:
+                config.output_dir.mkdir(parents=True, exist_ok=True)
+                write_alpha_provenance(
+                    alphas,
+                    config.output_dir / "alpha_provenance.json",
                 )
+        manifest_path = write_manifest(
+            config.output_dir,
+            config=config,
+            input_artifacts=input_artifacts,
+            expected_implementation_sha256=implementation_sha256,
+        )
+        if resume_guard is not None:
+            resume_guard.finish(manifest_path)
         return gblk_result
 
     if config.inference.backend == "sequential":
@@ -643,17 +722,9 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
 
     # Build alpha_c per component first so we can write provenance even if
     # the regression fit fails for some components.
-    alphas: dict[str, AlphaCResult] = {}
-    for name in adapter.components():
-        if name not in config.alpha:
-            continue
-        comp_data = adapter.component_data(name)
-        alphas[name] = build_alpha_c(
-            comp_data, config.alpha[name], grid_gdf=adapter.pr_norm(name)
-        )
+    alphas = _build_alphas(adapter, config)
 
     components: dict[str, ComponentProbability] = {}
-    per_region_beta: dict[str, dict[str, Any]] = {}
     for name in adapter.components():
         if name not in available_components(config.labels):
             warnings.warn(
@@ -669,8 +740,7 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
         if fitted is not None:
             components[name] = fitted
 
-    combined = _combine_components(components, config)
-
+    combined = _combine_components(components)
     scenarios: dict[str, dict[str, ComponentProbability]] = {}
     for scenario, sub_cfg in scenario_configs:
         scenario_alphas = {
@@ -727,22 +797,13 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
             )
             calibrated_components[name] = surface
 
-        # Re-combine using calibrated surfaces (product / geometric_mean)
+        # Re-combine calibrated component probabilities under the same product.
         if calibrated_components:
-            arrays = [
-                gdf["probability"].astype(float).to_numpy()
-                for gdf in calibrated_components.values()
-            ]
-            base = next(iter(calibrated_components.values()))[
-                ["geometry"]
-            ].copy()
-            if config.combination.rule == "product":
-                base["probability"] = combine_probability_surfaces(arrays)
-            elif config.combination.rule == "geometric_mean":
-                stacked = np.stack(arrays, axis=0)
-                base["probability"] = np.exp(
-                    np.mean(np.log(np.clip(stacked, 1e-12, 1.0)), axis=0)
-                )
+            base, arrays = _validated_probability_arrays(
+                calibrated_components,
+                context="calibrated component combination",
+            )
+            base["probability"] = combine_probability_surfaces(arrays)
             calibrated_components["combined"] = base
 
     _write_configured_probability_outputs(
@@ -756,27 +817,15 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
             scenario_components = scenarios[scenario.name]
             _write_configured_probability_outputs(
                 scenario_components,
-                _combine_components(scenario_components, scenario_config),
+                _combine_components(scenario_components),
                 scenario_config,
                 config.output_dir / "scenarios" / scenario.name,
             )
-    if "csv" in config.outputs.format and calibrated_components:
-        _write_calibrated_csv_outputs(
-            calibrated_components, config.output_dir / "calibrated"
-        )
-
-    # Write calibrated non-CSV products; raw products were written above.
-    formats_for_writer = tuple(
-        fmt
-        for fmt in config.outputs.format
-        if fmt == "parquet"
-        or (config.outputs.probability_rasters and fmt in {"geotiff", "vtk"})
-    )
-    if formats_for_writer and calibrated_components:
+    if config.outputs.format and calibrated_components:
         write_probability_outputs(
             calibrated_components,
             config.output_dir / "calibrated",
-            formats=formats_for_writer,
+            formats=config.outputs.format,
             include_uncertainty=False,
         )
 
@@ -798,14 +847,12 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
         )
 
     # Manifest with hashes of every produced file
-    if any(config.output_dir.glob("*")):
-        write_manifest(
-            config.output_dir,
-            config=config,
-            input_artifacts=input_artifacts,
-            expected_implementation_sha256=implementation_sha256,
-        )
-
+    manifest_path = write_manifest(
+        config.output_dir,
+        config=config,
+        input_artifacts=input_artifacts,
+        expected_implementation_sha256=implementation_sha256,
+    )
     return ProbabilisticResult(
         components=components,
         combined=combined,
@@ -813,7 +860,6 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
         calibration_maps=calibration_maps,
         cv=cv_result,
         scenarios=scenarios,
-        per_region_beta=per_region_beta,
         site_selection=_run_site_selection(config),
         config=config,
         skipped=False,
@@ -821,15 +867,16 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
 
 
 def run_probabilistic_pfa(
-    pfa: dict,
+    pfa_pickle: str | Path,
     *,
     criteria: str = "geologic",
 ) -> ProbabilisticResult:
-    """Run the probabilistic workflow directly from a pfa dict.
+    """Load and run one serialized PFA artifact with embedded configuration.
 
-    This is the primary integration point with the existing geoPFA pipeline.
-    The pfa dict must contain a ``"probabilistic"`` key with all settings,
-    alongside the usual ``"criteria"`` / components structure::
+    This is the provenance-bound integration point with the existing geoPFA
+    pipeline. The trusted pickle must contain a PFA dict with a
+    ``"probabilistic"`` key alongside the usual ``"criteria"`` structure.
+    The exact serialized artifact loaded here is recorded in ``manifest.json``.
 
         pfa = {
             "criteria": { "geologic": { "components": { ... } } },
@@ -842,9 +889,8 @@ def run_probabilistic_pfa(
 
     Parameters
     ----------
-    pfa
-        geoPFA dict (output of the preprocessing pipeline) that contains a
-        ``"probabilistic"`` config block.
+    pfa_pickle
+        Path to the trusted serialized geoPFA dict produced by preprocessing.
     criteria
         Criteria key to operate on.  Defaults to ``"geologic"``.
 
@@ -852,10 +898,21 @@ def run_probabilistic_pfa(
     -------
     ProbabilisticResult
     """
-    from .config import ProbabilisticConfig  # noqa: PLC0415
+    source = Path(pfa_pickle).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"PFA pickle does not exist: {source}")
+    with source.open("rb") as stream:
+        pfa = pickle.load(stream)  # noqa: S301 -- trusted preprocessing input
+    if not isinstance(pfa, dict):
+        raise TypeError("PFA pickle must contain a dict")
 
     config = ProbabilisticConfig.from_pfa(pfa)
-    return run_probabilistic(pfa, config, criteria=criteria)
+    return run_probabilistic(
+        pfa,
+        config,
+        criteria=criteria,
+        input_artifacts={"pfa_pickle": source},
+    )
 
 
 __all__ = ["ProbabilisticResult", "run_probabilistic", "run_probabilistic_pfa"]

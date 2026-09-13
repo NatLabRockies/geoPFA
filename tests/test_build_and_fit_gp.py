@@ -36,7 +36,6 @@ def test_gp_noise_constraints_respected(small_training_set):
     model, constraints = build_and_fit_gp(
         X_train_stdized=X_train_std,
         Y_train_stdized=Y_train_std,
-        verbose=False,
     )
 
     assert isinstance(model, LkxModel)

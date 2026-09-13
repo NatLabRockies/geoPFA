@@ -90,13 +90,18 @@ def test_sample_evidence_transforms_points_to_exact_raster_crs(
     assert CRS.from_user_input(requested[-1]).to_epsg() == 26911
 
 
-def test_write_vtk_outputs_skips_2d_surfaces(tmp_path: Path) -> None:
+def test_write_vtk_outputs_rejects_2d_surfaces(tmp_path: Path) -> None:
     gdf = gpd.GeoDataFrame(
         {"probability": [0.5, 0.6]},
         geometry=[Point(0, 0), Point(1, 1)],
         crs="EPSG:4326",
     )
-    assert write_vtk_outputs({"comp": gdf}, tmp_path / "out") == []
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="VTK output requires 3-D"):
+        write_vtk_outputs({"comp": gdf}, output_dir)
+
+    assert not output_dir.exists()
 
 
 def test_write_vtk_outputs_skips_empty_gdf(tmp_path: Path) -> None:

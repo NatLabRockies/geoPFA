@@ -30,6 +30,7 @@ from geopfa.extrapolation import (
 # pinned at the asymptotes and are almost always pathological in this regime.
 _U_CLIP = 3.0
 _MIN_TRAINING_POINTS = 4
+_PREDICTION_CHUNK_SIZE = 6_000
 
 
 @dataclass(frozen=True)
@@ -44,8 +45,8 @@ class SpatialFieldResult:
         Per-grid-cell posterior standard deviation. Useful for uncertainty
         bands on the final probability map.
     model
-        The fitted spatial model (``None`` when the fit falls back to a
-        flat field, e.g. when there are too few training points).
+        The fitted spatial model. This is ``None`` only when the supplied
+        residual response is exactly constant.
     diagnostics
         Free-form dict with kernel summary, hyperparameters, and any
         notes from the underlying ``build_and_fit_gp`` call.
@@ -69,19 +70,18 @@ def _constant_field(
         u_mean=np.full(n_grid, np.clip(value, -_U_CLIP, _U_CLIP), dtype=float),
         u_std=np.zeros(n_grid, dtype=float),
         model=None,
-        diagnostics={"fallback": reason, "kernel": None, "n_train": n_train},
+        diagnostics={
+            "degenerate": reason,
+            "kernel": None,
+            "n_train": n_train,
+        },
     )
 
 
-def fit_spatial_field_gp(  # noqa: PLR0913, PLR0914
+def fit_spatial_field_gp(  # noqa: PLR0914
     train_coords: np.ndarray,
     train_residuals: np.ndarray,
     grid_coords: np.ndarray,
-    *,
-    n_inducing: int = 300,
-    lengthscale_lower_frac: float = 0.02,
-    lengthscale_upper_frac: float = 0.20,
-    optimize_restarts: int = 0,
 ) -> SpatialFieldResult:
     """Fit ``u_c(s)`` on ``(train_coords, train_residuals)`` and predict on grid.
 
@@ -96,13 +96,6 @@ def fit_spatial_field_gp(  # noqa: PLR0913, PLR0914
         Training residuals in logit space, shape ``(N,)``.
     grid_coords
         Prediction coordinates, shape ``(M, D)``.
-    n_inducing
-        Target inducing-point count for the underlying ``SparseGPRegression``.
-    lengthscale_lower_frac, lengthscale_upper_frac
-        ARD lengthscale bound fractions (of the global coordinate radius).
-    optimize_restarts
-        Number of multi-start ML-II optimisation restarts.
-
     Returns
     -------
     SpatialFieldResult
@@ -170,32 +163,27 @@ def fit_spatial_field_gp(  # noqa: PLR0913, PLR0914
         model, kernel_info = build_and_fit_gp(
             X_train_std,
             Y_train_std,
-            optimize_restarts=optimize_restarts,
-            verbose=False,
-            save_path=None,
-            n_inducing=n_inducing,
-            lower_frac=lengthscale_lower_frac,
-            upper_frac=lengthscale_upper_frac,
         )
         # Batch predictions for large grids to stay within memory budget.
-        chunk_size = (
-            n_inducing * 20
-        )  # ~6 000 pts per chunk at default settings
         n_grid = len(X_grid_std)
-        if n_grid <= chunk_size:
+        if n_grid <= _PREDICTION_CHUNK_SIZE:
             Y_pred_std, Y_std_std = get_predictions(
                 model, X_grid_std, Y_mean=y_mean, Y_std=y_scale
             )
         else:
             preds = np.empty(n_grid, dtype=float)
             stds = np.empty(n_grid, dtype=float)
-            for start in range(0, n_grid, chunk_size):
-                chunk = X_grid_std[start : start + chunk_size]
+            for start in range(0, n_grid, _PREDICTION_CHUNK_SIZE):
+                chunk = X_grid_std[start : start + _PREDICTION_CHUNK_SIZE]
                 p, s = get_predictions(
                     model, chunk, Y_mean=y_mean, Y_std=y_scale
                 )
-                preds[start : start + chunk_size] = np.asarray(p).ravel()
-                stds[start : start + chunk_size] = np.asarray(s).ravel()
+                preds[start : start + _PREDICTION_CHUNK_SIZE] = np.asarray(
+                    p
+                ).ravel()
+                stds[start : start + _PREDICTION_CHUNK_SIZE] = np.asarray(
+                    s
+                ).ravel()
             Y_pred_std, Y_std_std = preds, stds
     except (
         ValueError,
@@ -215,7 +203,6 @@ def fit_spatial_field_gp(  # noqa: PLR0913, PLR0914
         if isinstance(kernel_info, dict)
         else None,
         "n_train": len(train_coords),
-        "n_inducing_target": int(n_inducing),
         "residual_variance_estimate": float(
             estimate_variance(train_residuals)
         ),

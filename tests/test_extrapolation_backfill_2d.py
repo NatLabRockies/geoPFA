@@ -1,7 +1,6 @@
-"""Tests for backfill_gdf 2D backend routing (P2-S02 / P9-S01).
+"""Tests for two-dimensional LatticeKrigX backfilling.
 
-Verifies that ``backend="latticekrigx"`` fills all NaNs in the 2D pipeline
-and that predictions are finite and within a reasonable RMSE.
+Verifies that the model fills all NaNs and stays within a reasonable RMSE.
 """
 
 from __future__ import annotations
@@ -30,7 +29,7 @@ def campbell_gdf():
     return gdf.copy()
 
 
-def _run(gdf, backend: str = "latticekrigx"):
+def _run(gdf):
     return backfill_gdf(
         gdf.copy(),
         value_col="value",
@@ -38,7 +37,6 @@ def _run(gdf, backend: str = "latticekrigx"):
         test_size=0.20,
         seed=123,
         verbose=False,
-        backend=backend,
     )
 
 
@@ -63,9 +61,9 @@ def test_backfill_gdf_lkx_rmse_within_tolerance(campbell_gdf):
     assert rmse_lkx < 0.30, f"latticekrigx RMSE too high: {rmse_lkx}"
 
 
-def test_backfill_gdf_default_backend_is_latticekrigx(campbell_gdf):
-    explicit = _run(campbell_gdf, backend="latticekrigx")
-    default = backfill_gdf(
+def test_backfill_gdf_is_reproducible(campbell_gdf):
+    first = _run(campbell_gdf)
+    second = backfill_gdf(
         campbell_gdf.copy(),
         value_col="value",
         z_value=None,
@@ -74,6 +72,6 @@ def test_backfill_gdf_default_backend_is_latticekrigx(campbell_gdf):
         verbose=False,
     )
     np.testing.assert_array_equal(
-        explicit["value_extrapolated"].to_numpy(),
-        default["value_extrapolated"].to_numpy(),
+        first["value_extrapolated"].to_numpy(),
+        second["value_extrapolated"].to_numpy(),
     )

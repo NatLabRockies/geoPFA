@@ -46,6 +46,23 @@ def test_build_fit_kwargs_scalar_alpha_no_spatial() -> None:
     assert kwargs["sparse_binary_threshold"] == pytest.approx(0.93)
 
 
+def test_build_fit_kwargs_preserves_explicit_coefficient_priors() -> None:
+    regularization = RegularizationConfig(
+        per_feature_weights={"gradient": 2.0},
+        prior_means={"gradient": 0.4},
+        prior_precisions={"fault": 3.0},
+    )
+
+    kwargs = build_fit_kwargs(
+        alpha_config=AlphaModeConfig(mode="scalar"),
+        evidence_config=EvidenceConfig(regularization=regularization),
+        spatial_field_config=SpatialFieldConfig(enabled=False),
+    )
+
+    assert kwargs["per_feature_weights"] == {"gradient": 2.0, "fault": 3.0}
+    assert kwargs["prior_means"] == {"gradient": 0.4}
+
+
 def test_build_fit_kwargs_layer_logit_alpha_uses_layer_name() -> None:
     alpha = AlphaModeConfig(
         mode="layer_logit", layer="prior_layer_a", p_min=0.15, p_max=0.85
@@ -219,26 +236,18 @@ def test_fit_component_from_config_honors_multi_layer_alpha() -> None:
     )
 
 
-def test_build_fit_kwargs_includes_all_spatial_field_config_params() -> None:
-    """build_fit_kwargs must forward all SpatialFieldConfig parameters."""
+def test_build_fit_kwargs_includes_supported_spatial_field_config() -> None:
+    """Config dispatch forwards only executable spatial-field controls."""
     alpha = AlphaModeConfig(mode="scalar", scalar_fallback_pr0=0.5)
     evidence = EvidenceConfig()
     spatial = SpatialFieldConfig(
         enabled=True,
         backend="latticekrigx",
-        n_inducing=150,
-        lengthscale_lower_frac=0.05,
-        lengthscale_upper_frac=0.30,
-        optimize_restarts=2,
     )
     kwargs = build_fit_kwargs(
         alpha_config=alpha,
         evidence_config=evidence,
         spatial_field_config=spatial,
     )
-    assert kwargs["spatial_n_inducing"] == 150
-    assert kwargs["spatial_lower_frac"] == 0.05
-    assert kwargs["spatial_upper_frac"] == 0.30
-    assert kwargs["spatial_optimize_restarts"] == 2
     assert kwargs["include_spatial"] is True
     assert kwargs["spatial_backend"] == "latticekrigx"

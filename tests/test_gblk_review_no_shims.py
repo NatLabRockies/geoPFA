@@ -3,14 +3,6 @@
 Enforces that the three ``geopfa/prob/gblk_*.py`` modules and
 ``geopfa/spatial_lkx.py`` never acquire shim, xfail, skip, TODO, or silent
 fallback behavior.
-
-Notes
------
-The ``_flat_fallback_model`` symbol in ``geopfa/spatial_lkx.py`` is
-intentional documented contract behavior. The guard tests
-whitelist the substring ``fallback`` only in docstrings and in the
-dedicated ``_flat_fallback_model`` helper; new fallback surfaces would
-still fail via the direct pattern checks (``except``, ``TODO``, ...).
 """
 
 from __future__ import annotations
@@ -198,12 +190,8 @@ def test_no_blanket_warning_filters(relpath: str) -> None:
     assert not hits, f"{relpath}: blanket 'ignore' warning filters: {hits}"
 
 
-def test_flat_fallback_symbol_is_intentional() -> None:
-    """Anchor RR-025: `_flat_fallback_model` is the *only* fallback surface.
-
-    This guards against silent proliferation of new "fallback" code paths
-    in ``geopfa/spatial_lkx.py``.
-    """
+def test_spatial_lkx_defines_no_fallback_functions() -> None:
+    """A failed spatial fit must not switch silently to another model."""
     source = _read("geopfa/spatial_lkx.py")
     tree = ast.parse(source)
     fallback_funcs = [
@@ -212,8 +200,4 @@ def test_flat_fallback_symbol_is_intentional() -> None:
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
         and "fallback" in node.name.lower()
     ]
-    assert fallback_funcs == ["_flat_fallback_model"], (
-        "Only `_flat_fallback_model` is allowed as a "
-        "fallback surface in geopfa/spatial_lkx.py; found: "
-        f"{fallback_funcs}."
-    )
+    assert fallback_funcs == []

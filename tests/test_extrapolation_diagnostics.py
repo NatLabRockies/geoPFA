@@ -40,7 +40,7 @@ def _make_smooth_2d(n: int = 60, seed: int = 42) -> tuple:
 def lkx_fit():
     """Fitted LkxModel + constraint_info on the standard 2D test field."""
     X, Y = _make_smooth_2d()
-    model, ci = build_and_fit_gp(X, Y, backend="latticekrigx")
+    model, ci = build_and_fit_gp(X, Y)
     return model, ci, X, Y
 
 
@@ -51,14 +51,14 @@ def lkx_fit():
 
 def test_assess_gp_model_fit_lkx_returns_dict(lkx_fit):
     model, ci, X, Y = lkx_fit
-    Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, Y_std = get_predictions(model, X)
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
     assert isinstance(result, dict)
 
 
 def test_assess_gp_model_fit_lkx_expected_keys(lkx_fit):
     model, ci, X, Y = lkx_fit
-    Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, Y_std = get_predictions(model, X)
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
     for key in (
         "RMSE",
@@ -75,7 +75,7 @@ def test_assess_gp_model_fit_lkx_expected_keys(lkx_fit):
 
 def test_assess_gp_model_fit_lkx_metrics_finite(lkx_fit):
     model, ci, X, Y = lkx_fit
-    Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, Y_std = get_predictions(model, X)
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
     for key in (
         "RMSE",
@@ -91,14 +91,14 @@ def test_assess_gp_model_fit_lkx_metrics_finite(lkx_fit):
 
 def test_assess_gp_model_fit_lkx_rmse_non_negative(lkx_fit):
     model, ci, X, Y = lkx_fit
-    Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, Y_std = get_predictions(model, X)
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
     assert result["RMSE"] >= 0.0
 
 
 def test_assess_gp_model_fit_lkx_coverage_in_unit_interval(lkx_fit):
     model, ci, X, Y = lkx_fit
-    Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, Y_std = get_predictions(model, X)
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
     assert 0.0 <= result["Coverage_95"] <= 1.0
 
@@ -107,7 +107,7 @@ def test_assess_gp_model_fit_lkx_log_likelihood_matches_constraint_info(
     lkx_fit,
 ):
     model, ci, X, Y = lkx_fit
-    Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, Y_std = get_predictions(model, X)
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
     assert result["LogLikelihood"] == pytest.approx(
         ci["lnProfileLike"], rel=1e-6
@@ -116,7 +116,7 @@ def test_assess_gp_model_fit_lkx_log_likelihood_matches_constraint_info(
 
 def test_assess_gp_model_fit_lkx_params_at_bounds_is_list(lkx_fit):
     model, ci, X, Y = lkx_fit
-    Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, Y_std = get_predictions(model, X)
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
     assert isinstance(result["Params_at_bounds"], list)
 
@@ -124,7 +124,7 @@ def test_assess_gp_model_fit_lkx_params_at_bounds_is_list(lkx_fit):
 def test_assess_gp_model_fit_lkx_mle_lambda_k_equals_2(lkx_fit):
     """AIC/BIC use k=2 when lambda was MLE-optimised."""
     model, ci, X, Y = lkx_fit
-    Y_pred, Y_std = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, Y_std = get_predictions(model, X)
     assert ci.get("mle") == "lambda"
     result = assess_gp_model_fit(model, Y, Y_pred, Y_std, ci)
     logL = result["LogLikelihood"]
@@ -138,7 +138,7 @@ def test_assess_gp_model_fit_lkx_mle_lambda_k_equals_2(lkx_fit):
 
 def test_bootstrap_residuals_lkx_returns_dataframe(lkx_fit):
     model, ci, X, Y = lkx_fit
-    Y_pred, _ = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, _ = get_predictions(model, X)
     result = bootstrap_assess_residuals_stats(
         Y, Y_pred, n_boot=10, sample_size=30, random_state=0
     )
@@ -147,7 +147,7 @@ def test_bootstrap_residuals_lkx_returns_dataframe(lkx_fit):
 
 def test_bootstrap_residuals_lkx_expected_rows(lkx_fit):
     model, ci, X, Y = lkx_fit
-    Y_pred, _ = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, _ = get_predictions(model, X)
     result = bootstrap_assess_residuals_stats(
         Y, Y_pred, n_boot=10, sample_size=30, random_state=0
     )
@@ -163,7 +163,7 @@ def test_bootstrap_residuals_lkx_expected_rows(lkx_fit):
 
 def test_bootstrap_residuals_lkx_columns_present(lkx_fit):
     model, ci, X, Y = lkx_fit
-    Y_pred, _ = get_predictions(model, X, backend="latticekrigx")
+    Y_pred, _ = get_predictions(model, X)
     result = bootstrap_assess_residuals_stats(
         Y, Y_pred, n_boot=10, sample_size=30, random_state=0
     )

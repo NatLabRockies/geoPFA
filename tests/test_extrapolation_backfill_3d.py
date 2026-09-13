@@ -1,7 +1,7 @@
-"""Tests for backfill_gdf_3d LatticeKrigX backend (P2-S03 / P9-S01).
+"""Tests for joint three-dimensional LatticeKrigX backfilling.
 
-Verifies that ``backend="latticekrigx"`` fills all NaNs in the joint 3D
-pipeline and captures both lateral and vertical structure.
+Verifies that the model fills all NaNs and captures lateral and vertical
+structure.
 """
 
 from __future__ import annotations
@@ -60,7 +60,6 @@ def test_backfill_gdf_3d_lkx_fills_all_nans(synthetic_3d):
         gdf.copy(),
         value_col="value",
         verbose=False,
-        backend="latticekrigx",
     )
     vals = result["value_extrapolated"].to_numpy()
     assert np.all(~np.isnan(vals)), (
@@ -78,7 +77,6 @@ def test_backfill_gdf_3d_lkx_captures_lateral_and_vertical(synthetic_3d):
         gdf.copy(),
         value_col="value",
         verbose=False,
-        backend="latticekrigx",
     )
     pred = result["value_extrapolated"].to_numpy()[nan_mask]
     y_true = truth[nan_mask]
@@ -91,13 +89,12 @@ def test_backfill_gdf_3d_lkx_captures_lateral_and_vertical(synthetic_3d):
     )
 
 
-def test_backfill_gdf_3d_default_backend_is_latticekrigx(synthetic_3d):
+def test_backfill_gdf_3d_is_reproducible(synthetic_3d):
     gdf, _truth, _nan_mask = synthetic_3d
-    explicit = backfill_gdf_3d(
+    first = backfill_gdf_3d(
         gdf.copy(),
         value_col="value",
         verbose=False,
-        backend="latticekrigx",
     )
     default = backfill_gdf_3d(
         gdf.copy(),
@@ -105,6 +102,6 @@ def test_backfill_gdf_3d_default_backend_is_latticekrigx(synthetic_3d):
         verbose=False,
     )
     np.testing.assert_array_equal(
-        explicit["value_extrapolated"].to_numpy(),
+        first["value_extrapolated"].to_numpy(),
         default["value_extrapolated"].to_numpy(),
     )

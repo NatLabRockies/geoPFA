@@ -188,7 +188,11 @@ line-length = 79
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-exclude = ["geopfa/geopfa2d/*", "geopfa/geopfa3d/*"]
+exclude = [
+  "geopfa/_version.py",
+  "geopfa/geopfa2d/*",
+  "geopfa/geopfa3d/*",
+]
 
 [tool.ruff.lint]
 preview = true

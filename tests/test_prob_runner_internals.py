@@ -1,21 +1,23 @@
 """Unit tests for runner.py private functions (coverage gaps).
 
 These tests exercise defensive branches in _fit_component, _combine_components,
-_write_one_csv, _write_csv_outputs, _write_calibrated_csv_outputs, and
-_apply_scenario that are not reachable through the public run_probabilistic API.
+configured output routing, and _apply_scenario that are not reachable through
+the public run_probabilistic API.
 """
 
 from __future__ import annotations
 
 import warnings
+from dataclasses import replace
 from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
-import pandas as pd
 import pytest
 from shapely.geometry import Point
 
+import geopfa.prob.runner as probability_runner
+from geopfa.exceptions import GEOPFAValueError
 from geopfa.prob.alpha import AlphaCResult
 from geopfa.prob.config import (
     AlphaModeConfig,
@@ -23,9 +25,11 @@ from geopfa.prob.config import (
     CombinationConfig,
     CrossValidationConfig,
     EvidenceConfig,
+    GBLKBayesianConfig,
     GridConfig,
     InferenceConfig,
     LabelsConfig,
+    ObservationModelConfig,
     OutputsConfig,
     ProbabilisticConfig,
     ScenarioConfig,
@@ -35,12 +39,11 @@ from geopfa.prob.fitting import ComponentProbability
 from geopfa.prob.labels import LoadedLabels
 from geopfa.prob.pfa_grid import PFAGridAdapter
 from geopfa.prob.runner import (
+    ProbabilisticResult,
     _apply_scenario,  # noqa: PLC2701
     _combine_components,  # noqa: PLC2701
     _fit_component,  # noqa: PLC2701
-    _write_calibrated_csv_outputs,  # noqa: PLC2701
-    _write_csv_outputs,  # noqa: PLC2701
-    _write_one_csv,  # noqa: PLC2701
+    _write_configured_probability_outputs,  # noqa: PLC2701
     run_probabilistic,
 )
 from tests.fixtures.synthetic_prob import make_synthetic_pfa
@@ -57,7 +60,6 @@ def _make_cfg(  # noqa: PLR0913
     *,
     label_columns: dict | None = None,
     alpha: dict | None = None,
-    combination_rule: str = "product",
     scenarios: tuple = (),
     formats: tuple = ("csv",),
 ) -> ProbabilisticConfig:
@@ -92,7 +94,7 @@ def _make_cfg(  # noqa: PLR0913
         inference=InferenceConfig(backend="sequential"),
         calibration=CalibrationConfig(method="none"),
         cross_validation=CrossValidationConfig(),
-        combination=CombinationConfig(rule=combination_rule),
+        combination=CombinationConfig(rule="product"),
         scenarios=scenarios,
         outputs=OutputsConfig(
             probability_rasters=False,
@@ -253,106 +255,135 @@ def test_fit_component_warns_if_component_not_in_alpha(
 # ---------------------------------------------------------------------------
 
 
-def test_combine_components_empty_returns_empty_gdf(tmp_path: Path) -> None:
-    """_combine_components({}, cfg) must return an empty GeoDataFrame."""
-    wells_path = _save_wells(tmp_path)
-    cfg = _make_cfg(wells_path, tmp_path / "out")
-    result = _combine_components({}, cfg)
+def test_combine_components_empty_returns_empty_gdf() -> None:
+    """_combine_components({}) must return an empty GeoDataFrame."""
+    result = _combine_components({})
     assert isinstance(result, gpd.GeoDataFrame)
     assert len(result) == 0
 
 
-def test_combine_components_geometric_mean(tmp_path: Path) -> None:
-    """_combine_components applies geometric_mean correctly."""
-    wells_path = _save_wells(tmp_path)
-    cfg = _make_cfg(
-        wells_path, tmp_path / "out", combination_rule="geometric_mean"
-    )
-
+def test_combine_components_uses_product() -> None:
+    """_combine_components returns the component-probability product."""
     geom = [Point(0, 0), Point(1, 0), Point(0, 1), Point(1, 1)]
-    gdf = gpd.GeoDataFrame(
+    first = gpd.GeoDataFrame(
         {"probability": [0.2, 0.4, 0.6, 0.8]}, geometry=geom, crs="EPSG:4326"
     )
-    surf = ComponentProbability(
-        probability=gdf, model=None, feature_names=(), spatial_field=None
+    second = gpd.GeoDataFrame(
+        {"probability": [0.9, 0.7, 0.5, 0.3]}, geometry=geom, crs="EPSG:4326"
     )
+    surfaces = {
+        "first": ComponentProbability(first, None, ()),
+        "second": ComponentProbability(second, None, ()),
+    }
 
-    result = _combine_components({"comp": surf}, cfg)
+    result = _combine_components(surfaces)
     assert "probability" in result.columns
-    assert len(result) == len(gdf)
+    assert len(result) == len(first)
     np.testing.assert_allclose(
         result["probability"].to_numpy(),
-        gdf["probability"].to_numpy(),
-        rtol=1e-5,
+        first["probability"].to_numpy() * second["probability"].to_numpy(),
     )
 
 
-# ---------------------------------------------------------------------------
-# _write_one_csv — empty GDF short-circuits
-# ---------------------------------------------------------------------------
-
-
-def test_write_one_csv_skips_empty_gdf(tmp_path: Path) -> None:
-    """_write_one_csv must not create the file when GDF has no rows."""
-    out_path = tmp_path / "nothing.csv"
-    empty = gpd.GeoDataFrame(columns=["geometry", "probability"])
-    _write_one_csv(empty, out_path)
-    assert not out_path.exists()
-
-
-def test_write_one_csv_writes_non_empty_gdf(tmp_path: Path) -> None:
-    """_write_one_csv writes a valid CSV for a non-empty GDF."""
-    out_path = tmp_path / "out.csv"
-    geom = [Point(0, 0), Point(1, 0)]
-    gdf = gpd.GeoDataFrame(
-        {"probability": [0.3, 0.7]}, geometry=geom, crs="EPSG:4326"
+def test_combine_components_rejects_different_grid_order() -> None:
+    geometry = [Point(0, 0), Point(1, 0), Point(0, 1)]
+    first = gpd.GeoDataFrame(
+        {"probability": [0.2, 0.4, 0.6]},
+        geometry=geometry,
+        crs="EPSG:32611",
     )
-    _write_one_csv(gdf, out_path)
-    assert out_path.exists()
-    df = pd.read_csv(out_path)
-    assert "probability" in df.columns
-    assert "x" in df.columns and "y" in df.columns
-
-
-# ---------------------------------------------------------------------------
-# _write_csv_outputs — empty combined surface
-# ---------------------------------------------------------------------------
-
-
-def test_write_csv_outputs_skips_empty_combined(tmp_path: Path) -> None:
-    """_write_csv_outputs must not create combined_probability.csv when
-    combined GDF is empty."""
-    out_dir = tmp_path / "out"
-    geom = [Point(0, 0)]
-    prob_gdf = gpd.GeoDataFrame(
-        {"probability": [0.5]}, geometry=geom, crs="EPSG:4326"
+    second = gpd.GeoDataFrame(
+        {"probability": [0.8, 0.7, 0.5]},
+        geometry=list(reversed(geometry)),
+        crs="EPSG:32611",
     )
-    surf = ComponentProbability(
-        probability=prob_gdf, model=None, feature_names=(), spatial_field=None
-    )
-    combined_empty = gpd.GeoDataFrame()
+    surfaces = {
+        "first": ComponentProbability(first, None, ()),
+        "second": ComponentProbability(second, None, ()),
+    }
 
-    _write_csv_outputs({"comp": surf}, combined_empty, out_dir)
-
-    assert (out_dir / "comp_probability.csv").exists()
-    assert not (out_dir / "combined_probability.csv").exists()
+    with pytest.raises(GEOPFAValueError, match="canonical grid order"):
+        _combine_components(surfaces)
 
 
-# ---------------------------------------------------------------------------
-# _write_calibrated_csv_outputs — empty GDF entries are skipped
-# ---------------------------------------------------------------------------
-
-
-def test_write_calibrated_csv_outputs_skips_empty_entries(
+def test_requested_spatial_format_is_not_silently_omitted(
     tmp_path: Path,
 ) -> None:
-    """_write_calibrated_csv_outputs must skip GDFs with zero rows."""
-    out_dir = tmp_path / "calibrated"
-    empty = gpd.GeoDataFrame()
-    _write_calibrated_csv_outputs({"comp": empty}, out_dir)
-    # directory created but no CSV written for the empty GDF
-    assert out_dir.exists()
-    assert not (out_dir / "comp_probability.csv").exists()
+    wells_path = _save_wells(tmp_path)
+    base = _make_cfg(wells_path, tmp_path / "out", formats=("geotiff",))
+    cfg = ProbabilisticConfig(
+        enabled=base.enabled,
+        output_dir=base.output_dir,
+        dimensions=base.dimensions,
+        grid=base.grid,
+        labels=base.labels,
+        alpha=base.alpha,
+        evidence=base.evidence,
+        spatial_field=base.spatial_field,
+        inference=base.inference,
+        calibration=base.calibration,
+        cross_validation=base.cross_validation,
+        combination=base.combination,
+        scenarios=base.scenarios,
+        outputs=OutputsConfig(
+            probability_rasters=False,
+            uncertainty_rasters=False,
+            calibration_artifacts=False,
+            decision_artifacts=False,
+            scenarios=False,
+            format=("geotiff",),
+        ),
+        site_selection=base.site_selection,
+    )
+    probability = gpd.GeoDataFrame(
+        {"probability": [0.5]},
+        geometry=[Point(0, 0)],
+        crs="EPSG:32611",
+    )
+    component = ComponentProbability(probability, None, ())
+
+    with pytest.raises(
+        GEOPFAValueError,
+        match="probability_rasters=false.*geotiff",
+    ):
+        _write_configured_probability_outputs(
+            {"component_a": component},
+            probability,
+            cfg,
+            cfg.output_dir,
+        )
+
+
+def test_configured_csv_outputs_route_through_canonical_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wells_path = _save_wells(tmp_path)
+    cfg = _make_cfg(wells_path, tmp_path / "out", formats=("csv",))
+    probability = gpd.GeoDataFrame(
+        {"probability": [0.5]},
+        geometry=[Point(0, 0)],
+        crs="EPSG:4326",
+    )
+    component = ComponentProbability(probability, None, ())
+    calls: list[tuple[dict[str, gpd.GeoDataFrame], Path, dict]] = []
+
+    def capture_writer(surfaces, output_dir, **kwargs):
+        calls.append((surfaces, output_dir, kwargs))
+        return []
+
+    monkeypatch.setattr(
+        probability_runner, "write_probability_outputs", capture_writer
+    )
+
+    _write_configured_probability_outputs(
+        {"heat": component}, probability, cfg, cfg.output_dir
+    )
+
+    assert len(calls) == 1
+    surfaces, output_dir, kwargs = calls[0]
+    assert list(surfaces) == ["heat", "combined"]
+    assert output_dir == cfg.output_dir
+    assert kwargs == {"formats": ("csv",), "include_uncertainty": False}
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +424,175 @@ def test_apply_scenario_disables_priors(tmp_path: Path) -> None:
     assert {"prior_layer_a", "prior_layer_b"}.issubset(
         new_cfg.evidence.exclude_layers
     )
+
+
+def test_apply_scenario_preserves_prior_predictive_inference_role(
+    tmp_path: Path,
+) -> None:
+    """Removing alpha offsets must not turn prior prediction into a fit."""
+    wells_path = _save_wells(tmp_path)
+    cfg = _make_cfg(
+        wells_path,
+        tmp_path / "out",
+        alpha={
+            "component_a": AlphaModeConfig(
+                mode="layer_logit",
+                layer="prior_layer_a",
+                scalar_fallback_pr0=0.61,
+                force_prior_predictive=True,
+                use_evidence_prior=True,
+            )
+        },
+        label_columns={"component_a": "heat_label"},
+    )
+
+    new_cfg = _apply_scenario(
+        cfg,
+        ScenarioConfig(name="no_alpha", include_priors=False),
+    )
+
+    alpha = new_cfg.alpha["component_a"]
+    assert alpha.mode == "scalar"
+    assert alpha.scalar_fallback_pr0 == 0.5
+    assert alpha.force_prior_predictive is True
+    assert alpha.use_evidence_prior is True
+
+
+def test_apply_scenario_rejects_undefined_gaussian_no_prior_ablation(
+    tmp_path: Path,
+) -> None:
+    wells_path = _save_wells(tmp_path)
+    base = _make_cfg(
+        wells_path,
+        tmp_path / "out",
+        label_columns={"component_a": "heat_label"},
+        alpha={"component_a": AlphaModeConfig()},
+    )
+    cfg = ProbabilisticConfig(
+        enabled=base.enabled,
+        output_dir=base.output_dir,
+        dimensions=base.dimensions,
+        grid=base.grid,
+        labels=LabelsConfig(
+            source=base.labels.source,
+            id_col=base.labels.id_col,
+            label_columns=base.labels.label_columns,
+            observation_models={
+                "component_a": ObservationModelConfig(
+                    family="gaussian", response_scale=100.0
+                )
+            },
+            layer=base.labels.layer,
+        ),
+        alpha=base.alpha,
+        evidence=base.evidence,
+        spatial_field=base.spatial_field,
+        inference=base.inference,
+        calibration=base.calibration,
+        cross_validation=base.cross_validation,
+        combination=base.combination,
+        scenarios=base.scenarios,
+        outputs=base.outputs,
+        site_selection=base.site_selection,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Gaussian.*include_priors=false.*undefined",
+    ):
+        _apply_scenario(
+            cfg,
+            ScenarioConfig(name="no_alpha", include_priors=False),
+        )
+
+
+def test_apply_scenario_disables_unrequested_posterior_persistence(
+    tmp_path: Path,
+) -> None:
+    wells_path = _save_wells(tmp_path)
+    base = _make_cfg(wells_path, tmp_path / "out")
+    cfg = ProbabilisticConfig(
+        enabled=base.enabled,
+        output_dir=base.output_dir,
+        dimensions=base.dimensions,
+        grid=base.grid,
+        labels=base.labels,
+        alpha=base.alpha,
+        evidence=base.evidence,
+        spatial_field=base.spatial_field,
+        inference=base.inference,
+        calibration=base.calibration,
+        cross_validation=base.cross_validation,
+        combination=base.combination,
+        scenarios=base.scenarios,
+        outputs=OutputsConfig(
+            probability_rasters=False,
+            uncertainty_rasters=False,
+            calibration_artifacts=False,
+            decision_artifacts=False,
+            scenarios=False,
+            posterior_draw_blocks=True,
+            format=(),
+        ),
+        site_selection=base.site_selection,
+    )
+
+    scenario_cfg = _apply_scenario(cfg, ScenarioConfig(name="in_memory"))
+
+    assert scenario_cfg.outputs.scenarios is False
+    assert scenario_cfg.outputs.posterior_draw_blocks is False
+
+
+def test_gblk_scenario_stays_in_memory_when_outputs_are_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=5, n_wells=20, seed=52)
+    wells_path = tmp_path / "wells.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    base = _make_cfg(wells_path, tmp_path / "out")
+    cfg = replace(
+        base,
+        inference=InferenceConfig(
+            backend="gblk",
+            gblk_bayesian=GBLKBayesianConfig(
+                enabled=True,
+                n_draws=2,
+                cluster_effect=False,
+                validate_inla=False,
+            ),
+        ),
+        spatial_field=SpatialFieldConfig(
+            enabled=True,
+            backend="latticekrigx",
+        ),
+        scenarios=(ScenarioConfig(name="in_memory"),),
+        outputs=replace(
+            base.outputs,
+            format=(),
+            scenarios=False,
+            posterior_draw_blocks=True,
+            posterior_draw_block_size=1,
+        ),
+    )
+    received: list[ProbabilisticConfig] = []
+
+    def fake_gblk(_pfa, sub_cfg, **_kwargs):
+        received.append(sub_cfg)
+        return ProbabilisticResult(config=sub_cfg)
+
+    monkeypatch.setattr(
+        "geopfa.prob.gblk_runner.run_gblk_probabilistic",
+        fake_gblk,
+    )
+
+    result = run_probabilistic(fixture.pfa, cfg)
+
+    assert len(received) == 2
+    assert received[0].outputs.posterior_draw_blocks is True
+    assert received[1].outputs.posterior_draw_blocks is False
+    assert set(result.scenarios) == {"in_memory"}
+    assert not (cfg.output_dir / "scenarios").exists()
 
 
 def test_apply_scenario_preserves_priors_when_include_priors_true(

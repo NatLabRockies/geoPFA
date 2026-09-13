@@ -75,8 +75,9 @@ The `ProbabilisticResult` schema is identical between backends:
 - `result.components[name].probability` — per-component probability surface.
 - `result.components[name].diagnostics` — per-fit metadata dict.
 
-The `gblk` backend additionally populates `result.diagnostics["omega"]` with the
-estimated $Q \times Q$ cross-component correlation matrix.
+For deterministic same-family joint fits, each fitted component records the
+estimated $Q \times Q$ cross-component correlation matrix at
+`result.components[name].diagnostics["omega"]`.
 
 ### Running in the correct environment
 
@@ -215,9 +216,11 @@ pixi run -e dev-gblk geopfa-prob run --config my_config.json
 1. **`pfa_pickle` is required** for the CLI — the CLI loads a serialised PFA dict.
 2. **`alpha` is per-component** — each component has its own alpha mode.
 3. **`inference.backend="gblk"` is the default** — components are fit jointly; no
-   `spatial_field` config is needed or used.
-4. **Calibration and CV** — configure `calibration.method` to `"platt"` or
-   `"isotonic"` for block-CV calibration.
+   `spatial_field` block is needed when its defaults are appropriate. When
+   present, only the documented LatticeKrigX controls are accepted.
+4. **Calibration and CV** — GBLK config-driven runs require
+   `calibration.method="none"`. Use `run_gblk_calibration_cv` explicitly for raw
+   blocked or buffered cross-validation diagnostics.
 
 ### Behaviour changes since the Stage-1 demo merge
 
@@ -289,28 +292,27 @@ posterior-mean probability surfaces plus credible-interval bands
 Or programmatically:
 
 ```python
-from geopfa.prob import InferenceConfig, GBLKBayesianConfig
+from geopfa.prob import GBLKBayesianConfig, InferenceConfig
 
-cfg = ProbabilisticConfig(
-    ...
-    inference=InferenceConfig(
-        backend="gblk",
-        gblk_bayesian=GBLKBayesianConfig(
-            enabled=True,
-            n_draws=200,
-            seed=42,
-            ci_level=0.9,
-            cor_scale_median=0.1,
-            spatial_sd_u=1.0,
-            spatial_sd_tail_probability=0.05,
-            dirichlet_concentration=1.5,
-            kleiber_r0=0.25,
-            kleiber_r1=0.10,
-        ),
+bayesian_inference = InferenceConfig(
+    backend="gblk",
+    gblk_bayesian=GBLKBayesianConfig(
+        enabled=True,
+        n_draws=200,
+        seed=42,
+        ci_level=0.9,
+        cor_scale_median=0.1,
+        spatial_sd_u=1.0,
+        spatial_sd_tail_probability=0.05,
+        dirichlet_concentration=1.5,
+        kleiber_r0=0.25,
+        kleiber_r1=0.10,
     ),
-    ...
 )
 ```
+
+Use `bayesian_inference` as the `inference` field when constructing the
+complete `ProbabilisticConfig`.
 
 `kleiber_r0` and `kleiber_r1` are required for two-component fits and must be
 frozen profile estimates, not tuning values. They are omitted for a univariate

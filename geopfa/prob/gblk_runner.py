@@ -31,7 +31,8 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import numpy as np
 from numpy.typing import NDArray
-from scipy.special import expit, logsumexp, ndtr
+from scipy.special import expit, logsumexp, ndtr, ndtri
+from scipy.spatial import cKDTree
 
 from geopfa.exceptions import GEOPFAValueError
 from geopfa.prob.alpha import AlphaCResult, build_alpha_c
@@ -43,9 +44,9 @@ from geopfa.prob.fitting import _fit_offset_logit
 from geopfa.prob.forward import FrozenGBLKForwardState
 from geopfa.prob.gblk_assemble import (
     AssembledInputs,
+    _component_values_on_reference,
     assemble_gblk_inputs,
     build_component_grid_evidence,
-    pool_regional_coefficients,
 )
 from geopfa.prob.gblk_backend import (
     fit_gblk_bayesian_joint,
@@ -57,17 +58,21 @@ from geopfa.prob.gblk_backend import (
 from geopfa.prob.io import (
     PersistedPosteriorDrawState,
     PosteriorDrawBlockWriter,
+    _probabilistic_implementation_hash,
     load_posterior_draw_state,
 )
 from geopfa.prob.labels import LoadedLabels, load_labels
 from geopfa.prob.pfa_grid import PFAGridAdapter, validate_declared_components
 from geopfa.prob.predictive_stacking import (
+    PredictiveStackingEvidence,
     PredictiveStackingResult,
     apply_predictive_stacking,
     select_predictive_density_stacking_weight,
     select_predictive_stacking_weight,
 )
 from geopfa.prob.runner import ProbabilisticResult
+from geopfa.prob.spatial_alignment import require_same_grid
+from geopfa.prob.spatial_alignment import extract_coordinates
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from latticekrigx.glk.calibration import CalibrationCVResult
@@ -75,6 +80,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 _TWO_DIMENSIONS = 2
 _THREE_DIMENSIONS = 3
 _OPEN_PROBABILITY_EPSILON = 1e-12
+_PREDICTIVE_SUMMARY_CHUNK_SIZE = 10_000
 
 
 def _spawn_child_seeds(seed: int, count: int) -> tuple[int, ...]:
@@ -85,21 +91,98 @@ def _spawn_child_seeds(seed: int, count: int) -> tuple[int, ...]:
     )
 
 
-def _stacking_fold_config(cfg: ProbabilisticConfig) -> ProbabilisticConfig:
-    """Use the configured support rule after reserving one validation well."""
-    fold_minimum = max(1, cfg.labels.min_wells_for_fit - 1)
-    return replace(
-        cfg,
-        labels=replace(cfg.labels, min_wells_for_fit=fold_minimum),
+def _stacking_training_minimum(cfg: ProbabilisticConfig) -> int:
+    """Return the declared unique-well support required inside each fold."""
+    configured = cfg.inference.predictive_stacking.minimum_training_wells
+    return cfg.labels.min_wells_for_fit if configured is None else configured
+
+
+def _unique_well_count(well_ids: np.ndarray, mask: np.ndarray) -> int:
+    """Count declared well identities among selected observation rows."""
+    identifiers = np.asarray(well_ids)
+    selected = np.asarray(mask, dtype=bool)
+    if identifiers.ndim != 1 or selected.shape != identifiers.shape:
+        raise ValueError("well_ids and mask must be aligned row vectors")
+    return int(np.unique(identifiers[selected]).size)
+
+
+def _grouped_spatial_folds(  # noqa: PLR0913
+    coordinates: np.ndarray,
+    well_ids: np.ndarray,
+    *,
+    n_folds: int,
+    block_type: str,
+    grid_size: int,
+    seed: int,
+    block_size_km: float | None,
+    buffer_distance: float,
+    dims: tuple[int, ...] = (0, 1),
+) -> tuple[tuple[np.ndarray, np.ndarray], ...]:
+    """Build spatial folds on wells and expand them to all profile rows."""
+    coords = np.asarray(coordinates, dtype=np.float64)
+    identifiers = np.asarray(well_ids)
+    if identifiers.ndim != 1 or identifiers.shape[0] != coords.shape[0]:
+        raise ValueError("well_ids must be aligned with coordinates")
+    if not np.isfinite(buffer_distance) or buffer_distance < 0.0:
+        raise ValueError("buffer_distance must be non-negative and finite")
+    unique_ids, inverse = np.unique(identifiers, return_inverse=True)
+    representative = np.empty((unique_ids.size, coords.shape[1]), dtype=float)
+    for index in range(unique_ids.size):
+        representative[index] = coords[inverse == index].mean(axis=0)
+    group_folds = spatial_block_cv(
+        representative,
+        n_folds=n_folds,
+        block_type=block_type,
+        grid_size=grid_size,
+        seed=seed,
+        block_size_km=block_size_km,
+        buffer_distance=0.0,
+        dims=dims,
+    )
+    folds: list[tuple[np.ndarray, np.ndarray]] = []
+    for train_groups, test_groups in group_folds:
+        train_rows = train_groups[inverse].copy()
+        test_rows = test_groups[inverse]
+        if buffer_distance > 0.0:
+            tree = cKDTree(coords[test_rows][:, list(dims)])
+            candidate_rows = np.flatnonzero(train_rows)
+            distances, _ = tree.query(
+                coords[candidate_rows][:, list(dims)],
+                k=1,
+            )
+            near_ids = np.unique(
+                identifiers[candidate_rows[distances < buffer_distance]]
+            )
+            if near_ids.size:
+                train_rows[np.isin(identifiers, near_ids)] = False
+        if not train_rows.any():
+            raise ValueError(
+                "spatial fold contains zero training wells after grouped "
+                f"buffer_distance={buffer_distance:g}"
+            )
+        folds.append((train_rows, test_rows))
+    return tuple(folds)
+
+
+def _spatial_domain_bounds(
+    assembled: AssembledInputs,
+) -> NDArray[np.float64]:
+    """Freeze physical-coordinate bounds across final and validation fits."""
+    coordinates = np.vstack(
+        [assembled.well_coords, assembled.grid_coords]
+    ).astype(np.float64, copy=False)
+    return np.column_stack(
+        [np.min(coordinates, axis=0), np.max(coordinates, axis=0)]
     )
 
 
-def _select_component_stacking(
+def _select_component_stacking(  # noqa: PLR0913
     *,
     outcomes: np.ndarray,
     prior_probability: np.ndarray,
     full_probability: np.ndarray,
     validation_coordinates: np.ndarray,
+    validation_well_ids: np.ndarray,
     minimum_wells: int,
 ) -> PredictiveStackingResult:
     """Select an update weight, retaining the prior under weak validation."""
@@ -107,19 +190,32 @@ def _select_component_stacking(
     prior_values = np.asarray(prior_probability)
     full_values = np.asarray(full_probability)
     coordinates = np.asarray(validation_coordinates, dtype=np.float64)
-    if (
+    well_ids = np.asarray(validation_well_ids)
+    invalid_coordinates = (
         coordinates.ndim != _TWO_DIMENSIONS
         or outcome_values.ndim != 1
         or coordinates.shape[0] != outcome_values.size
         or coordinates.shape[1] == 0
         or not np.all(np.isfinite(coordinates))
-    ):
+    )
+    invalid_ids = (
+        well_ids.ndim != 1 or well_ids.shape[0] != outcome_values.size
+    )
+    if invalid_coordinates or invalid_ids:
         raise ValueError(
             "validation_coordinates must be a finite matrix aligned to outcomes"
         )
     if minimum_wells < 1:
         raise ValueError("minimum_wells must be positive")
-    n_wells = int(np.unique(coordinates, axis=0).shape[0])
+    n_wells = int(np.unique(well_ids).size)
+    evidence = PredictiveStackingEvidence(
+        family="bernoulli",
+        well_ids=well_ids.copy(),
+        validation_coordinates=coordinates.copy(),
+        outcomes=outcome_values.copy(),
+        prior_probability=prior_values.copy(),
+        full_probability=full_values.copy(),
+    )
     if outcome_values.size == 0:
         if prior_values.shape != (0,) or full_values.shape != (0,):
             raise ValueError(
@@ -133,6 +229,7 @@ def _select_component_stacking(
             n_observations=0,
             n_wells=0,
             status="prior_retained_no_validation_wells",
+            evidence=evidence,
         )
     selection = replace(
         select_predictive_stacking_weight(
@@ -141,6 +238,7 @@ def _select_component_stacking(
             full_values,
         ),
         n_wells=n_wells,
+        evidence=evidence,
     )
     if n_wells >= minimum_wells:
         return selection
@@ -152,23 +250,31 @@ def _select_component_stacking(
     )
 
 
-def _select_component_density_stacking(
+def _select_component_density_stacking(  # noqa: PLR0913
     *,
+    outcomes: np.ndarray,
     prior_log_density: np.ndarray,
     full_log_density: np.ndarray,
     validation_coordinates: np.ndarray,
+    validation_well_ids: np.ndarray,
     minimum_wells: int,
 ) -> PredictiveStackingResult:
     """Select a continuous predictive-density mixture with support guards."""
     prior = np.asarray(prior_log_density, dtype=np.float64)
     full = np.asarray(full_log_density, dtype=np.float64)
+    outcome_values = np.asarray(outcomes, dtype=np.float64)
     coordinates = np.asarray(validation_coordinates, dtype=np.float64)
+    well_ids = np.asarray(validation_well_ids)
     invalid_densities = prior.ndim != 1 or full.shape != prior.shape
     invalid_coordinates = (
         coordinates.ndim != _TWO_DIMENSIONS
         or coordinates.shape[0] != prior.size
         or coordinates.shape[1] == 0
         or not np.all(np.isfinite(coordinates))
+        or outcome_values.shape != prior.shape
+        or not np.all(np.isfinite(outcome_values))
+        or well_ids.ndim != 1
+        or well_ids.shape[0] != prior.size
     )
     if invalid_densities or invalid_coordinates:
         raise ValueError(
@@ -176,7 +282,15 @@ def _select_component_density_stacking(
         )
     if minimum_wells < 1:
         raise ValueError("minimum_wells must be positive")
-    n_wells = int(np.unique(coordinates, axis=0).shape[0])
+    n_wells = int(np.unique(well_ids).size)
+    evidence = PredictiveStackingEvidence(
+        family="gaussian",
+        well_ids=well_ids.copy(),
+        validation_coordinates=coordinates.copy(),
+        outcomes=outcome_values.copy(),
+        prior_log_density=prior.copy(),
+        full_log_density=full.copy(),
+    )
     if prior.size == 0:
         return PredictiveStackingResult(
             weight=0.0,
@@ -186,10 +300,12 @@ def _select_component_density_stacking(
             n_observations=0,
             n_wells=0,
             status="prior_retained_no_validation_wells",
+            evidence=evidence,
         )
     selection = replace(
         select_predictive_density_stacking_weight(prior, full),
         n_wells=n_wells,
+        evidence=evidence,
     )
     if n_wells >= minimum_wells:
         return selection
@@ -204,30 +320,38 @@ def _select_component_density_stacking(
 def _stacking_validation_mask(
     *,
     observed_mask: np.ndarray,
-    coordinates: np.ndarray,
+    well_depths_m: np.ndarray | None,
     component_name: str,
     validation_depths_m: Mapping[str, float],
 ) -> np.ndarray:
     """Restrict one component's validation rows to its declared depth."""
     observed = np.asarray(observed_mask, dtype=bool)
-    coords = np.asarray(coordinates, dtype=np.float64)
-    if observed.ndim != 1 or coords.ndim != _TWO_DIMENSIONS:
-        raise ValueError("observed_mask and coordinates must be row arrays")
-    if coords.shape[0] != observed.size or not np.all(np.isfinite(coords)):
-        raise ValueError(
-            "coordinates must be finite and aligned to observed_mask"
-        )
+    if observed.ndim != 1:
+        raise ValueError("observed_mask must be a row vector")
     validation_depth = validation_depths_m.get(component_name)
     if validation_depth is None:
         return observed.copy()
-    if coords.shape[1] != _THREE_DIMENSIONS:
-        raise ValueError("target-depth stacking requires 3-D coordinates")
-    return observed & np.isclose(
-        -coords[:, 2],
+    if well_depths_m is None:
+        raise GEOPFAValueError(
+            "target-depth stacking requires labels.depth_col"
+        )
+    depths = np.asarray(well_depths_m, dtype=np.float64)
+    if depths.shape != observed.shape or not np.all(np.isfinite(depths)):
+        raise ValueError(
+            "well depths must be finite and aligned to observations"
+        )
+    selected = observed & np.isclose(
+        depths,
         validation_depth,
         rtol=0.0,
         atol=1e-6,
     )
+    if not selected.any():
+        raise GEOPFAValueError(
+            f"component {component_name!r} has no observed rows at requested "
+            f"validation depth {validation_depth:g} m"
+        )
+    return selected
 
 
 def _validate_gblk_config(cfg: ProbabilisticConfig) -> None:
@@ -239,17 +363,82 @@ def _validate_gblk_config(cfg: ProbabilisticConfig) -> None:
         )
 
 
-def _combine_probability_columns(
-    probabilities: NDArray[np.float64], rule: str
-) -> NDArray[np.float64]:
-    """Combine an ``(n, q)`` probability matrix by the configured rule."""
-    if rule == "product":
-        return np.prod(probabilities, axis=1)
-    if rule == "geometric_mean":
-        return np.exp(
-            np.mean(np.log(np.clip(probabilities, 1e-12, 1.0)), axis=1)
+def _is_gaussian_component(cfg: ProbabilisticConfig, name: str) -> bool:
+    """Return whether a component explicitly declares a Gaussian response."""
+    observation = cfg.labels.observation_models.get(name)
+    return observation is not None and observation.family == "gaussian"
+
+
+def _resolve_config_integer(
+    requested: int | None,
+    *,
+    configured: int,
+    argument: str,
+    config_path: str,
+) -> int:
+    """Resolve a public runner argument without permitting config divergence."""
+    if requested is None:
+        return configured
+    if isinstance(requested, bool | np.bool_) or not isinstance(
+        requested, int | np.integer
+    ):
+        raise GEOPFAValueError(f"{argument} must be an integer")
+    value = int(requested)
+    if value != configured:
+        raise GEOPFAValueError(
+            f"{argument}={value} conflicts with {config_path}={configured}; "
+            "change the config instead of overriding a config-driven run"
         )
-    raise AssertionError(f"unexpected combination rule {rule!r}")
+    return configured
+
+
+def _canonical_prediction_grid(
+    adapter: PFAGridAdapter,
+    cfg: ProbabilisticConfig,
+) -> gpd.GeoDataFrame:
+    """Return the one configured PFA grid used by every GBLK code path."""
+    validate_declared_components(
+        adapter,
+        set(cfg.labels.label_columns) | set(cfg.alpha),
+    )
+    configured_names = tuple(
+        name for name in adapter.components() if name in cfg.alpha
+    )
+    if not configured_names:
+        raise GEOPFAValueError(
+            "GBLK requires at least one configured analysis component"
+        )
+    return adapter.pr_norm(configured_names[0])
+
+
+def _require_projected_metre_crs(
+    grid_gdf: gpd.GeoDataFrame,
+    *,
+    context: str,
+) -> None:
+    """Require horizontal coordinates that make metre distances meaningful."""
+    crs = grid_gdf.crs
+    axes = () if crs is None else crs.axis_info[:2]
+    if (
+        crs is None
+        or not crs.is_projected
+        or len(axes) != _TWO_DIMENSIONS
+        or any(
+            axis.unit_name.lower() not in {"metre", "meter"}
+            or not np.isclose(axis.unit_conversion_factor, 1.0)
+            for axis in axes
+        )
+    ):
+        raise GEOPFAValueError(
+            f"{context} requires a projected metre-based CRS"
+        )
+
+
+def _component_probability_product(
+    probabilities: NDArray[np.float64],
+) -> NDArray[np.float64]:
+    """Multiply the columns of an ``(n, q)`` probability matrix."""
+    return np.prod(probabilities, axis=1)
 
 
 def _resolve_a_wght(
@@ -312,6 +501,29 @@ class PriorPredictiveEvidenceState:
 
 
 @dataclass(frozen=True)
+class _GaussianPredictiveResponseState:
+    """Physical-unit inputs for one Gaussian predictive distribution."""
+
+    latent_mean_draws: NDArray[np.float64]
+    likelihood_sd_draws: NDArray[np.float64]
+    prior_mean: NDArray[np.float64] | None
+    prior_sd: NDArray[np.float64] | None
+    seed: int
+
+
+@dataclass(frozen=True)
+class _GaussianPriorResponseState:
+    """One aligned fixed Gaussian prior predictive distribution."""
+
+    mean: NDArray[np.float64]
+    sd: NDArray[np.float64]
+    event_probability: NDArray[np.float64]
+    event_threshold: float
+    p_min: float
+    p_max: float
+
+
+@dataclass(frozen=True)
 class PersistedBayesianFitReference:
     """Reference to a hash-verified INLA fit state reopened from disk."""
 
@@ -353,13 +565,14 @@ def _qualified_prior_values(  # noqa: PLR0913
     return np.asarray(resolved, dtype=np.float64)
 
 
-def _prior_predictive_evidence_state(
+def _prior_predictive_evidence_state(  # noqa: PLR0913
     adapter: PFAGridAdapter,
     component: str,
     alpha: AlphaCResult,
     cfg: ProbabilisticConfig,
     *,
     seed: int,
+    reference_grid: gpd.GeoDataFrame | None = None,
 ) -> PriorPredictiveEvidenceState:
     """Prepare one component's named Gaussian coefficient-prior draws.
 
@@ -372,6 +585,7 @@ def _prior_predictive_evidence_state(
         component,
         alpha,
         cfg.evidence,
+        reference_grid=reference_grid,
     )
     if not layer_names:
         raise GEOPFAValueError(
@@ -449,20 +663,34 @@ def _prior_predictive_evidence_state(
     )
 
 
-def _prior_predictive_evidence_draws(
+def _prior_predictive_evidence_draws(  # noqa: PLR0913
     adapter: PFAGridAdapter,
     component: str,
     alpha: AlphaCResult,
     cfg: ProbabilisticConfig,
     *,
     seed: int,
+    reference_grid: gpd.GeoDataFrame | None = None,
 ) -> PriorPredictiveEvidenceDraws:
     """Evaluate all draws through the existing in-memory API."""
     state = _prior_predictive_evidence_state(
-        adapter, component, alpha, cfg, seed=seed
+        adapter,
+        component,
+        alpha,
+        cfg,
+        seed=seed,
+        reference_grid=reference_grid,
+    )
+    component_grid = adapter.pr_norm(component)
+    target_grid = component_grid if reference_grid is None else reference_grid
+    grid_offset = _component_values_on_reference(
+        target_grid,
+        component_grid,
+        alpha.grid_offset,
+        context=f"component {component!r} prior grid",
     )
     eta_draws = (
-        alpha.grid_offset[np.newaxis, :]
+        grid_offset[np.newaxis, :]
         + state.coefficient_draws @ state.standardized_evidence.T
     )
     return PriorPredictiveEvidenceDraws(
@@ -479,20 +707,12 @@ def _resolved_evidence_prior(
     *,
     component: str,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Resolve play-type defaults and explicit proper coefficient priors."""
+    """Resolve explicit proper coefficient priors."""
     base_precision = 1.0 / cfg.evidence.regularization.C
     default_precision: dict[str, float] = {}
-    default_means: dict[str, float] = {}
-    play_type = cfg.evidence.regularization.play_type
-    if play_type:
-        from .play_types import play_type_defaults  # noqa: PLC0415
-
-        defaults = play_type_defaults(play_type, layer_names=layer_names)
-        default_precision.update(defaults["per_feature_weights"])
-        default_means.update(defaults["prior_means"])
     default_precision.update(cfg.evidence.regularization.per_feature_weights)
     default_precision.update(cfg.evidence.regularization.prior_precisions)
-    default_means.update(cfg.evidence.regularization.prior_means)
+    default_means = dict(cfg.evidence.regularization.prior_means)
     precision = _qualified_prior_values(
         default_precision,
         component=component,
@@ -525,36 +745,60 @@ def _standardize_partial_evidence(  # noqa: PLR0913
     x_train: NDArray[np.float64],
     x_prediction: NDArray[np.float64],
     observed: NDArray[np.bool_],
+    well_ids: NDArray,
     *,
     component_name: str,
     layer_names: list[str],
-    minimum_count: int,
+    minimum_wells: int,
     standardization: str = "observed_labels",
+    prediction_support: NDArray[np.float64] | None = None,
 ) -> tuple[
     NDArray[np.float64],
     NDArray[np.float64],
     NDArray[np.float64],
     NDArray[np.float64],
     NDArray[np.int64],
+    NDArray[np.int64],
+    int,
     int,
 ]:
     """Apply fold-local per-feature scaling with neutral mean imputation."""
     finite_observed = observed[:, np.newaxis] & np.isfinite(x_train)
-    finite_counts = finite_observed.sum(axis=0).astype(np.int64)
-    unsupported = np.flatnonzero(finite_counts < minimum_count)
+    finite_row_counts = finite_observed.sum(axis=0).astype(np.int64)
+    finite_well_counts = np.asarray(
+        [
+            _unique_well_count(well_ids, finite_observed[:, index])
+            for index in range(finite_observed.shape[1])
+        ],
+        dtype=np.int64,
+    )
+    unsupported = np.flatnonzero(finite_well_counts < minimum_wells)
     if unsupported.size:
         details = ", ".join(
-            f"{layer_names[index]}={int(finite_counts[index])}"
+            f"{layer_names[index]}={int(finite_well_counts[index])} wells"
             for index in unsupported
         )
         raise GEOPFAValueError(
-            f"component {component_name!r} has fewer than {minimum_count} "
-            f"finite observed values for evidence layer(s): {details}"
+            f"component {component_name!r} has fewer than {minimum_wells} "
+            f"finite observed wells for evidence layer(s): {details}"
         )
     if standardization == "observed_labels":
         masked = np.where(finite_observed, x_train, np.nan)
     elif standardization == "prediction_support":
-        masked = np.where(np.isfinite(x_prediction), x_prediction, np.nan)
+        support = (
+            x_prediction
+            if prediction_support is None
+            else np.asarray(prediction_support, dtype=np.float64)
+        )
+        if (
+            support.ndim != x_train.ndim
+            or support.shape[1] != x_train.shape[1]
+        ):
+            raise GEOPFAValueError(
+                f"component {component_name!r} prediction support shape is "
+                "inconsistent"
+            )
+        masked = np.where(np.isfinite(support), support, np.nan)
         unsupported_prediction = np.flatnonzero(
             np.sum(np.isfinite(masked), axis=0) == 0
         )
@@ -582,13 +826,19 @@ def _standardize_partial_evidence(  # noqa: PLR0913
     complete_count = int(
         np.sum(observed & np.all(np.isfinite(x_train), axis=1))
     )
+    complete_well_count = _unique_well_count(
+        well_ids,
+        observed & np.all(np.isfinite(x_train), axis=1),
+    )
     return (
         train_scaled,
         prediction_scaled,
         center,
         scale,
-        finite_counts,
+        finite_row_counts,
+        finite_well_counts,
         complete_count,
+        complete_well_count,
     )
 
 
@@ -600,7 +850,9 @@ def _prepare_joint_evidence_arrays(  # noqa: PLR0913, PLR0914
     layer_names: dict[str, list[str]],
     y_train: NDArray[np.float64],
     observed_train: NDArray[np.bool_],
+    well_ids: NDArray,
     cfg: ProbabilisticConfig,
+    standardization_evidence: dict[str, NDArray[np.float64]] | None = None,
 ) -> JointEvidenceDesign:
     """Prepare leakage-safe component designs for one joint model fit."""
     n_train, n_components = y_train.shape
@@ -610,16 +862,23 @@ def _prepare_joint_evidence_arrays(  # noqa: PLR0913, PLR0914
         raise GEOPFAValueError(
             "joint evidence component ordering is inconsistent"
         )
+    if standardization_evidence is not None and set(
+        standardization_evidence
+    ) != set(component_names):
+        raise GEOPFAValueError(
+            "joint evidence standardization support components are inconsistent"
+        )
     n_prediction = len(prediction_evidence[component_names[0]])
     widths = [len(layer_names[name]) for name in component_names]
     max_width = max(widths, default=0)
     diagnostics: dict[str, dict[str, Any]] = {}
     for q_idx, name in enumerate(component_names):
         observed = observed_train[:, q_idx]
-        if observed.sum() < cfg.labels.min_wells_for_fit:
+        observed_wells = _unique_well_count(well_ids, observed)
+        if observed_wells < cfg.labels.min_wells_for_fit:
             raise GEOPFAValueError(
                 f"component {name!r} has fewer than "
-                f"{cfg.labels.min_wells_for_fit} observed labels"
+                f"{cfg.labels.min_wells_for_fit} observed wells"
             )
         if (
             not cfg.inference.gblk_bayesian.enabled
@@ -674,16 +933,24 @@ def _prepare_joint_evidence_arrays(  # noqa: PLR0913, PLR0914
             prediction_scaled,
             center,
             scale,
-            finite_counts,
+            finite_row_counts,
+            finite_well_counts,
             complete_count,
+            complete_well_count,
         ) = _standardize_partial_evidence(
             x_train,
             x_prediction,
             observed,
+            well_ids,
             component_name=name,
             layer_names=layer_names[name],
-            minimum_count=cfg.labels.min_wells_for_fit,
+            minimum_wells=cfg.labels.min_wells_for_fit,
             standardization=cfg.evidence.standardization,
+            prediction_support=(
+                None
+                if standardization_evidence is None
+                else standardization_evidence[name]
+            ),
         )
         component_precision, component_mean = _resolved_evidence_prior(
             cfg, layer_names[name], component=name
@@ -701,8 +968,11 @@ def _prepare_joint_evidence_arrays(  # noqa: PLR0913, PLR0914
             "evidence_prior_mean": component_mean.tolist(),
             "evidence_standardization": cfg.evidence.standardization,
             "evidence_n": int(observed.sum()),
+            "evidence_well_n": observed_wells,
             "evidence_complete_row_n": complete_count,
-            "evidence_finite_per_feature": finite_counts.tolist(),
+            "evidence_complete_well_n": complete_well_count,
+            "evidence_finite_per_feature": finite_row_counts.tolist(),
+            "evidence_finite_wells_per_feature": finite_well_counts.tolist(),
             "evidence_missing_value_policy": (
                 "fold_local_feature_mean_zero_standardized_contribution"
             ),
@@ -729,6 +999,7 @@ def _prepare_joint_evidence(
         layer_names=assembled.layer_names,
         y_train=assembled.y,
         observed_train=assembled.observed_mask,
+        well_ids=assembled.well_ids,
         cfg=cfg,
     )
 
@@ -748,10 +1019,11 @@ def _fit_evidence_only_offsets(  # noqa: PLR0914
         x_well = np.asarray(assembled.evidence[name], dtype=np.float64)
         x_grid = np.asarray(assembled.grid_evidence[name], dtype=np.float64)
         observed = assembled.observed_mask[:, q_idx]
-        if observed.sum() < cfg.labels.min_wells_for_fit:
+        observed_wells = _unique_well_count(assembled.well_ids, observed)
+        if observed_wells < cfg.labels.min_wells_for_fit:
             raise GEOPFAValueError(
                 f"component {name!r} has fewer than "
-                f"{cfg.labels.min_wells_for_fit} observed labels"
+                f"{cfg.labels.min_wells_for_fit} observed wells"
             )
         if np.unique(assembled.y[observed, q_idx]).size < 2:  # noqa: PLR2004
             raise GEOPFAValueError(
@@ -769,15 +1041,18 @@ def _fit_evidence_only_offsets(  # noqa: PLR0914
             x_grid_scaled,
             mean,
             scale,
-            finite_counts,
+            finite_row_counts,
+            finite_well_counts,
             complete_count,
+            complete_well_count,
         ) = _standardize_partial_evidence(
             x_well,
             x_grid,
             observed,
+            assembled.well_ids,
             component_name=name,
             layer_names=assembled.layer_names[name],
-            minimum_count=cfg.labels.min_wells_for_fit,
+            minimum_wells=cfg.labels.min_wells_for_fit,
             standardization=cfg.evidence.standardization,
         )
         component_y = assembled.y[observed, q_idx]
@@ -807,8 +1082,11 @@ def _fit_evidence_only_offsets(  # noqa: PLR0914
             "evidence_standardization": cfg.evidence.standardization,
             "evidence_optimizer_success": bool(fit.success),
             "evidence_n": int(observed.sum()),
+            "evidence_well_n": observed_wells,
             "evidence_complete_row_n": complete_count,
-            "evidence_finite_per_feature": finite_counts.tolist(),
+            "evidence_complete_well_n": complete_well_count,
+            "evidence_finite_per_feature": finite_row_counts.tolist(),
+            "evidence_finite_wells_per_feature": finite_well_counts.tolist(),
             "evidence_missing_value_policy": (
                 "fold_local_feature_mean_zero_standardized_contribution"
             ),
@@ -848,6 +1126,7 @@ def _run_gblk_bayesian(  # noqa: PLR0913
         fixed_effects_grid=evidence_design.prediction,
         fixed_precision=evidence_design.precision,
         fixed_prior_mean=evidence_design.prior_mean,
+        spatial_domain=_spatial_domain_bounds(assembled),
         nc=nc,
         nlevel=nlevel,
         a_wght=a_wght,
@@ -932,7 +1211,12 @@ def _gaussian_predictive_exceedance_draws(
 
 
 def _gaussian_prior_exceedance_probability(
-    *, mean: np.ndarray, sd: np.ndarray, threshold: float
+    *,
+    mean: np.ndarray,
+    sd: np.ndarray,
+    threshold: float,
+    p_min: float = _OPEN_PROBABILITY_EPSILON,
+    p_max: float = 1.0 - _OPEN_PROBABILITY_EPSILON,
 ) -> NDArray[np.float64]:
     """Evaluate one Gaussian prior's threshold-exceedance probability."""
     mean_values = np.asarray(mean, dtype=np.float64)
@@ -943,17 +1227,123 @@ def _gaussian_prior_exceedance_probability(
         or not np.all(np.isfinite(sd_values))
         or np.any(sd_values <= 0.0)
     )
-    if invalid_arrays or not np.isfinite(threshold):
+    invalid_bounds = (
+        not np.isfinite(p_min)
+        or not np.isfinite(p_max)
+        or not 0.0 < p_min < p_max < 1.0
+    )
+    if invalid_arrays or not np.isfinite(threshold) or invalid_bounds:
         raise RuntimeError(
             "Gaussian prior probability requires finite aligned means, "
-            "positive standard deviations, and a finite threshold"
+            "positive standard deviations, a finite threshold, and valid "
+            "open clipping bounds"
         )
     probability = ndtr((mean_values - float(threshold)) / sd_values)
-    return np.clip(
-        probability,
-        _OPEN_PROBABILITY_EPSILON,
-        1.0 - _OPEN_PROBABILITY_EPSILON,
+    return np.clip(probability, p_min, p_max)
+
+
+def _gaussian_prior_response_on_reference(
+    reference_grid: gpd.GeoDataFrame,
+    component_grid: gpd.GeoDataFrame,
+    alpha: AlphaCResult,
+    *,
+    component_name: str,
+) -> _GaussianPriorResponseState:
+    """Align fixed Gaussian moments once and derive their event probability."""
+    if alpha.latent_mean is None or alpha.latent_sd is None:
+        raise RuntimeError(
+            f"Gaussian prior-only component {component_name!r} requires "
+            "configured response means and standard deviations"
+        )
+    if alpha.event_threshold is None or not np.isfinite(alpha.event_threshold):
+        raise RuntimeError(
+            f"Gaussian prior-only component {component_name!r} requires a "
+            "finite event threshold"
+        )
+    try:
+        p_min = float(alpha.provenance["p_min"])
+        p_max = float(alpha.provenance["p_max"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Gaussian prior-only component {component_name!r} requires "
+            "configured probability clipping bounds"
+        ) from exc
+    response_mean = _component_values_on_reference(
+        reference_grid,
+        component_grid,
+        alpha.latent_mean,
+        context=f"component {component_name!r} Gaussian prior mean",
     )
+    response_sd = _component_values_on_reference(
+        reference_grid,
+        component_grid,
+        alpha.latent_sd,
+        context=f"component {component_name!r} Gaussian prior SD",
+    )
+    probability = _gaussian_prior_exceedance_probability(
+        mean=response_mean,
+        sd=response_sd,
+        threshold=float(alpha.event_threshold),
+        p_min=p_min,
+        p_max=p_max,
+    )
+    return _GaussianPriorResponseState(
+        mean=response_mean,
+        sd=response_sd,
+        event_probability=probability,
+        event_threshold=float(alpha.event_threshold),
+        p_min=p_min,
+        p_max=p_max,
+    )
+
+
+def _package_gaussian_prior_response(
+    probability: gpd.GeoDataFrame,
+    *,
+    response: _GaussianPriorResponseState,
+    ci_level: float,
+    component_name: str,
+) -> tuple[gpd.GeoDataFrame, dict[str, Any]]:
+    """Attach an analytic physical-unit summary for one fixed Gaussian prior."""
+    if not np.isfinite(ci_level) or not 0.0 < ci_level < 1.0:
+        raise ValueError("Gaussian prior response ci_level must be in (0, 1)")
+    if (
+        response.mean.shape != (len(probability),)
+        or response.sd.shape != response.mean.shape
+        or response.event_probability.shape != response.mean.shape
+    ):
+        raise RuntimeError(
+            f"Gaussian prior-only component {component_name!r} has an "
+            "inconsistent aligned response shape"
+        )
+    z_score = float(ndtri((1.0 + ci_level) / 2.0))
+    columns: dict[str, NDArray[np.float64]] = {
+        "probability": response.event_probability,
+        "response_predictive_mean": response.mean,
+        "response_predictive_lo": response.mean - z_score * response.sd,
+        "response_predictive_hi": response.mean + z_score * response.sd,
+    }
+    for interval_column in ("probability_lo", "probability_hi"):
+        if interval_column in probability:
+            columns[interval_column] = response.event_probability
+    packaged = probability.assign(**columns)
+    return packaged, {
+        "observation_family": "gaussian",
+        "event_threshold": response.event_threshold,
+        "event_probability_estimand": (
+            "clipped_configured_prior_predictive_response_exceedance"
+        ),
+        "event_probability_clipping_bounds": [
+            response.p_min,
+            response.p_max,
+        ],
+        "response_summary_estimand": "prior_predictive_response",
+        "response_interval_method": "analytic_normal_quantile",
+        "response_interval_level": float(ci_level),
+        "response_interval_uncertainty_source": "configured_thermal_model_sd",
+        "response_interval_includes_prior_uncertainty": True,
+        "response_interval_includes_likelihood_variance": False,
+    }
 
 
 def _gaussian_predictive_log_density(
@@ -961,8 +1351,9 @@ def _gaussian_predictive_log_density(
     *,
     outcomes_scaled: np.ndarray,
     component_index: int,
+    response_scale: float,
 ) -> NDArray[np.float64]:
-    """Evaluate the paired Gaussian posterior predictive draw mixture."""
+    """Evaluate the paired posterior predictive density in response units."""
     mean_draws = np.asarray(
         fit_result.response_draws[:, :, component_index], dtype=np.float64
     )
@@ -974,18 +1365,19 @@ def _gaussian_predictive_log_density(
     invalid_means = mean_draws.shape[0] == 0 or not np.all(
         np.isfinite(mean_draws)
     )
-    invalid_outcomes = outcomes.shape != (
-        mean_draws.shape[1],
-    ) or not np.all(np.isfinite(outcomes))
+    invalid_outcomes = outcomes.shape != (mean_draws.shape[1],) or not np.all(
+        np.isfinite(outcomes)
+    )
     invalid_precision = (
         precision_draws.shape != (mean_draws.shape[0],)
         or not np.all(np.isfinite(precision_draws))
         or np.any(precision_draws <= 0.0)
     )
-    if invalid_means or invalid_outcomes or invalid_precision:
+    invalid_scale = not np.isfinite(response_scale) or response_scale <= 0.0
+    if invalid_means or invalid_outcomes or invalid_precision or invalid_scale:
         raise RuntimeError(
             "Gaussian predictive density requires finite aligned outcomes, "
-            "means, and positive likelihood precisions"
+            "means, positive likelihood precisions, and a positive response scale"
         )
     log_density_draws = (
         0.5 * (np.log(precision_draws)[:, np.newaxis] - np.log(2.0 * np.pi))
@@ -993,10 +1385,101 @@ def _gaussian_predictive_log_density(
         * precision_draws[:, np.newaxis]
         * (outcomes[np.newaxis, :] - mean_draws) ** 2
     )
-    return logsumexp(log_density_draws, axis=0) - np.log(mean_draws.shape[0])
+    return (
+        logsumexp(log_density_draws, axis=0)
+        - np.log(mean_draws.shape[0])
+        - np.log(response_scale)
+    )
 
 
-def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
+def _gaussian_predictive_response_summary(
+    state: _GaussianPredictiveResponseState,
+    *,
+    weight: float,
+    ci_level: float,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """Summarize one prior/full posterior-predictive response mixture."""
+    latent = np.asarray(state.latent_mean_draws, dtype=np.float64)
+    likelihood_sd = np.asarray(state.likelihood_sd_draws, dtype=np.float64)
+    invalid_latent = (
+        latent.ndim != _TWO_DIMENSIONS
+        or latent.shape[0] == 0
+        or not np.all(np.isfinite(latent))
+    )
+    if invalid_latent or (
+        likelihood_sd.shape != (latent.shape[0],)
+        or not np.all(np.isfinite(likelihood_sd))
+        or np.any(likelihood_sd <= 0.0)
+    ):
+        raise RuntimeError(
+            "Gaussian predictive response summaries require finite latent-mean "
+            "draws and one positive likelihood SD per draw"
+        )
+    if not np.isfinite(weight) or not 0.0 <= weight <= 1.0:
+        raise ValueError(
+            "Gaussian predictive mixture weight must be in [0, 1]"
+        )
+    if not np.isfinite(ci_level) or not 0.0 < ci_level < 1.0:
+        raise ValueError("Gaussian predictive ci_level must be in (0, 1)")
+
+    prior_mean = None
+    prior_sd = None
+    if weight < 1.0:
+        if state.prior_mean is None or state.prior_sd is None:
+            raise RuntimeError(
+                "Gaussian predictive stacking requires finite prior response "
+                "means and positive prior response SDs"
+            )
+        prior_mean = np.asarray(state.prior_mean, dtype=np.float64)
+        prior_sd = np.asarray(state.prior_sd, dtype=np.float64)
+        if (
+            prior_mean.shape != (latent.shape[1],)
+            or prior_sd.shape != prior_mean.shape
+            or not np.all(np.isfinite(prior_mean))
+            or not np.all(np.isfinite(prior_sd))
+            or np.any(prior_sd <= 0.0)
+        ):
+            raise RuntimeError(
+                "Gaussian predictive stacking requires finite prior response "
+                "means and positive prior response SDs"
+            )
+
+    full_mean = latent.mean(axis=0)
+    mean = (
+        full_mean
+        if weight == 1.0
+        else ((1.0 - weight) * prior_mean + weight * full_mean)
+    )
+    tail = (1.0 - ci_level) / 2.0
+    interval = np.empty((2, latent.shape[1]), dtype=np.float64)
+    rng = np.random.default_rng(state.seed)
+    for start in range(0, latent.shape[1], _PREDICTIVE_SUMMARY_CHUNK_SIZE):
+        stop = min(start + _PREDICTIVE_SUMMARY_CHUNK_SIZE, latent.shape[1])
+        chunk_shape = (latent.shape[0], stop - start)
+        if weight > 0.0:
+            predictive = (
+                latent[:, start:stop]
+                + rng.standard_normal(chunk_shape)
+                * likelihood_sd[:, np.newaxis]
+            )
+        if weight < 1.0:
+            prior = (
+                prior_mean[np.newaxis, start:stop]
+                + rng.standard_normal(chunk_shape)
+                * prior_sd[np.newaxis, start:stop]
+            )
+            if weight == 0.0:
+                predictive = prior
+            else:
+                select_full = rng.random(chunk_shape) < weight
+                predictive = np.where(select_full, predictive, prior)
+        interval[:, start:stop] = np.quantile(
+            predictive, [tail, 1.0 - tail], axis=0
+        )
+    return np.asarray(mean, dtype=np.float64), interval
+
+
+def _run_gblk_gaussian_bayesian(  # noqa: PLR0913, PLR0914
     assembled: AssembledInputs,
     grid_gdf: gpd.GeoDataFrame,
     alphas: Mapping[str, AlphaCResult],
@@ -1011,6 +1494,7 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
 ) -> tuple[
     dict[str, ComponentProbability],
     dict[str, NDArray[np.float64]],
+    dict[str, _GaussianPredictiveResponseState],
 ]:
     """Fit continuous components and convert draws to event probabilities."""
     fit_result = fit_gblk_gaussian_bayesian_joint(
@@ -1026,6 +1510,7 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
         fixed_effects_grid=evidence_design.prediction,
         fixed_precision=evidence_design.precision,
         fixed_prior_mean=evidence_design.prior_mean,
+        spatial_domain=_spatial_domain_bounds(assembled),
         nc=nc,
         nlevel=nlevel,
         a_wght=a_wght,
@@ -1034,7 +1519,13 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
     tail = (1.0 - bayes_cfg.ci_level) / 2.0
     components: dict[str, ComponentProbability] = {}
     component_draws: dict[str, NDArray[np.float64]] = {}
-    for q_idx, name in enumerate(assembled.component_names):
+    response_states: dict[str, _GaussianPredictiveResponseState] = {}
+    response_seeds = _spawn_child_seeds(
+        bayes_cfg.seed, len(assembled.component_names)
+    )
+    for q_idx, (name, response_seed) in enumerate(
+        zip(assembled.component_names, response_seeds, strict=True)
+    ):
         observation = cfg.labels.observation_model_for(name)
         scale = float(observation.response_scale)
         alpha = alphas[name]
@@ -1042,7 +1533,33 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
             raise RuntimeError(
                 f"Gaussian component {name!r} has no event threshold"
             )
-        response_draws = fit_result.response_draws[:, :, q_idx] * scale
+        response_state = _GaussianPredictiveResponseState(
+            latent_mean_draws=(
+                np.asarray(fit_result.response_draws[:, :, q_idx]) * scale
+            ),
+            likelihood_sd_draws=(
+                scale
+                / np.sqrt(fit_result.likelihood_precision_draws[:, q_idx])
+            ),
+            prior_mean=(
+                None
+                if assembled.prior_response_mean_grid is None
+                else assembled.prior_response_mean_grid[:, q_idx]
+            ),
+            prior_sd=(
+                None
+                if assembled.prior_response_sd_grid is None
+                else assembled.prior_response_sd_grid[:, q_idx]
+            ),
+            seed=response_seed,
+        )
+        response_mean, response_interval = (
+            _gaussian_predictive_response_summary(
+                response_state,
+                weight=1.0,
+                ci_level=bayes_cfg.ci_level,
+            )
+        )
         event_draws = _gaussian_predictive_exceedance_draws(
             fit_result,
             component_index=q_idx,
@@ -1051,9 +1568,6 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
         probability_interval = np.quantile(
             event_draws, [tail, 1.0 - tail], axis=0
         )
-        response_interval = np.quantile(
-            response_draws, [tail, 1.0 - tail], axis=0
-        )
         probability = (
             grid_gdf[["geometry"]]
             .copy()
@@ -1061,9 +1575,9 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
                 probability=event_draws.mean(axis=0),
                 probability_lo=probability_interval[0],
                 probability_hi=probability_interval[1],
-                response_mean=response_draws.mean(axis=0),
-                response_lo=response_interval[0],
-                response_hi=response_interval[1],
+                response_predictive_mean=response_mean,
+                response_predictive_lo=response_interval[0],
+                response_predictive_hi=response_interval[1],
             )
         )
         diagnostics = {
@@ -1075,6 +1589,8 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
             "event_probability_estimand": (
                 "posterior_predictive_response_exceedance"
             ),
+            "response_summary_estimand": "posterior_predictive_response",
+            "response_interval_includes_likelihood_variance": True,
             "likelihood_sd_mean": float(
                 np.mean(
                     scale
@@ -1100,7 +1616,8 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
             diagnostics=diagnostics,
         )
         component_draws[name] = event_draws
-    return components, component_draws
+        response_states[name] = response_state
+    return components, component_draws, response_states
 
 
 def _assemble_likelihood_groups(
@@ -1108,6 +1625,8 @@ def _assemble_likelihood_groups(
     loaded_labels: LoadedLabels,
     fit_alphas: Mapping[str, AlphaCResult],
     cfg: ProbabilisticConfig,
+    *,
+    reference_grid: gpd.GeoDataFrame,
 ) -> dict[str, AssembledInputs]:
     """Assemble separate same-family fits for one mixed-response workflow."""
     grouped_names: dict[str, list[str]] = {}
@@ -1154,6 +1673,7 @@ def _assemble_likelihood_groups(
             prior_probability_results={
                 name: fit_alphas[name] for name in names
             },
+            reference_grid=reference_grid,
         )
         if family == "gaussian":
             if cfg.inference.predictive_stacking.enabled:
@@ -1223,21 +1743,28 @@ def _blocked_family_predictions(
         if family == "gaussian"
         else None
     )
-    folds = spatial_block_cv(
+    folds = _grouped_spatial_folds(
         assembled.well_coords,
+        assembled.well_ids,
         n_folds=cfg.cross_validation.n_folds,
         block_type=cfg.cross_validation.block_type,
         grid_size=cfg.cross_validation.grid_size,
         seed=cfg.inference.gblk_bayesian.seed,
         block_size_km=cfg.cross_validation.block_size_km,
         buffer_distance=cfg.cross_validation.buffer_km * 1000.0,
-        dims=(0, 1),
     )
     fold_seeds = _spawn_child_seeds(
         cfg.inference.gblk_bayesian.seed,
         cfg.cross_validation.n_folds,
     )
-    fold_stage_cfg = _stacking_fold_config(cfg)
+    fold_stage_cfg = replace(
+        cfg,
+        labels=replace(
+            cfg.labels,
+            min_wells_for_fit=_stacking_training_minimum(cfg),
+        ),
+    )
+    spatial_domain = _spatial_domain_bounds(assembled)
     for (train_mask, test_mask), fold_seed in zip(
         folds, fold_seeds, strict=True
     ):
@@ -1258,7 +1785,13 @@ def _blocked_family_predictions(
             layer_names=assembled.layer_names,
             y_train=assembled.y[train_mask],
             observed_train=assembled.observed_mask[train_mask],
+            well_ids=assembled.well_ids[train_mask],
             cfg=fold_stage_cfg,
+            standardization_evidence=(
+                assembled.grid_evidence
+                if cfg.evidence.standardization == "prediction_support"
+                else None
+            ),
         )
         common = {
             "component_names": assembled.component_names,
@@ -1270,6 +1803,7 @@ def _blocked_family_predictions(
             "fixed_effects_grid": evidence_design.prediction,
             "fixed_precision": evidence_design.precision,
             "fixed_prior_mean": evidence_design.prior_mean,
+            "spatial_domain": spatial_domain,
             "nc": nc,
             "nlevel": cfg.spatial_field.n_levels,
             "a_wght": _resolve_a_wght(assembled.well_coords.shape[1], a_wght),
@@ -1308,6 +1842,7 @@ def _blocked_family_predictions(
                         fit,
                         outcomes_scaled=assembled.y[test_mask, q_idx],
                         component_index=q_idx,
+                        response_scale=scale,
                     )
                 )
         else:  # pragma: no cover - guarded by observation config
@@ -1338,7 +1873,7 @@ def _estimate_predictive_stacking(
             )
             observed = _stacking_validation_mask(
                 observed_mask=assembled.observed_mask[:, q_idx],
-                coordinates=assembled.well_coords,
+                well_depths_m=assembled.well_depths_m,
                 component_name=name,
                 validation_depths_m=(
                     cfg.inference.predictive_stacking.validation_depths_m
@@ -1353,6 +1888,7 @@ def _estimate_predictive_stacking(
                     ],
                     full_probability=full_probability[observed, q_idx],
                     validation_coordinates=assembled.well_coords[observed, :2],
+                    validation_well_ids=assembled.well_ids[observed],
                     minimum_wells=cfg.labels.min_wells_for_fit,
                 )
             else:
@@ -1374,7 +1910,7 @@ def _estimate_predictive_stacking(
                 prior_sd = (
                     assembled.prior_response_sd_well[observed, q_idx] / scale
                 )
-                outcomes = assembled.y[observed, q_idx]
+                outcomes_scaled = assembled.y[observed, q_idx]
                 if (
                     not np.all(np.isfinite(prior_mean))
                     or not np.all(np.isfinite(prior_sd))
@@ -1387,12 +1923,15 @@ def _estimate_predictive_stacking(
                 prior_log_density = (
                     -np.log(prior_sd)
                     - 0.5 * np.log(2.0 * np.pi)
-                    - 0.5 * ((outcomes - prior_mean) / prior_sd) ** 2
+                    - 0.5 * ((outcomes_scaled - prior_mean) / prior_sd) ** 2
+                    - np.log(scale)
                 )
                 selection = _select_component_density_stacking(
+                    outcomes=outcomes_scaled * scale,
                     prior_log_density=prior_log_density,
                     full_log_density=full_log_density[observed, q_idx],
                     validation_coordinates=assembled.well_coords[observed, :2],
+                    validation_well_ids=assembled.well_ids[observed],
                     minimum_wells=cfg.labels.min_wells_for_fit,
                 )
             if not np.all(np.isfinite(full_probability[observed, q_idx])):
@@ -1406,11 +1945,12 @@ def _estimate_predictive_stacking(
     return results
 
 
-def _apply_componentwise_stacking(
+def _apply_componentwise_stacking(  # noqa: PLR0913
     components: dict[str, ComponentProbability],
     component_draws: dict[str, NDArray[np.float64]],
     assembled_groups: Mapping[str, AssembledInputs],
     stacking: Mapping[str, PredictiveStackingResult],
+    gaussian_response_states: Mapping[str, _GaussianPredictiveResponseState],
     *,
     ci_level: float,
 ) -> None:
@@ -1434,6 +1974,21 @@ def _apply_componentwise_stacking(
             probability["probability"] = draws.mean(axis=0)
             probability["probability_lo"] = interval[0]
             probability["probability_hi"] = interval[1]
+            if family == "gaussian":
+                if name not in gaussian_response_states:
+                    raise RuntimeError(
+                        f"Gaussian component {name!r} lacks predictive response state"
+                    )
+                response_mean, response_interval = (
+                    _gaussian_predictive_response_summary(
+                        gaussian_response_states[name],
+                        weight=selection.weight,
+                        ci_level=ci_level,
+                    )
+                )
+                probability["response_predictive_mean"] = response_mean
+                probability["response_predictive_lo"] = response_interval[0]
+                probability["response_predictive_hi"] = response_interval[1]
             diagnostics = {
                 **components[name].diagnostics,
                 "predictive_stacking_weight": selection.weight,
@@ -1457,6 +2012,15 @@ def _apply_componentwise_stacking(
                     selection.validation_depth_m
                 ),
             }
+            if family == "gaussian":
+                diagnostics.update(
+                    {
+                        "response_summary_estimand": (
+                            "stacked_posterior_predictive_response"
+                        ),
+                        "response_interval_includes_likelihood_variance": True,
+                    }
+                )
             components[name] = ComponentProbability(
                 probability=probability,
                 model=components[name].model,
@@ -1539,6 +2103,219 @@ def _restore_streaming_posterior_states(
     return fitted_state, prior_states, evidence_diagnostics
 
 
+def _update_analysis_hash(
+    digest: Any,
+    name: str,
+    payload: bytes,
+) -> None:
+    """Add one length-delimited field to an analysis-input digest."""
+    for value in (name.encode("utf-8"), payload):
+        digest.update(len(value).to_bytes(8, byteorder="big", signed=False))
+        digest.update(value)
+
+
+def _update_analysis_json(digest: Any, name: str, value: Any) -> None:
+    """Hash one strict canonical JSON field."""
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    _update_analysis_hash(digest, name, payload)
+
+
+def _update_analysis_array(
+    digest: Any,
+    name: str,
+    values: np.ndarray | None,
+    *,
+    dtype: np.dtype[Any],
+) -> None:
+    """Hash one optional numeric array in a platform-independent encoding."""
+    if values is None:
+        _update_analysis_json(digest, name, None)
+        return
+    array = np.ascontiguousarray(np.asarray(values, dtype=dtype))
+    if (
+        np.issubdtype(array.dtype, np.floating)
+        and not np.isfinite(array).all()
+    ):
+        raise ValueError(f"analysis input {name!r} must contain finite values")
+    _update_analysis_json(
+        digest,
+        f"{name}.array",
+        {"dtype": array.dtype.str, "shape": list(array.shape)},
+    )
+    _update_analysis_hash(digest, f"{name}.bytes", array.tobytes(order="C"))
+
+
+def _canonical_well_identifiers(values: np.ndarray) -> list[list[Any]]:
+    """Encode supported well identifiers without object-memory or repr hashing."""
+    identifiers: list[list[Any]] = []
+    for raw_value in np.asarray(values).tolist():
+        value = (
+            raw_value.item()
+            if isinstance(raw_value, np.generic)
+            else raw_value
+        )
+        if isinstance(value, bool):
+            identifiers.append(["bool", value])
+        elif isinstance(value, int):
+            identifiers.append(["integer", str(value)])
+        elif isinstance(value, float):
+            if not np.isfinite(value):
+                raise ValueError("well identifiers cannot be non-finite")
+            identifiers.append(["float", value.hex()])
+        elif isinstance(value, str):
+            identifiers.append(["string", value])
+        else:
+            raise TypeError(
+                "well identifiers must be strings, integers, booleans, or "
+                "finite floating-point values"
+            )
+    return identifiers
+
+
+def _streaming_analysis_input_sha256(  # noqa: PLR0913
+    *,
+    grid_gdf: gpd.GeoDataFrame,
+    ordered_names: tuple[str, ...],
+    prior_names: tuple[str, ...],
+    prior_logit: np.ndarray,
+    assembled: AssembledInputs | None,
+    evidence_design: JointEvidenceDesign | None,
+    prior_states: Mapping[str, PriorPredictiveEvidenceState | None],
+    nc: int,
+    a_wght: float | None,
+) -> str:
+    """Fingerprint every value that defines a streamed Bayesian analysis."""
+    fitted_names = () if assembled is None else assembled.component_names
+    if set(fitted_names).intersection(prior_names) or set(
+        ordered_names
+    ) != set(fitted_names).union(prior_names):
+        raise ValueError(
+            "streamed Bayesian fitted and prior-only component roles are inconsistent"
+        )
+    if set(prior_states) != set(prior_names):
+        raise ValueError(
+            "streamed Bayesian prior state does not match prior-only components"
+        )
+    roles = {
+        name: (
+            "joint_posterior"
+            if name in fitted_names
+            else (
+                "fixed_prior_predictive"
+                if prior_states[name] is None
+                else "evidence_coefficient_prior_predictive"
+            )
+        )
+        for name in ordered_names
+    }
+    digest = hashlib.sha256()
+    _update_analysis_json(
+        digest,
+        "analysis",
+        {
+            "schema": "geopfa_streamed_bayesian_analysis_inputs_v1",
+            "component_names": list(ordered_names),
+            "component_roles": roles,
+            "nc": int(nc),
+            "a_wght": a_wght,
+            "grid_crs": (
+                None if grid_gdf.crs is None else grid_gdf.crs.to_string()
+            ),
+        },
+    )
+    _update_analysis_array(
+        digest,
+        "prediction_coordinates",
+        extract_coordinates(grid_gdf),
+        dtype=np.dtype("<f8"),
+    )
+    _update_analysis_array(
+        digest, "prior_logit", prior_logit, dtype=np.dtype("<f8")
+    )
+
+    if assembled is None:
+        _update_analysis_json(digest, "fitted_inputs", None)
+    else:
+        observed = np.asarray(assembled.observed_mask, dtype=bool)
+        outcomes = np.where(observed, assembled.y, 0.0)
+        _update_analysis_json(
+            digest,
+            "fitted_component_names",
+            list(assembled.component_names),
+        )
+        _update_analysis_array(
+            digest, "outcomes", outcomes, dtype=np.dtype("<f8")
+        )
+        _update_analysis_array(
+            digest,
+            "observed_mask",
+            observed,
+            dtype=np.dtype("u1"),
+        )
+        _update_analysis_json(
+            digest,
+            "well_ids",
+            _canonical_well_identifiers(assembled.well_ids),
+        )
+        for name, values in (
+            ("well_coordinates", assembled.well_coords),
+            ("model_grid_coordinates", assembled.grid_coords),
+            ("well_offsets", assembled.well_offsets),
+            ("grid_offsets", assembled.grid_offsets),
+            ("well_depths_m", assembled.well_depths_m),
+        ):
+            _update_analysis_array(digest, name, values, dtype=np.dtype("<f8"))
+        _update_analysis_json(
+            digest,
+            "evidence_layer_names",
+            {
+                name: list(assembled.layer_names[name])
+                for name in assembled.component_names
+            },
+        )
+        if evidence_design is None:
+            raise RuntimeError(
+                "fitted Bayesian components require an evidence design"
+            )
+        for name, values in (
+            ("evidence_train", evidence_design.train),
+            ("evidence_prediction", evidence_design.prediction),
+            ("evidence_precision", evidence_design.precision),
+            ("evidence_prior_mean", evidence_design.prior_mean),
+        ):
+            _update_analysis_array(digest, name, values, dtype=np.dtype("<f8"))
+
+    for name in prior_names:
+        state = prior_states[name]
+        if state is None:
+            _update_analysis_json(digest, f"prior_state.{name}", None)
+            continue
+        _update_analysis_json(
+            digest,
+            f"prior_state.{name}.feature_names",
+            list(state.feature_names),
+        )
+        _update_analysis_array(
+            digest,
+            f"prior_state.{name}.standardized_evidence",
+            state.standardized_evidence,
+            dtype=np.dtype("<f8"),
+        )
+        _update_analysis_array(
+            digest,
+            f"prior_state.{name}.coefficient_draws",
+            state.coefficient_draws,
+            dtype=np.dtype("<f8"),
+        )
+    return digest.hexdigest()
+
+
 def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, PLR0917
     assembled: AssembledInputs | None,
     grid_gdf: gpd.GeoDataFrame,
@@ -1559,12 +2336,34 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
     n_draws = bayes_cfg.n_draws
     n_cells = len(grid_gdf)
     q_total = len(ordered_names)
-    prior_logit = np.column_stack(
-        [
-            np.asarray(alphas[name].grid_offset, dtype=np.float64)
-            for name in ordered_names
-        ]
-    )
+    prior_names = tuple(sorted(prior_only_names))
+    gaussian_prior_responses: dict[str, _GaussianPriorResponseState] = {}
+    prior_logit_columns: list[NDArray[np.float64]] = []
+    for name in ordered_names:
+        if name in prior_names and _is_gaussian_component(cfg, name):
+            response = _gaussian_prior_response_on_reference(
+                grid_gdf,
+                adapter.pr_norm(name),
+                alphas[name],
+                component_name=name,
+            )
+            gaussian_prior_responses[name] = response
+            prior_logit_columns.append(
+                np.log(
+                    response.event_probability
+                    / (1.0 - response.event_probability)
+                )
+            )
+        else:
+            prior_logit_columns.append(
+                _component_values_on_reference(
+                    grid_gdf,
+                    adapter.pr_norm(name),
+                    alphas[name].grid_offset,
+                    context=f"component {name!r} prior grid",
+                )
+            )
+    prior_logit = np.column_stack(prior_logit_columns)
     if prior_logit.shape != (n_cells, q_total) or not np.all(
         np.isfinite(prior_logit)
     ):
@@ -1572,14 +2371,56 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
             "Bayesian component priors do not share one finite grid"
         )
 
-    prior_names = tuple(sorted(prior_only_names))
+    model_a_wght = (
+        None
+        if assembled is None
+        else _resolve_a_wght(assembled.well_coords.shape[1], a_wght)
+    )
+    current_prior_states: dict[str, PriorPredictiveEvidenceState | None] = {}
+    fitted_family_count = int(assembled is not None)
+    child_seeds = _spawn_child_seeds(
+        bayes_cfg.seed, fitted_family_count + len(prior_names)
+    )
+    fitted_seed = child_seeds[0] if fitted_family_count else None
+    fitted_bayes_cfg = (
+        bayes_cfg
+        if fitted_seed is None
+        else replace(bayes_cfg, seed=fitted_seed)
+    )
+    prior_seeds = child_seeds[fitted_family_count:]
+    for name, component_seed in zip(prior_names, prior_seeds, strict=True):
+        if cfg.alpha[name].use_evidence_prior:
+            current_prior_states[name] = _prior_predictive_evidence_state(
+                adapter,
+                name,
+                alphas[name],
+                cfg,
+                seed=component_seed,
+                reference_grid=grid_gdf,
+            )
+        else:
+            current_prior_states[name] = None
+    analysis_input_sha256 = _streaming_analysis_input_sha256(
+        grid_gdf=grid_gdf,
+        ordered_names=ordered_names,
+        prior_names=prior_names,
+        prior_logit=prior_logit,
+        assembled=assembled,
+        evidence_design=evidence_design,
+        prior_states=current_prior_states,
+        nc=nc,
+        a_wght=model_a_wght,
+    )
     config_hash = hashlib.sha256(
         json.dumps(cfg.to_dict(), sort_keys=True, default=str).encode("utf-8")
     ).hexdigest()
+    implementation_sha256 = _probabilistic_implementation_hash()
     persisted = load_posterior_draw_state(
         cfg.output_dir,
         grid_gdf,
         expected_config_hash=config_hash,
+        expected_analysis_input_sha256=analysis_input_sha256,
+        expected_implementation_sha256=implementation_sha256,
         expected_scope=scope,
     )
     if persisted is not None:
@@ -1602,15 +2443,12 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 raise RuntimeError(
                     "fitted Bayesian components require an evidence design"
                 )
-            model_a_wght = _resolve_a_wght(
-                assembled.well_coords.shape[1], a_wght
-            )
             fitted_state = fit_gblk_bayesian_posterior_state(
                 assembled.well_coords,
                 assembled.y,
                 assembled.grid_coords,
                 component_names=assembled.component_names,
-                bayes_config=bayes_cfg,
+                bayes_config=fitted_bayes_cfg,
                 observed_mask=assembled.observed_mask,
                 offsets=assembled.well_offsets,
                 grid_offsets=assembled.grid_offsets,
@@ -1618,6 +2456,7 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 fixed_effects_grid=evidence_design.prediction,
                 fixed_precision=evidence_design.precision,
                 fixed_prior_mean=evidence_design.prior_mean,
+                spatial_domain=_spatial_domain_bounds(assembled),
                 nc=nc,
                 nlevel=cfg.spatial_field.n_levels,
                 a_wght=model_a_wght,
@@ -1625,25 +2464,14 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
             )
             evidence_diagnostics = evidence_design.diagnostics
 
-        prior_states = {}
-        prior_seeds = _spawn_child_seeds(bayes_cfg.seed, len(prior_names))
-        for name, component_seed in zip(prior_names, prior_seeds, strict=True):
-            prior_grid = adapter.pr_norm(name)
-            if not prior_grid.geometry.equals(grid_gdf.geometry):
-                raise GEOPFAValueError(
-                    f"component {name!r} prior grid does not match the Bayesian prediction grid"
-                )
-            if cfg.alpha[name].use_evidence_prior:
-                prior_states[name] = _prior_predictive_evidence_state(
-                    adapter, name, alphas[name], cfg, seed=component_seed
-                )
-            else:
-                prior_states[name] = None
+        prior_states = current_prior_states
 
         state_arrays = {"prior_logit": prior_logit}
         state_metadata = {
             "scope": scope,
             "config_hash": config_hash,
+            "analysis_input_sha256": analysis_input_sha256,
+            "implementation_sha256": implementation_sha256,
             "ci_level": bayes_cfg.ci_level,
             "component_roles": {},
             "fitted_component_names": (
@@ -1849,6 +2677,16 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 probability_hi=summary.component_interval[1, :, q_index],
             )
         )
+        if name in prior_names and _is_gaussian_component(cfg, name):
+            probability, gaussian_diagnostics = (
+                _package_gaussian_prior_response(
+                    probability,
+                    response=gaussian_prior_responses[name],
+                    ci_level=bayes_cfg.ci_level,
+                    component_name=name,
+                )
+            )
+            diagnostics = {**diagnostics, **gaussian_diagnostics}
         components[name] = ComponentProbability(
             probability=probability,
             model=model,
@@ -1878,7 +2716,7 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     cfg: ProbabilisticConfig,
     *,
     criteria: str = "geologic",
-    nc: int = 6,
+    nc: int | None = None,
     a_wght: float | None = None,
     max_outer_iter: int = 100,
     irls_max_iter: int = 50,
@@ -1901,8 +2739,9 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     criteria
         Criteria key to operate on, default ``"geologic"``.
     nc
-        LatticeKrig lattice centers per dimension passed to
-        :func:`~geopfa.prob.gblk_backend.fit_gblk_joint`.
+        Optional assertion of the configured LatticeKrig centers per dimension.
+        When omitted, ``spatial_field.lattice_centers_per_dimension`` is used;
+        a conflicting value is rejected.
     a_wght
         SAR center weight forwarded to the GBLK fitter. When omitted, the
         positive-definite defaults are 4.5 in 2-D and 8.0 in 3-D.
@@ -1921,6 +2760,12 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     _validate_gblk_config(cfg)
     if not cfg.enabled:
         return ProbabilisticResult(config=cfg, skipped=True)
+    nc = _resolve_config_integer(
+        nc,
+        configured=cfg.spatial_field.lattice_centers_per_dimension,
+        argument="nc",
+        config_path="spatial_field.lattice_centers_per_dimension",
+    )
     if cfg.labels.pu_mode == "nnpu":
         raise GEOPFAValueError(
             "nnPU is currently supported by the sequential outcome model only; "
@@ -1928,10 +2773,25 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         )
 
     adapter = PFAGridAdapter(pfa, criteria=criteria, dimensions=cfg.dimensions)
-    validate_declared_components(
-        adapter,
-        set(cfg.labels.label_columns) | set(cfg.alpha),
+    grid_gdf = _canonical_prediction_grid(adapter, cfg)
+    uses_metric_stacking_controls = (
+        cfg.inference.predictive_stacking.enabled
+        and (
+            cfg.cross_validation.buffer_km > 0.0
+            or cfg.cross_validation.block_size_km is not None
+        )
     )
+    if (
+        cfg.spatial_field.enabled
+        and cfg.spatial_field.coordinate_scaling == "physical_isotropic"
+    ) or uses_metric_stacking_controls:
+        _require_projected_metre_crs(
+            grid_gdf,
+            context=(
+                "physical-isotropic spatial scaling and kilometre-based "
+                "spatial validation controls"
+            ),
+        )
 
     alphas: dict[str, AlphaCResult] = {}
     for name in adapter.components():
@@ -1973,15 +2833,14 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             ),
         )
         assembled_groups = _assemble_likelihood_groups(
-            adapter, fitted_labels, fit_alphas, cfg
+            adapter,
+            fitted_labels,
+            fit_alphas,
+            cfg,
+            reference_grid=grid_gdf,
         )
     assembled = assembled_groups.get("bernoulli")
-    first_assembled = next(iter(assembled_groups.values()), None)
-    if first_assembled is not None and first_assembled.component_names:
-        grid_gdf = adapter.pr_norm(first_assembled.component_names[0])
-    elif prior_only_names:
-        grid_gdf = adapter.pr_norm(prior_only_names[0])
-    else:
+    if not assembled_groups and not prior_only_names:
         raise GEOPFAValueError(
             "GBLK requires at least one labeled or force-prior-predictive component"
         )
@@ -2016,24 +2875,24 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             )
         components: dict[str, ComponentProbability] = {}
         component_draws: dict[str, NDArray[np.float64]] = {}
+        gaussian_response_states: dict[
+            str, _GaussianPredictiveResponseState
+        ] = {}
         fit_families = tuple(sorted(assembled_groups))
-        family_configs = dict.fromkeys(
-            fit_families, cfg.inference.gblk_bayesian
+        prior_names = tuple(sorted(prior_only_names))
+        child_seeds = _spawn_child_seeds(
+            cfg.inference.gblk_bayesian.seed,
+            len(fit_families) + len(prior_names),
         )
-        if len(fit_families) > 1:
-            family_seeds = _spawn_child_seeds(
-                cfg.inference.gblk_bayesian.seed,
-                len(fit_families),
+        family_seeds = child_seeds[: len(fit_families)]
+        prior_seeds = child_seeds[len(fit_families) :]
+        family_configs = {
+            family: replace(
+                cfg.inference.gblk_bayesian,
+                seed=seed,
             )
-            family_configs = {
-                family: replace(
-                    cfg.inference.gblk_bayesian,
-                    seed=seed,
-                )
-                for family, seed in zip(
-                    fit_families, family_seeds, strict=True
-                )
-            }
+            for family, seed in zip(fit_families, family_seeds, strict=True)
+        }
         if assembled is not None:
             evidence_design = _prepare_joint_evidence(assembled, cfg)
             model_a_wght = _resolve_a_wght(
@@ -2054,20 +2913,17 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             )
         gaussian_assembled = assembled_groups.get("gaussian")
         if gaussian_assembled is not None:
-            gaussian_grid = adapter.pr_norm(
-                gaussian_assembled.component_names[0]
-            )
-            if not gaussian_grid.geometry.equals(grid_gdf.geometry):
-                raise GEOPFAValueError(
-                    "Gaussian and Bernoulli components must share a prediction grid"
-                )
             gaussian_evidence = _prepare_joint_evidence(
                 gaussian_assembled, cfg
             )
             model_a_wght = _resolve_a_wght(
                 gaussian_assembled.well_coords.shape[1], a_wght
             )
-            gaussian_components, gaussian_draws = _run_gblk_gaussian_bayesian(
+            (
+                gaussian_components,
+                gaussian_draws,
+                gaussian_response_states,
+            ) = _run_gblk_gaussian_bayesian(
                 gaussian_assembled,
                 grid_gdf,
                 alphas,
@@ -2081,19 +2937,10 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             )
             components.update(gaussian_components)
             component_draws.update(gaussian_draws)
-        prior_names = sorted(prior_only_names)
-        prior_seeds = _spawn_child_seeds(
-            cfg.inference.gblk_bayesian.seed,
-            len(prior_names),
-        )
         tail = (1.0 - cfg.inference.gblk_bayesian.ci_level) / 2.0
         for name, component_seed in zip(prior_names, prior_seeds, strict=True):
             prior_grid = adapter.pr_norm(name)
-            if not prior_grid.geometry.equals(grid_gdf.geometry):
-                raise GEOPFAValueError(
-                    f"component {name!r} prior grid does not match the "
-                    "Bayesian prediction grid"
-                )
+            gaussian_prior_response: _GaussianPriorResponseState | None = None
             if cfg.alpha[name].use_evidence_prior:
                 prior_draws = _prior_predictive_evidence_draws(
                     adapter,
@@ -2101,13 +2948,32 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                     alphas[name],
                     cfg,
                     seed=component_seed,
+                    reference_grid=grid_gdf,
                 )
                 draws = prior_draws.probability_draws
                 feature_names = prior_draws.feature_names
                 diagnostics = prior_draws.diagnostics
                 model: Any = prior_draws
             else:
-                baseline = expit(alphas[name].grid_offset)
+                if _is_gaussian_component(cfg, name):
+                    gaussian_prior_response = (
+                        _gaussian_prior_response_on_reference(
+                            grid_gdf,
+                            prior_grid,
+                            alphas[name],
+                            component_name=name,
+                        )
+                    )
+                    baseline = gaussian_prior_response.event_probability
+                else:
+                    baseline = expit(
+                        _component_values_on_reference(
+                            grid_gdf,
+                            prior_grid,
+                            alphas[name].grid_offset,
+                            context=f"component {name!r} prior grid",
+                        )
+                    )
                 draws = np.broadcast_to(
                     baseline,
                     (
@@ -2127,7 +2993,7 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             component_draws[name] = draws
             interval = np.quantile(draws, [tail, 1.0 - tail], axis=0)
             probability = (
-                prior_grid[["geometry"]]
+                grid_gdf[["geometry"]]
                 .copy()
                 .assign(
                     probability=draws.mean(axis=0),
@@ -2135,12 +3001,28 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                     probability_hi=interval[1],
                 )
             )
+            if _is_gaussian_component(cfg, name):
+                if gaussian_prior_response is None:
+                    raise RuntimeError(
+                        f"Gaussian prior-only component {name!r} lacks an "
+                        "aligned response state"
+                    )
+                probability, gaussian_diagnostics = (
+                    _package_gaussian_prior_response(
+                        probability,
+                        response=gaussian_prior_response,
+                        ci_level=cfg.inference.gblk_bayesian.ci_level,
+                        component_name=name,
+                    )
+                )
+                diagnostics = {**diagnostics, **gaussian_diagnostics}
             components[name] = ComponentProbability(
                 probability=probability,
                 model=model,
                 feature_names=feature_names,
                 diagnostics=diagnostics,
             )
+        stacking: dict[str, PredictiveStackingResult] = {}
         if cfg.inference.predictive_stacking.enabled:
             stacking = _estimate_predictive_stacking(
                 assembled_groups,
@@ -2153,6 +3035,7 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 component_draws,
                 assembled_groups,
                 stacking,
+                gaussian_response_states,
                 ci_level=cfg.inference.gblk_bayesian.ci_level,
             )
         ordered_names = tuple(sorted(components))
@@ -2163,9 +3046,8 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         paired_draws = np.stack(
             [component_draws[name] for name in ordered_names], axis=2
         )
-        joint_draws = _combine_probability_columns(
+        joint_draws = _component_probability_product(
             paired_draws.reshape(-1, paired_draws.shape[2]),
-            cfg.combination.rule,
         ).reshape(paired_draws.shape[:2])
         joint_interval = np.quantile(joint_draws, [tail, 1.0 - tail], axis=0)
         combined = (
@@ -2182,6 +3064,7 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             combined=combined,
             component_probability_draws=component_draws,
             combined_probability_draws=joint_draws,
+            predictive_stacking=stacking,
             config=cfg,
             skipped=False,
         )
@@ -2212,6 +3095,7 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 fixed_effects_grid=evidence_design.prediction,
                 fixed_precision=evidence_design.precision,
                 fixed_prior_mean=evidence_design.prior_mean,
+                spatial_domain=_spatial_domain_bounds(assembled),
                 nc=nc,
                 nlevel=cfg.spatial_field.n_levels,
                 a_wght=model_a_wght,
@@ -2267,14 +3151,49 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             )
 
     for name in prior_only_names:
-        prior_gdf = adapter.pr_norm(name)[["geometry"]].copy()
-        prior_gdf["probability"] = expit(alphas[name].grid_offset)
+        prior_gdf = grid_gdf[["geometry"]].copy()
+        gaussian_prior_response: _GaussianPriorResponseState | None = None
+        if _is_gaussian_component(cfg, name):
+            gaussian_prior_response = _gaussian_prior_response_on_reference(
+                grid_gdf,
+                adapter.pr_norm(name),
+                alphas[name],
+                component_name=name,
+            )
+            prior_gdf["probability"] = (
+                gaussian_prior_response.event_probability
+            )
+        else:
+            prior_gdf["probability"] = expit(
+                _component_values_on_reference(
+                    grid_gdf,
+                    adapter.pr_norm(name),
+                    alphas[name].grid_offset,
+                    context=f"component {name!r} prior grid",
+                )
+            )
         feature_names: tuple[str, ...] = ()
         diagnostics = {
             "inference_role": "prior_predictive",
             "outcome_update": False,
             "spatial_field_included": False,
+            "alpha_provenance": alphas[name].provenance,
         }
+        if _is_gaussian_component(cfg, name):
+            if (
+                gaussian_prior_response is None
+            ):  # pragma: no cover - guarded above
+                raise RuntimeError(
+                    f"Gaussian prior-only component {name!r} lacks an "
+                    "aligned response state"
+                )
+            prior_gdf, gaussian_diagnostics = _package_gaussian_prior_response(
+                prior_gdf,
+                response=gaussian_prior_response,
+                ci_level=cfg.inference.gblk_bayesian.ci_level,
+                component_name=name,
+            )
+            diagnostics.update(gaussian_diagnostics)
         components[name] = ComponentProbability(
             probability=prior_gdf,
             model=None,
@@ -2289,8 +3208,8 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             for name in sorted(components)
         ]
     )
-    combined["probability"] = _combine_probability_columns(
-        component_probability, cfg.combination.rule
+    combined["probability"] = _component_probability_product(
+        component_probability
     )
 
     return ProbabilisticResult(
@@ -2318,11 +3237,6 @@ def freeze_gblk_forward_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     probability generally cannot be decomposed into a single linear predictor.
     """
     _validate_gblk_config(cfg)
-    if cfg.combination.rule != "product":
-        raise GEOPFAValueError(
-            "frozen GBLK forward state currently represents only the product "
-            "combination rule"
-        )
     if cfg.inference.gblk_bayesian.enabled:
         raise GEOPFAValueError(
             "freeze_gblk_forward_state requires a deterministic GBLK MAP fit; "
@@ -2332,6 +3246,18 @@ def freeze_gblk_forward_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         raise GEOPFAValueError("cannot freeze an empty GBLK result")
 
     adapter = PFAGridAdapter(pfa, criteria=criteria, dimensions=cfg.dimensions)
+    grid_gdf = _canonical_prediction_grid(adapter, cfg)
+    require_same_grid(
+        grid_gdf,
+        result.combined,
+        context="frozen result combined surface",
+    )
+    for name, component in result.components.items():
+        require_same_grid(
+            grid_gdf,
+            component.probability,
+            context=f"frozen result component {name!r}",
+        )
     loaded_labels = load_labels(cfg.labels)
     alphas: dict[str, AlphaCResult] = {}
     for name in adapter.components():
@@ -2372,6 +3298,7 @@ def freeze_gblk_forward_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         fitted_labels,
         fit_alphas,
         evidence_config=cfg.evidence,
+        reference_grid=grid_gdf,
     )
     evidence_design = _prepare_joint_evidence(assembled, cfg)
     component_names = tuple(sorted(result.components))
@@ -2392,7 +3319,12 @@ def freeze_gblk_forward_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
 
     for component_index, name in enumerate(component_names):
         if name in prior_only_names:
-            prior_logit[:, component_index] = alphas[name].grid_offset
+            prior_logit[:, component_index] = _component_values_on_reference(
+                grid_gdf,
+                adapter.pr_norm(name),
+                alphas[name].grid_offset,
+                context=f"component {name!r} frozen prior grid",
+            )
             continue
         if name not in assembled.component_names:
             raise GEOPFAValueError(
@@ -2479,6 +3411,7 @@ def _assemble_from_config(
 ) -> AssembledInputs:
     """Build :class:`AssembledInputs` from a ``pfa`` dict and config."""
     adapter = PFAGridAdapter(pfa, criteria=criteria, dimensions=cfg.dimensions)
+    grid_gdf = _canonical_prediction_grid(adapter, cfg)
     loaded_labels = load_labels(cfg.labels)
 
     alphas: dict[str, AlphaCResult] = {}
@@ -2515,10 +3448,11 @@ def _assemble_from_config(
         fitted_labels,
         fit_alphas,
         evidence_config=cfg.evidence,
+        reference_grid=grid_gdf,
     )
 
 
-def _cv_evidence_only_offsets(  # noqa: PLR0913
+def _cv_evidence_only_offsets(  # noqa: PLR0913, PLR0914
     assembled: AssembledInputs,
     row_idx: NDArray[np.intp],
     component_indices: tuple[int, ...],
@@ -2527,11 +3461,13 @@ def _cv_evidence_only_offsets(  # noqa: PLR0913
     *,
     cfg: ProbabilisticConfig,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
-    """Fit the evidence-only CV ablation on the joint model's labeled rows."""
-    train_offsets = assembled.well_offsets[row_idx[train_mask]][
+    """Fit the evidence-only CV ablation with componentwise missingness."""
+    train_rows = row_idx[train_mask]
+    test_rows = row_idx[test_mask]
+    train_offsets = assembled.well_offsets[train_rows][
         :, component_indices
     ].copy()
-    test_offsets = assembled.well_offsets[row_idx[test_mask]][
+    test_offsets = assembled.well_offsets[test_rows][
         :, component_indices
     ].copy()
     for local_idx, q_idx in enumerate(component_indices):
@@ -2541,21 +3477,29 @@ def _cv_evidence_only_offsets(  # noqa: PLR0913
             continue
         x_train = x_all[train_mask]
         x_test = x_all[test_mask]
+        observed_train = assembled.observed_mask[train_rows, q_idx]
         train_scaled, test_scaled, *_ = _standardize_partial_evidence(
             x_train,
             x_test,
-            np.ones(x_train.shape[0], dtype=bool),
+            observed_train,
+            assembled.well_ids[train_rows],
             component_name=name,
             layer_names=assembled.layer_names[name],
-            minimum_count=cfg.labels.min_wells_for_fit,
+            minimum_wells=cfg.labels.min_wells_for_fit,
+            standardization=cfg.evidence.standardization,
+            prediction_support=(
+                assembled.grid_evidence[name]
+                if cfg.evidence.standardization == "prediction_support"
+                else None
+            ),
         )
         weights, prior_means = _resolved_evidence_prior(
             cfg, assembled.layer_names[name], component=name
         )
         fit = _fit_offset_logit(
-            train_scaled,
-            assembled.y[row_idx[train_mask], q_idx],
-            train_offsets[:, local_idx],
+            train_scaled[observed_train],
+            assembled.y[train_rows, q_idx][observed_train],
+            train_offsets[observed_train, local_idx],
             regularization=1.0 / cfg.evidence.regularization.C,
             per_feature_weights=weights,
             prior_means=prior_means,
@@ -2600,7 +3544,18 @@ def _cv_joint_evidence(  # noqa: PLR0913
         observed_train=assembled.observed_mask[train_rows][
             :, component_indices
         ],
+        well_ids=assembled.well_ids[train_rows],
         cfg=cfg,
+        standardization_evidence=(
+            {
+                name: np.asarray(
+                    assembled.grid_evidence[name], dtype=np.float64
+                )
+                for name in names
+            }
+            if cfg.evidence.standardization == "prediction_support"
+            else None
+        ),
     )
 
 
@@ -2609,7 +3564,6 @@ def _make_fit_fn(  # noqa: PLR0913
     row_idx: NDArray[np.intp],
     component_indices: tuple[int, ...],
     *,
-    target: str | int,
     cfg: ProbabilisticConfig,
     nc: int,
     nlevel: int,
@@ -2617,17 +3571,13 @@ def _make_fit_fn(  # noqa: PLR0913
     max_outer_iter: int,
     irls_max_iter: int,
 ):
-    """Build a ``calibration_cv``-compatible ``fit_fn``.
-
-    ``target`` is either ``"joint"`` (return ``p_joint`` at test wells) or
-    an integer component index (return ``p_q`` at test wells for that
-    component).
-    """
+    """Build one full-component fold fit returning all test probabilities."""
     coords_lab = assembled.well_coords[row_idx]
     y_lab = assembled.y[row_idx][:, component_indices]
     component_names = tuple(
         assembled.component_names[q] for q in component_indices
     )
+    spatial_domain = _spatial_domain_bounds(assembled)
 
     def fit_fn(
         train_mask: NDArray[np.bool_], test_mask: NDArray[np.bool_]
@@ -2643,12 +3593,7 @@ def _make_fit_fn(  # noqa: PLR0913
                 test_mask,
                 cfg=cfg,
             )
-            probabilities = expit(test_offsets)
-            if target == "joint":
-                return _combine_probability_columns(
-                    probabilities, cfg.combination.rule
-                )
-            return probabilities[:, int(target)]
+            return expit(test_offsets)
         evidence_design = _cv_joint_evidence(
             assembled,
             row_idx,
@@ -2663,19 +3608,24 @@ def _make_fit_fn(  # noqa: PLR0913
         test_offsets = assembled.well_offsets[row_idx[test_mask]][
             :, component_indices
         ]
+        observed_train = assembled.observed_mask[row_idx[train_mask]][
+            :, component_indices
+        ]
         model_a_wght = _resolve_a_wght(coords_lab.shape[1], a_wght)
         fit = fit_gblk_joint(
             coords_lab[train_mask],
             y_lab[train_mask],
             coords_lab[test_mask],
             component_names=component_names,
-            labeled_mask=None,
+            labeled_mask=np.any(observed_train, axis=1),
+            observed_mask=observed_train,
             offsets=train_offsets,
             grid_offsets=test_offsets,
             fixed_effects=evidence_design.train,
             fixed_effects_grid=evidence_design.prediction,
             fixed_precision=evidence_design.precision,
             fixed_prior_mean=evidence_design.prior_mean,
+            spatial_domain=spatial_domain,
             nc=nc,
             nlevel=nlevel,
             a_wght=model_a_wght,
@@ -2683,11 +3633,7 @@ def _make_fit_fn(  # noqa: PLR0913
             max_outer_iter=max_outer_iter,
             irls_max_iter=irls_max_iter,
         )
-        if target == "joint":
-            return _combine_probability_columns(
-                fit.p_q_grid, cfg.combination.rule
-            )
-        return fit.p_q_grid[:, int(target)]
+        return np.asarray(fit.p_q_grid, dtype=np.float64)
 
     return fit_fn
 
@@ -2806,9 +3752,9 @@ def run_gblk_calibration_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     *,
     criteria: str = "geologic",
     n_folds: int | None = None,
-    n_bins: int = 10,
+    n_bins: int | None = None,
     random_state: int = 0,
-    nc: int = 6,
+    nc: int | None = None,
     a_wght: float | None = None,
     max_outer_iter: int = 100,
     irls_max_iter: int = 50,
@@ -2837,13 +3783,16 @@ def run_gblk_calibration_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         Criteria key to operate on, default ``"geologic"``.
     n_folds : int, default=5
         Number of spatial CV folds.
-    n_bins : int, default=10
-        Reliability-diagram bin count.
+    n_bins : int, optional
+        Optional assertion of ``calibration.n_bins``. The configured value is
+        used when omitted; a conflicting value is rejected.
     random_state : int, default=0
         Seed for the block permutation; also used to seed each per-target
         call so all results share fold assignments.
-    nc : int, default=6
-        LatticeKrig lattice centers per dimension.
+    nc : int, optional
+        Optional assertion of
+        ``spatial_field.lattice_centers_per_dimension``. The configured value
+        is used when omitted; a conflicting value is rejected.
     a_wght : float, optional
         SAR center weight. Defaults to 4.5 in 2-D and 8.0 in 3-D.
     max_outer_iter : int, default=100
@@ -2856,13 +3805,9 @@ def run_gblk_calibration_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         Restrict calibration-CV to this subset of names (from the
         model's component names, plus the literal ``"joint"``). Each
         component metric uses that component's observed labels; ``"joint"``
-        uses complete cases for all fitted components. Use this when one or more
-        components have too few (or class-degenerate) real labels to
-        support an identifiable calibration-CV metric — e.g. a
-        producibility or insulation layer with a single labeled well —
-        while another component (e.g. heat) has enough labels for an
-        honest reliability check. Defaults to ``None``, which computes
-        every component plus ``"joint"`` (previous behavior).
+        uses complete cases for all fitted components. This controls reported
+        metrics only; every fold still refits the complete same-family model.
+        Defaults to ``None``, which computes every component plus ``"joint"``.
 
     Returns
     -------
@@ -2881,8 +3826,11 @@ def run_gblk_calibration_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
 
     Notes
     -----
-    Per-component diagnostics use that component's observed-label mask. Joint
-    diagnostics use complete-case rows and element-wise products across the
+    One grouped spatial fold plan is built over the union of component-label
+    observations. Each fold refits the complete same-family model with its
+    componentwise observation mask. Per-component diagnostics then slice the
+    shared out-of-fold predictions to that component's observed rows; joint
+    diagnostics slice complete-case rows and use element-wise products across
     component labels. Evidence effects are estimated anew inside every training
     fold so held-out outcomes cannot leak into predictions.
     """
@@ -2902,6 +3850,18 @@ def run_gblk_calibration_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             "deterministic calibration runner; fit Bayesian replicates through "
             "the canonical fit_gblk_bayesian_joint path"
         )
+    n_bins = _resolve_config_integer(
+        n_bins,
+        configured=cfg.calibration.n_bins,
+        argument="n_bins",
+        config_path="calibration.n_bins",
+    )
+    nc = _resolve_config_integer(
+        nc,
+        configured=cfg.spatial_field.lattice_centers_per_dimension,
+        argument="nc",
+        config_path="spatial_field.lattice_centers_per_dimension",
+    )
     if n_folds is None:
         effective_n_folds = cfg.cross_validation.n_folds
     elif isinstance(n_folds, bool | np.bool_) or not isinstance(
@@ -2913,24 +3873,21 @@ def run_gblk_calibration_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     if (
         cfg.cross_validation.buffer_km > 0.0
         or cfg.cross_validation.block_size_km is not None
+        or (
+            cfg.spatial_field.enabled
+            and cfg.spatial_field.coordinate_scaling == "physical_isotropic"
+        )
     ):
         adapter = PFAGridAdapter(
             pfa, criteria=criteria, dimensions=cfg.dimensions
         )
-        first_component = adapter.components()[0]
-        crs = adapter.pr_norm(first_component).crs
-        if (
-            crs is None
-            or not crs.is_projected
-            or any(
-                axis.unit_name.lower() not in {"metre", "meter"}
-                for axis in crs.axis_info[:2]
-            )
-        ):
-            raise GEOPFAValueError(
-                "cross_validation block_size_km/buffer_km controls require a "
-                "projected metre-based CRS"
-            )
+        _require_projected_metre_crs(
+            _canonical_prediction_grid(adapter, cfg),
+            context=(
+                "cross-validation distance controls and physical-isotropic "
+                "spatial scaling"
+            ),
+        )
     assembled = _assemble_from_config(pfa, cfg, criteria)
     allowed_names = set(assembled.component_names) | {"joint"}
     if components is None:
@@ -2944,28 +3901,45 @@ def run_gblk_calibration_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 f"expected a subset of {sorted(allowed_names)}"
             )
 
+    if not requested_names:
+        return {}
+
     for q_idx, name in enumerate(assembled.component_names):
-        if name not in requested_names:
-            continue
-        n_observed = int(assembled.observed_mask[:, q_idx].sum())
-        if n_observed < effective_n_folds:
+        n_observed_wells = _unique_well_count(
+            assembled.well_ids,
+            assembled.observed_mask[:, q_idx],
+        )
+        if n_observed_wells < cfg.labels.min_wells_for_fit:
             raise GEOPFAValueError(
-                f"component {name!r} has fewer than {effective_n_folds} observed labels "
-                f"({n_observed}); calibration cross-validation is not identifiable"
+                f"full calibration model component {name!r} has fewer than "
+                f"{cfg.labels.min_wells_for_fit} observed wells "
+                f"({n_observed_wells})"
             )
         values = assembled.y[assembled.observed_mask[:, q_idx], q_idx]
         if np.unique(values).size < 2:  # noqa: PLR2004
             raise GEOPFAValueError(
-                f"component {name!r} has only one observed label class; "
-                "calibration cross-validation is not identifiable"
+                f"full calibration model component {name!r} has only one "
+                "observed label class"
+            )
+        if name in requested_names and n_observed_wells < effective_n_folds:
+            raise GEOPFAValueError(
+                f"component {name!r} has fewer than {effective_n_folds} "
+                f"observed wells ({n_observed_wells}); calibration "
+                "cross-validation is not identifiable"
             )
 
-    complete_idx = np.flatnonzero(assembled.labeled_mask).astype(np.intp)
+    complete_mask = np.all(assembled.observed_mask, axis=1)
+    complete_idx = np.flatnonzero(complete_mask).astype(np.intp)
     if "joint" in requested_names:
-        if complete_idx.size < effective_n_folds:
+        complete_wells = _unique_well_count(
+            assembled.well_ids,
+            complete_mask,
+        )
+        if complete_wells < effective_n_folds:
             raise GEOPFAValueError(
-                f"joint target has fewer than {effective_n_folds} complete-case labels "
-                f"({complete_idx.size}); calibration cross-validation is not identifiable"
+                f"joint target has fewer than {effective_n_folds} "
+                f"complete-case wells ({complete_wells}); calibration "
+                "cross-validation is not identifiable"
             )
         joint_values = np.prod(assembled.y[complete_idx], axis=1)
         if np.unique(joint_values).size < 2:  # noqa: PLR2004
@@ -2974,327 +3948,130 @@ def run_gblk_calibration_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 "cross-validation is not identifiable"
             )
 
+    union_mask = np.any(assembled.observed_mask, axis=1)
+    union_idx = np.flatnonzero(union_mask).astype(np.intp)
+    union_splits = tuple(
+        _grouped_spatial_folds(
+            assembled.well_coords[union_idx],
+            assembled.well_ids[union_idx],
+            n_folds=effective_n_folds,
+            block_type=cfg.cross_validation.block_type,
+            grid_size=cfg.cross_validation.grid_size,
+            seed=random_state,
+            block_size_km=cfg.cross_validation.block_size_km,
+            buffer_distance=cfg.cross_validation.buffer_km * 1000.0,
+            dims=(0, 1) if dims is None else dims,
+        )
+    )
+    union_fold_ids = np.full(union_idx.size, -1, dtype=np.intp)
+    for fold, (_train_mask, test_mask) in enumerate(union_splits):
+        if np.any(union_fold_ids[test_mask] >= 0):
+            raise RuntimeError("union calibration folds overlap")
+        union_fold_ids[test_mask] = fold
+    if np.any(union_fold_ids < 0):
+        raise RuntimeError("union calibration folds do not cover every well")
+
+    component_indices = tuple(range(len(assembled.component_names)))
+    fit_fn = _make_fit_fn(
+        assembled,
+        union_idx,
+        component_indices,
+        cfg=cfg,
+        nc=nc,
+        nlevel=cfg.spatial_field.n_levels,
+        a_wght=a_wght,
+        max_outer_iter=max_outer_iter,
+        irls_max_iter=irls_max_iter,
+    )
+    oof_probability = np.full(
+        (union_idx.size, len(component_indices)), np.nan, dtype=np.float64
+    )
+    for fold, (train_mask, test_mask) in enumerate(union_splits):
+        prediction = np.asarray(
+            fit_fn(train_mask, test_mask), dtype=np.float64
+        )
+        expected_shape = (int(np.sum(test_mask)), len(component_indices))
+        if prediction.shape != expected_shape:
+            raise RuntimeError(
+                f"full calibration fit returned {prediction.shape} for fold "
+                f"{fold}; expected {expected_shape}"
+            )
+        if not np.all(np.isfinite(prediction)) or np.any(
+            (prediction < 0.0) | (prediction > 1.0)
+        ):
+            raise RuntimeError(
+                f"full calibration fit returned invalid probabilities in fold {fold}"
+            )
+        oof_probability[test_mask] = prediction
+    if not np.all(np.isfinite(oof_probability)):
+        raise RuntimeError("full calibration fit left missing OOF predictions")
+
+    def score_target(
+        labels: NDArray[np.float64],
+        probability: NDArray[np.float64],
+        target_positions: NDArray[np.intp],
+        *,
+        target_name: str,
+    ) -> CalibrationCVResult:
+        target_splits: list[tuple[NDArray[np.bool_], NDArray[np.bool_]]] = []
+        for fold, (train_mask, test_mask) in enumerate(union_splits):
+            target_train = train_mask[target_positions]
+            target_test = test_mask[target_positions]
+            if not target_train.any() or not target_test.any():
+                raise GEOPFAValueError(
+                    f"target {target_name!r} has no observed "
+                    f"{'training' if not target_train.any() else 'test'} "
+                    f"wells in union calibration fold {fold}"
+                )
+            target_splits.append((target_train, target_test))
+
+        def cached_fit(
+            _train_mask: NDArray[np.bool_], test_mask: NDArray[np.bool_]
+        ) -> NDArray[np.float64]:
+            return probability[test_mask]
+
+        return _calibration_cv_from_splits(
+            cached_fit,
+            labels,
+            splits=target_splits,
+            fold_ids=union_fold_ids[target_positions],
+            n_bins=n_bins,
+        )
+
+    union_observed = assembled.observed_mask[union_idx]
     results: dict[str, CalibrationCVResult] = {}
     for q_idx, name in enumerate(assembled.component_names):
         if name not in requested_names:
             continue
-        component_idx = np.flatnonzero(
-            assembled.observed_mask[:, q_idx]
-        ).astype(np.intp)
-        coords_component = assembled.well_coords[component_idx]
-        fit_fn = _make_fit_fn(
-            assembled,
-            component_idx,
-            (q_idx,),
-            target=0,
-            cfg=cfg,
-            nc=nc,
-            nlevel=cfg.spatial_field.n_levels,
-            a_wght=a_wght,
-            max_outer_iter=max_outer_iter,
-            irls_max_iter=irls_max_iter,
+        target_positions = np.flatnonzero(union_observed[:, q_idx]).astype(
+            np.intp
         )
-        component_splits = list(
-            spatial_block_cv(
-                coords_component,
-                n_folds=effective_n_folds,
-                block_type=cfg.cross_validation.block_type,
-                grid_size=cfg.cross_validation.grid_size,
-                seed=random_state,
-                block_size_km=cfg.cross_validation.block_size_km,
-                buffer_distance=cfg.cross_validation.buffer_km * 1000.0,
-                dims=(0, 1) if dims is None else dims,
-            )
-        )
-        component_fold_ids = np.empty(coords_component.shape[0], dtype=np.intp)
-        for fold, (_train_mask, test_mask) in enumerate(component_splits):
-            component_fold_ids[test_mask] = fold
-        results[name] = _calibration_cv_from_splits(
-            fit_fn,
-            assembled.y[component_idx, q_idx].astype(np.float64),
-            splits=component_splits,
-            fold_ids=component_fold_ids,
-            n_bins=n_bins,
+        results[name] = score_target(
+            assembled.y[union_idx[target_positions], q_idx].astype(np.float64),
+            oof_probability[target_positions, q_idx],
+            target_positions,
+            target_name=name,
         )
 
     if "joint" in requested_names:
-        y_joint = np.prod(assembled.y[complete_idx], axis=1)
-        coords_joint = assembled.well_coords[complete_idx]
-        fit_fn_joint = _make_fit_fn(
-            assembled,
-            complete_idx,
-            tuple(range(len(assembled.component_names))),
-            target="joint",
-            cfg=cfg,
-            nc=nc,
-            nlevel=cfg.spatial_field.n_levels,
-            a_wght=a_wght,
-            max_outer_iter=max_outer_iter,
-            irls_max_iter=irls_max_iter,
-        )
-        joint_splits = list(
-            spatial_block_cv(
-                coords_joint,
-                n_folds=effective_n_folds,
-                block_type=cfg.cross_validation.block_type,
-                grid_size=cfg.cross_validation.grid_size,
-                seed=random_state,
-                block_size_km=cfg.cross_validation.block_size_km,
-                buffer_distance=cfg.cross_validation.buffer_km * 1000.0,
-                dims=(0, 1) if dims is None else dims,
-            )
-        )
-        joint_fold_ids = np.empty(coords_joint.shape[0], dtype=np.intp)
-        for fold, (_train_mask, test_mask) in enumerate(joint_splits):
-            joint_fold_ids[test_mask] = fold
-        results["joint"] = _calibration_cv_from_splits(
-            fit_fn_joint,
-            y_joint.astype(np.float64),
-            splits=joint_splits,
-            fold_ids=joint_fold_ids,
-            n_bins=n_bins,
+        target_positions = np.flatnonzero(
+            np.all(union_observed, axis=1)
+        ).astype(np.intp)
+        joint_probability = _component_probability_product(oof_probability)
+        results["joint"] = score_target(
+            np.prod(assembled.y[union_idx[target_positions]], axis=1).astype(
+                np.float64
+            ),
+            joint_probability[target_positions],
+            target_positions,
+            target_name="joint",
         )
 
     return results
 
 
-def run_gblk_hierarchical_regional(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
-    pfa: dict,
-    cfg: ProbabilisticConfig,
-    region_per_well: NDArray,
-    region_per_grid: NDArray,
-    play_type_per_region: dict[str, str],
-    *,
-    criteria: str = "geologic",
-    nc: int = 6,
-    a_wght: float | None = None,
-    max_outer_iter: int = 10,
-    irls_max_iter: int = 15,
-) -> ProbabilisticResult:
-    """Run multi-region GBLK with play-type partial pooling.
-
-    Fits a single joint GBLK model on all labeled wells, then applies
-    empirical-Bayes regional pooling grouped by play type.  Regions with
-    zero labeled wells receive predictions from the pooled play-type mean
-    (shrinkage = 1); data-rich regions depart from the pool (shrinkage
-    near 0).
-
-    Parameters
-    ----------
-    pfa
-        The geoPFA dict (output of the preprocessing pipeline).
-    cfg
-        Validated :class:`~geopfa.prob.config.ProbabilisticConfig` with
-        ``inference.backend == "gblk"``.
-    region_per_well
-        Region label for each well, shape ``(n_wells,)``.  Must be the
-        same order as wells in the assembled inputs.
-    region_per_grid
-        Region label for each grid cell, shape ``(G,)``.  Values must be
-        keys in ``play_type_per_region``.
-    play_type_per_region
-        Mapping from region name to play type.  All region labels
-        appearing in ``region_per_well`` and ``region_per_grid`` must
-        be present.
-    criteria
-        Criteria key to operate on, default ``"geologic"``.
-    nc
-        LatticeKrig lattice centers per dimension.
-    a_wght
-        SAR center weight. Defaults to 4.5 in 2-D and 8.0 in 3-D.
-    max_outer_iter
-        Maximum outer IRLS iterations.
-    irls_max_iter
-        Maximum inner IRLS iterations per outer step.
-
-    Returns
-    -------
-    ProbabilisticResult
-        Per-component and joint probability surfaces with hierarchical
-        regional corrections applied.  The ``diagnostics`` field of each
-        component includes ``pool_shrinkage`` and ``d_post``.
-
-    Raises
-    ------
-    geopfa.exceptions.GEOPFAValueError
-        If ``cfg.enabled`` is ``False``, if any region label is missing
-        from ``play_type_per_region``, or if no labeled wells are
-        available after filtering.
-    """
-    _validate_gblk_config(cfg)
-    if not cfg.enabled:
-        return ProbabilisticResult(config=cfg, skipped=True)
-
-    adapter = PFAGridAdapter(pfa, criteria=criteria, dimensions=cfg.dimensions)
-    loaded_labels = load_labels(cfg.labels)
-
-    alphas: dict[str, AlphaCResult] = {}
-    for name in adapter.components():
-        if name not in cfg.alpha:
-            continue
-        comp_data = adapter.component_data(name)
-        alphas[name] = build_alpha_c(
-            comp_data, cfg.alpha[name], grid_gdf=adapter.pr_norm(name)
-        )
-
-    assembled = assemble_gblk_inputs(
-        adapter,
-        loaded_labels,
-        alphas,
-        evidence_config=cfg.evidence,
-    )
-    grid_gdf = adapter.pr_norm(assembled.component_names[0])
-
-    regions_well = np.asarray(region_per_well)
-    regions_grid = np.asarray(region_per_grid)
-    if regions_well.shape != (assembled.n,):
-        raise GEOPFAValueError(
-            f"region_per_well must have shape ({assembled.n},)"
-        )
-    if regions_grid.shape != (assembled.n_grid,):
-        raise GEOPFAValueError(
-            f"region_per_grid must have shape ({assembled.n_grid},)"
-        )
-    region_names = sorted(play_type_per_region.keys())
-
-    missing = set(np.unique(regions_grid).tolist()) - set(region_names)
-    if missing:
-        raise GEOPFAValueError(
-            f"region_per_grid contains labels not in play_type_per_region: "
-            f"{missing}"
-        )
-    missing_well = set(np.unique(regions_well).tolist()) - set(region_names)
-    if missing_well:
-        raise GEOPFAValueError(
-            f"region_per_well contains labels not in play_type_per_region: "
-            f"{missing_well}"
-        )
-
-    evidence_design = _prepare_joint_evidence(assembled, cfg)
-    prediction_coords = np.vstack(
-        [assembled.well_coords, assembled.grid_coords]
-    )
-    prediction_offsets = np.vstack(
-        [assembled.well_offsets, assembled.grid_offsets]
-    )
-    prediction_fixed = (
-        None
-        if evidence_design.train is None
-        else np.concatenate(
-            [evidence_design.train, evidence_design.prediction], axis=0
-        )
-    )
-    model_a_wght = _resolve_a_wght(assembled.well_coords.shape[1], a_wght)
-    fit_result = fit_gblk_joint(
-        assembled.well_coords,
-        assembled.y,
-        prediction_coords,
-        component_names=assembled.component_names,
-        labeled_mask=np.any(assembled.observed_mask, axis=1),
-        observed_mask=assembled.observed_mask,
-        offsets=assembled.well_offsets,
-        grid_offsets=prediction_offsets,
-        fixed_effects=evidence_design.train,
-        fixed_effects_grid=prediction_fixed,
-        fixed_precision=evidence_design.precision,
-        fixed_prior_mean=evidence_design.prior_mean,
-        nc=nc,
-        nlevel=cfg.spatial_field.n_levels,
-        a_wght=model_a_wght,
-        coordinate_scaling=cfg.spatial_field.coordinate_scaling,
-        max_outer_iter=max_outer_iter,
-        irls_max_iter=irls_max_iter,
-    )
-
-    n_well = assembled.n
-    eta_pred_train = np.asarray(
-        fit_result.fit.eta_pred[:n_well], dtype=np.float64
-    )
-    fixed_contrib = np.zeros_like(eta_pred_train)
-    if evidence_design.train is not None:
-        fixed_coef = fit_result.fit.fixed_coef
-        if fixed_coef is None:  # pragma: no cover - backend contract guard
-            raise RuntimeError(
-                "joint GBLK fit omitted coefficients for supplied fixed effects"
-            )
-        fixed_contrib = np.einsum(
-            "npq,pq->nq", evidence_design.train, fixed_coef
-        )
-    spatial_contrib = eta_pred_train - assembled.well_offsets - fixed_contrib
-
-    R = len(region_names)
-    Q = len(assembled.component_names)
-    large_var = 1e10
-
-    d_hat = np.zeros((R, Q), dtype=np.float64)
-    d_var = np.full((R, Q), large_var, dtype=np.float64)
-
-    for r_idx, rname in enumerate(region_names):
-        for q_idx in range(Q):
-            well_mask = (regions_well == rname) & assembled.observed_mask[
-                :, q_idx
-            ]
-            n_r = int(well_mask.sum())
-            if n_r > 0:
-                d_hat[r_idx, q_idx] = spatial_contrib[well_mask, q_idx].mean()
-                d_var[r_idx, q_idx] = 1.0 / n_r
-
-    play_types = [play_type_per_region[r] for r in region_names]
-    pool_result = pool_regional_coefficients(d_hat, d_var, play_types)
-    d_post = pool_result.d_pooled  # (R, Q)
-
-    correction = d_post - d_hat  # (R, Q)
-
-    region_to_idx = {rname: idx for idx, rname in enumerate(region_names)}
-    grid_region_idx = np.array(
-        [region_to_idx[r] for r in regions_grid.tolist()], dtype=np.intp
-    )
-    grid_correction = correction[grid_region_idx]  # (G, Q)
-
-    base_prob = np.clip(fit_result.p_q_grid[n_well:], 1e-12, 1.0 - 1e-12)
-    eta_grid = np.log(base_prob) - np.log1p(-base_prob) + grid_correction
-
-    p_q_grid = expit(eta_grid)
-    p_joint_grid = _combine_probability_columns(p_q_grid, cfg.combination.rule)
-
-    diag_base = {
-        **fit_result.diagnostics,
-        "omega": fit_result.omega.tolist(),
-        "hierarchical": True,
-        "pool_shrinkage": pool_result.shrinkage.tolist(),
-        "d_post": d_post.tolist(),
-        "region_names": region_names,
-        "hierarchical_effect_source": "spatial_field_after_joint_evidence_fit",
-        "prediction_grid_size": int(assembled.n_grid),
-    }
-
-    components: dict[str, ComponentProbability] = {}
-    for q_idx, name in enumerate(assembled.component_names):
-        prob_gdf = grid_gdf[["geometry"]].copy()
-        prob_gdf = prob_gdf.assign(
-            probability=p_q_grid[:, q_idx].astype(float)
-        )
-        components[name] = ComponentProbability(
-            probability=prob_gdf,
-            model=fit_result.fit,
-            feature_names=tuple(assembled.layer_names.get(name, [])),
-            diagnostics={**diag_base, **evidence_design.diagnostics[name]},
-        )
-
-    combined = grid_gdf[["geometry"]].copy()
-    combined = combined.assign(probability=p_joint_grid.astype(float))
-
-    return ProbabilisticResult(
-        components=components,
-        combined=combined,
-        config=cfg,
-        skipped=False,
-    )
-
-
 __all__ = [
     "freeze_gblk_forward_state",
     "run_gblk_calibration_cv",
-    "run_gblk_hierarchical_regional",
     "run_gblk_probabilistic",
 ]

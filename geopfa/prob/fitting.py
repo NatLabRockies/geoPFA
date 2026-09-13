@@ -353,10 +353,6 @@ def fit_component_probability(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     pu_mode: str = "off",
     pu_class_prior: float | None = None,
     min_wells: int = 4,
-    spatial_n_inducing: int = 300,
-    spatial_lower_frac: float = 0.02,
-    spatial_upper_frac: float = 0.20,
-    spatial_optimize_restarts: int = 0,
 ) -> ComponentProbability:
     """Fit near-term probabilistic component model.
 
@@ -424,11 +420,6 @@ def fit_component_probability(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         the regression. The fit fails closed if fewer wells overlap the grid.
         Default is 4; use
         ``LabelsConfig.min_wells_for_fit`` from the config.
-    spatial_n_inducing : int, optional
-        Number of sparse-GP inducing points for the spatial residual field
-        (``spatial_backend="latticekrigx"``).  Default 300; set via
-        ``SpatialFieldConfig.n_inducing``.
-
     Returns
     -------
     ComponentProbability
@@ -664,10 +655,6 @@ def fit_component_probability(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                     train_coords,
                     residuals,
                     pred_coords,
-                    n_inducing=spatial_n_inducing,
-                    lengthscale_lower_frac=spatial_lower_frac,
-                    lengthscale_upper_frac=spatial_upper_frac,
-                    optimize_restarts=spatial_optimize_restarts,
                 )
                 spatial_u = gp_result.u_mean
                 grid_gdf["spatial_u_std"] = gp_result.u_std

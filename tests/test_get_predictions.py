@@ -30,9 +30,6 @@ def small_trained_model():
     model, _constraints = build_and_fit_gp(
         X_train_stdized=X_train_std,
         Y_train_stdized=Y_train_std,
-        verbose=False,
-        optimize_restarts=0,
-        n_inducing=40,
     )
 
     X_full_std = (X_train - Xm) / Xs

@@ -57,13 +57,12 @@ probability map.
 **Features:**
 
 - Config-driven runner (`run_probabilistic`) — one JSON or Python config
-  drives the full 2D/3D pipeline from labeled wells to GeoTIFF outputs. JSON
-  paths are resolved relative to the config file and manifests bind the
-  effective config plus input/output hashes.
+  drives the full 2D/3D pipeline from configured observations or
+  prior-predictive inputs to dimension-appropriate outputs. JSON paths are
+  resolved relative to the config file and manifests bind the effective config
+  plus input/output hashes.
 - Multiple prior modes: scalar, layer-based logit, thermal exceedance,
   in-grid thermal exceedance, and multi-layer composite.
-- Play-type regularization — data-informed L2 priors for extensional,
-  magmatic, and convective geothermal settings.
 - PU estimation — non-negative PU logistic risk with an externally supplied
   class prior; pseudo-absence fitting remains available only as an explicitly
   named naive comparator.
@@ -90,9 +89,9 @@ probability map.
 - Outputs: GeoTIFF, CSV, Parquet, VTK (.vtp for 3D), JSON calibration
   metrics, Markdown diagnostics report, SHA-256 manifest binding the effective
   config, inputs, outputs, and the geoPFA/LatticeKrigX runtime implementations,
-  and optional
-  incremental, resumable, hash-verified posterior, prior-predictive, or mixed
-  state/probability blocks for baseline and configured scenarios.
+  and optional incremental, hash-verified posterior, prior-predictive, or
+  mixed state/probability blocks. Only a verified incomplete posterior workspace
+  may resume its completed block prefix after an ordinary execution error.
 - Frozen forward-state export — deterministic GBLK MAP fits can be decomposed
   into prior, named evidence, and spatial logit contributions and evaluated in
   vectorized batches by downstream sensitivity studies without refitting.
@@ -114,11 +113,14 @@ without cell outputs; no fitted models, result tables, summaries, or generated
 figures are version-controlled. The repository gate also rejects tracked files
 of 10 MiB or larger so generated artifacts cannot enter release history.
 
-Each completed run owns its untracked output directory. A rerun may resume an incomplete
-posterior or reuse a directory only when its manifest matches both the current
-effective config and implementation and all bound files still verify; otherwise
-choose a fresh output directory. Study notebooks display comparisons directly
-and do not contain committed execution output.
+Each completed run owns its untracked output directory. Completed output
+namespaces are immutable and are never accepted for another execution, even
+when their manifests still verify. Only a verified incomplete posterior
+workspace may resume its completed block prefix when its progress record,
+effective config, inputs, and implementation all verify. Abrupt termination
+while a state file or final derived product is being published fails closed and
+requires a fresh output directory. Study notebooks display comparisons
+directly and do not contain committed execution output.
 
 ```python
 from geopfa.prob import ProbabilisticConfig, run_probabilistic

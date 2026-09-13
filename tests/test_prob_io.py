@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import warnings
+from dataclasses import replace
 from pathlib import Path
 
 import geopandas as gpd
@@ -23,6 +24,7 @@ from geopfa.prob.config import (
     LabelsConfig,
     OutputsConfig,
     ProbabilisticConfig,
+    SiteSelectionConfig,
     SpatialFieldConfig,
 )
 from geopfa.prob.io import (
@@ -142,6 +144,205 @@ def test_write_parquet_outputs_round_trips(tmp_path: Path) -> None:
     assert "probability" in df.columns
     assert "x" in df.columns and "y" in df.columns
     np.testing.assert_allclose(df["probability"].to_numpy(), 0.7)
+
+
+def test_write_parquet_outputs_uses_active_geometry_name(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=42)
+    grid = fixture.pfa["criteria"]["geologic"]["components"]["component_a"][
+        "pr_norm"
+    ].copy()
+    grid["probability"] = 0.7
+    grid = grid.rename_geometry("grid_point")
+
+    written = write_parquet_outputs({"component_a": grid}, tmp_path / "out")
+
+    table = pd.read_parquet(written[0])
+    assert "grid_point" not in table.columns
+    assert {"x", "y", "probability"} <= set(table.columns)
+
+
+def test_direct_geotiff_writer_rejects_3d_before_creating_output(
+    tmp_path: Path,
+) -> None:
+    grid = gpd.GeoDataFrame(
+        {"probability": [0.5]},
+        geometry=gpd.points_from_xy([0.0], [0.0], z=[-1.0]),
+    )
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="GeoTIFF output requires 2-D"):
+        write_geotiff_outputs({"heat": grid}, output_dir)
+
+    assert not output_dir.exists()
+
+
+def test_direct_vtk_writer_rejects_2d_before_creating_output(
+    tmp_path: Path,
+) -> None:
+    grid = gpd.GeoDataFrame(
+        {"probability": [0.5]},
+        geometry=gpd.points_from_xy([0.0], [0.0]),
+    )
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="VTK output requires 3-D"):
+        write_vtk_outputs({"heat": grid}, output_dir)
+
+    assert not output_dir.exists()
+
+
+def test_unified_writer_preflights_every_surface_before_writing(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=43)
+    valid = fixture.pfa["criteria"]["geologic"]["components"]["component_a"][
+        "pr_norm"
+    ].copy()
+    valid["probability"] = 0.5
+    invalid = valid.drop(columns="probability")
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(
+        ValueError, match="missing requested column 'probability'"
+    ):
+        write_probability_outputs(
+            {"first": valid, "second": invalid},
+            output_dir,
+            formats=("csv", "geotiff"),
+        )
+
+    assert not output_dir.exists()
+
+
+def test_unified_writer_rejects_incompatible_dimension_before_any_format(
+    tmp_path: Path,
+) -> None:
+    grid = gpd.GeoDataFrame(
+        {"probability": [0.5]},
+        geometry=gpd.points_from_xy([0.0], [0.0], z=[-1.0]),
+    )
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="GeoTIFF output requires 2-D"):
+        write_probability_outputs(
+            {"heat": grid}, output_dir, formats=("csv", "geotiff")
+        )
+
+    assert not output_dir.exists()
+
+
+def test_unified_csv_writer_emits_coordinates_and_attributes(
+    tmp_path: Path,
+) -> None:
+    gdf = gpd.GeoDataFrame(
+        {
+            "probability": [0.25, 0.75],
+            "probability_lo": [0.10, 0.60],
+        },
+        geometry=gpd.points_from_xy(
+            [500_000.0, 500_100.0],
+            [4_300_000.0, 4_300_100.0],
+            z=[-3_000.0, -2_900.0],
+        ),
+        crs="EPSG:32611",
+    )
+
+    written = write_probability_outputs(
+        {"heat": gdf}, tmp_path / "out", formats=("csv",)
+    )
+
+    assert written == [tmp_path / "out" / "heat_probability.csv"]
+    table = pd.read_csv(written[0])
+    assert set(table.columns) == {
+        "probability",
+        "probability_lo",
+        "x",
+        "y",
+        "z",
+    }
+    assert "geometry" not in table.columns
+    np.testing.assert_allclose(table["z"], [-3_000.0, -2_900.0])
+
+
+def test_unified_csv_writer_skips_empty_surfaces(tmp_path: Path) -> None:
+    output_dir = tmp_path / "out"
+
+    written = write_probability_outputs(
+        {"empty": gpd.GeoDataFrame()}, output_dir, formats=("csv",)
+    )
+
+    assert written == []
+    assert output_dir.is_dir()
+    assert not (output_dir / "empty_probability.csv").exists()
+
+
+@pytest.mark.parametrize(
+    "unsafe_name",
+    ["../escaped", "nested/name", r"nested\name", "heat map", "café", "CON"],
+)
+def test_unified_writer_rejects_nonportable_surface_names_before_writing(
+    tmp_path: Path,
+    unsafe_name: str,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=25)
+    grid = fixture.pfa["criteria"]["geologic"]["components"]["component_a"][
+        "pr_norm"
+    ].copy()
+    grid["probability"] = 0.5
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="portable surface name"):
+        write_probability_outputs(
+            {"valid": grid, unsafe_name: grid},
+            output_dir,
+            formats=("geotiff", "csv"),
+        )
+
+    assert not output_dir.exists()
+    assert not (tmp_path / "escaped_probability.tif").exists()
+
+
+def test_unified_writer_rejects_case_normalized_name_collisions_before_writing(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=26)
+    grid = fixture.pfa["criteria"]["geologic"]["components"]["component_a"][
+        "pr_norm"
+    ].copy()
+    grid["probability"] = 0.5
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="case-insensitive collision"):
+        write_probability_outputs(
+            {"Heat": grid, "heat": grid},
+            output_dir,
+            formats=("parquet",),
+        )
+
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "writer",
+    [write_geotiff_outputs, write_parquet_outputs, write_vtk_outputs],
+)
+def test_direct_format_writers_reject_unsafe_surface_names_before_writing(
+    tmp_path: Path,
+    writer,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=27)
+    grid = fixture.pfa["criteria"]["geologic"]["components"]["component_a"][
+        "pr_norm"
+    ].copy()
+    grid["probability"] = 0.5
+    output_dir = tmp_path / "out"
+
+    with pytest.raises(ValueError, match="portable surface name"):
+        writer({"../escaped": grid}, output_dir)
+
+    assert not output_dir.exists()
 
 
 def test_gdf_to_raster_rejects_irregular_point_support() -> None:
@@ -271,6 +472,118 @@ def test_write_manifest_records_files_and_hashes(tmp_path: Path) -> None:
         )
 
 
+def test_manifest_omits_absent_prior_only_label_source(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=41)
+    cfg = ProbabilisticConfig.from_dict(
+        {
+            "enabled": True,
+            "output_dir": str(tmp_path / "out"),
+            "dimensions": "2d",
+            "alpha": {
+                "component_a": {
+                    "mode": "scalar",
+                    "scalar_fallback_pr0": 0.4,
+                    "force_prior_predictive": True,
+                }
+            },
+            "outputs": {"format": []},
+        }
+    )
+
+    result = run_probabilistic(fixture.pfa, cfg)
+
+    assert set(result.components) == {"component_a"}
+    manifest = json.loads(
+        (cfg.output_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert {record["name"] for record in manifest["inputs"]} == set()
+    assert verify_manifest(cfg.output_dir, config=cfg)["inputs_verified"] == 0
+
+
+def test_manifest_binds_complete_shapefile_input_bundles(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=0)
+    labels_path = tmp_path / "labels.shp"
+    candidates_path = tmp_path / "candidates.shp"
+    supplied_path = tmp_path / "supplied.shp"
+    shape_frame = fixture.wells[["well_id", "heat_label", "geometry"]]
+    shape_frame.to_file(labels_path, driver="ESRI Shapefile")
+    shape_frame.to_file(candidates_path, driver="ESRI Shapefile")
+    shape_frame.to_file(supplied_path, driver="ESRI Shapefile")
+
+    cfg = replace(
+        _2d_cfg(labels_path, tmp_path / "out", formats=("csv",)),
+        site_selection=SiteSelectionConfig(
+            mode="joint_binary",
+            candidate_source=str(candidates_path),
+            id_col="well_id",
+            outcome_feature_columns=("prior_layer_a",),
+            selection_feature_columns=("prior_layer_b",),
+        ),
+    )
+    cfg.output_dir.mkdir()
+    (cfg.output_dir / "result.csv").write_text("value\n1\n", encoding="utf-8")
+
+    write_manifest(
+        cfg.output_dir,
+        config=cfg,
+        input_artifacts={"caller.supplied": supplied_path},
+    )
+
+    manifest = json.loads(
+        (cfg.output_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    records = {record["name"]: record for record in manifest["inputs"]}
+    required_suffixes = (".dbf", ".prj", ".shx")
+    for logical_name, source in (
+        ("labels.source", labels_path),
+        ("site_selection.candidate_source", candidates_path),
+        ("caller.supplied", supplied_path),
+    ):
+        assert records[logical_name]["path"] == str(source.resolve())
+        for suffix in required_suffixes:
+            member_name = f"{logical_name}{suffix}"
+            member_path = source.with_suffix(suffix).resolve()
+            assert records[member_name]["path"] == str(member_path)
+            assert records[member_name]["sha256"] == _sha256(member_path)
+
+    cpg_names = {
+        f"{logical_name}.cpg"
+        for logical_name in (
+            "labels.source",
+            "site_selection.candidate_source",
+            "caller.supplied",
+        )
+        if Path(records[logical_name]["path"]).with_suffix(".cpg").is_file()
+    }
+    assert cpg_names <= records.keys()
+    audit = verify_manifest(
+        cfg.output_dir,
+        config=cfg,
+        input_artifacts={"caller.supplied": supplied_path},
+    )
+    assert audit["inputs_verified"] == len(records)
+
+    candidates_path.with_suffix(".dbf").write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="input (size|digest) differs"):
+        verify_manifest(
+            cfg.output_dir,
+            config=cfg,
+            input_artifacts={"caller.supplied": supplied_path},
+        )
+
+    supplied_path.with_suffix(".shx").unlink()
+    with pytest.raises(FileNotFoundError, match=r"supplied\.shx"):
+        write_manifest(
+            tmp_path / "missing-sidecar-output",
+            config=cfg,
+            input_artifacts={"caller.supplied": supplied_path},
+        )
+
+
 def test_write_manifest_rejects_runtime_source_change(tmp_path: Path) -> None:
     fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=0)
     wells_path = tmp_path / "wells.gpkg"
@@ -302,6 +615,28 @@ def _posterior_metadata(
         **metadata,
         "component_roles": dict.fromkeys(component_names, "joint_posterior"),
     }
+
+
+def test_incremental_posterior_writer_rejects_geometric_mean(
+    tmp_path: Path,
+) -> None:
+    grid = gpd.GeoDataFrame(
+        geometry=gpd.points_from_xy([0.0], [1.0]), crs="EPSG:32610"
+    )
+
+    with pytest.raises(ValueError, match="geometric_mean"):
+        PosteriorDrawBlockWriter(
+            grid,
+            tmp_path,
+            component_names=("heat", "reservoir"),
+            n_draws=1,
+            block_size=1,
+            seed=1,
+            combination_rule="geometric_mean",
+            scope="baseline",
+            state_arrays={"coefficient_draws": np.zeros((1, 1))},
+            state_metadata=_posterior_metadata(("heat", "reservoir")),
+        )
 
 
 def test_incremental_posterior_writer_persists_state_and_decomposed_blocks(
@@ -354,6 +689,8 @@ def test_incremental_posterior_writer_persists_state_and_decomposed_blocks(
     expected_combined = np.prod(expected, axis=2)
 
     assert index["schema_version"] == 2
+    assert index["combination_rule"] == "product"
+    assert index["combination_estimand"] == "within_draw_component_product"
     assert index["scope"] == "scenario:physical_isotropic"
     assert index["cross_scenario_pairing"] == "not_identified"
     assert index["state"]["metadata"]["coordinate_transform"] == (
@@ -499,6 +836,46 @@ def test_incremental_draw_verifier_rejects_false_uncertainty_semantics(
     index_path.write_text(json.dumps(index))
 
     with pytest.raises(ValueError, match="uncertainty semantics"):
+        verify_posterior_draw_bundle(index_path)
+
+
+def test_incremental_draw_verifier_rejects_record_path_traversal(
+    tmp_path: Path,
+) -> None:
+    grid = gpd.GeoDataFrame(
+        geometry=gpd.points_from_xy([0.0], [1.0]), crs="EPSG:32610"
+    )
+    writer = PosteriorDrawBlockWriter(
+        grid,
+        tmp_path,
+        component_names=("heat",),
+        n_draws=1,
+        block_size=1,
+        seed=1,
+        combination_rule="product",
+        scope="baseline",
+        state_arrays={"prior_logit": np.zeros((1, 1))},
+        state_metadata=_posterior_metadata(("heat",)),
+    )
+    writer.write_block(
+        0,
+        component_probability=np.full((1, 1, 1), 0.5),
+        prior_logit=np.zeros((1, 1)),
+        evidence_logit=np.zeros((1, 1, 1)),
+        spatial_logit=np.zeros((1, 1, 1)),
+    )
+    index_path = writer.finalize(ci_level=0.9).index_path
+    outside = tmp_path / "outside.npy"
+    np.save(outside, np.zeros((1, 2)), allow_pickle=False)
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index["coordinates"] = {
+        "path": "../outside.npy",
+        "size_bytes": outside.stat().st_size,
+        "sha256": hashlib.sha256(outside.read_bytes()).hexdigest(),
+    }
+    index_path.write_text(json.dumps(index), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="inside its posterior namespace"):
         verify_posterior_draw_bundle(index_path)
 
 
@@ -715,7 +1092,11 @@ def test_load_posterior_draw_state_reopens_incomplete_exact_state(
             "field_coefficient_draws": coefficients,
         },
         state_metadata=_posterior_metadata(
-            ("heat",), config_hash="abc", model="test"
+            ("heat",),
+            config_hash="abc",
+            analysis_input_sha256="1" * 64,
+            implementation_sha256="2" * 64,
+            model="test",
         ),
     )
     writer.write_block(
@@ -730,6 +1111,8 @@ def test_load_posterior_draw_state_reopens_incomplete_exact_state(
         tmp_path,
         grid,
         expected_config_hash="abc",
+        expected_analysis_input_sha256="1" * 64,
+        expected_implementation_sha256="2" * 64,
         expected_scope="baseline",
     )
 
@@ -745,6 +1128,26 @@ def test_load_posterior_draw_state_reopens_incomplete_exact_state(
             tmp_path,
             grid,
             expected_config_hash="changed",
+            expected_analysis_input_sha256="1" * 64,
+            expected_implementation_sha256="2" * 64,
+            expected_scope="baseline",
+        )
+    with pytest.raises(ValueError, match="analysis inputs"):
+        load_posterior_draw_state(
+            tmp_path,
+            grid,
+            expected_config_hash="abc",
+            expected_analysis_input_sha256="2" * 64,
+            expected_implementation_sha256="2" * 64,
+            expected_scope="baseline",
+        )
+    with pytest.raises(ValueError, match="implementation"):
+        load_posterior_draw_state(
+            tmp_path,
+            grid,
+            expected_config_hash="abc",
+            expected_analysis_input_sha256="1" * 64,
+            expected_implementation_sha256="3" * 64,
             expected_scope="baseline",
         )
 

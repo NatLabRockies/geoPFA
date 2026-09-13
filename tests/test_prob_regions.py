@@ -13,7 +13,6 @@ from geopfa.prob.labels import LoadedLabels
 from geopfa.prob.regions import (
     RegionLabels,
     check_region_label_coverage,
-    combine_region_beta_summaries,
     split_by_region,
 )
 
@@ -89,26 +88,6 @@ def test_check_region_label_coverage_insufficient_warns_and_returns_false() -> (
         )
     assert not any(coverage.values())
     assert len(w) == 2  # one warning per region
-
-
-def test_combine_region_beta_summaries_returns_mean_std_n() -> None:
-    betas = {
-        "A": np.array([1.0, 2.0]),
-        "B": np.array([3.0, 4.0]),
-        "C": np.array([5.0, 6.0]),
-    }
-    result = combine_region_beta_summaries(betas)
-    assert "mean" in result
-    assert "std" in result
-    assert result["n_regions"] == 3
-    np.testing.assert_allclose(result["mean"], [3.0, 4.0])
-
-
-def test_combine_region_beta_summaries_single_region() -> None:
-    betas = {"only": np.array([2.5, -1.0])}
-    result = combine_region_beta_summaries(betas)
-    assert result["n_regions"] == 1
-    np.testing.assert_allclose(result["std"], [0.0, 0.0])
 
 
 def test_region_labels_is_frozen_dataclass() -> None:

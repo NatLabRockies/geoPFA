@@ -51,7 +51,7 @@ class SequentialFitter:
         label_column, spatial_config
             Standard per-component inputs (see protocol).
         per_feature_weights, prior_means
-            Optional play-type / config-driven per-feature L2 knobs.
+            Optional explicit per-feature Gaussian-prior parameters.
         """
         # Build a minimal AlphaModeConfig just to call build_fit_kwargs.
         alpha_mode_cfg = AlphaModeConfig(
@@ -69,7 +69,6 @@ class SequentialFitter:
             evidence_config=evidence_config,
             spatial_field_config=spatial_config,
         )
-        kwargs.pop("_play_type", None)
         # Inject the pre-built alpha offset.
         kwargs["alpha_offset"] = alpha_result.grid_offset
         kwargs["prior_layer_name"] = None

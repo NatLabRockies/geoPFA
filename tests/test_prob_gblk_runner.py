@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import geopandas as gpd
 import numpy as np
 import pytest
+from scipy.special import ndtr
 
 pytest.importorskip("latticekrigx.glk.joint")
 
@@ -23,16 +24,18 @@ from geopfa.prob.config import (  # noqa: E402
     CombinationConfig,
     EvidenceConfig,
     GridConfig,
+    GBLKBayesianConfig,
     InferenceConfig,
     LabelsConfig,
+    ObservationModelConfig,
     OutputsConfig,
+    PredictiveStackingConfig,
     ProbabilisticConfig,
     RegularizationConfig,
     SpatialFieldConfig,
 )
 from geopfa.prob.fitting import ComponentProbability  # noqa: E402
 from geopfa.prob import gblk_runner  # noqa: E402
-from geopfa.prob.play_types import PLAY_TYPE_REGISTRY  # noqa: E402
 from geopfa.prob.gblk_runner import (  # noqa: E402
     _prepare_joint_evidence_arrays,
     _prior_predictive_evidence_draws,
@@ -90,7 +93,10 @@ def _cfg(wells_path: Path, output_dir: Path) -> ProbabilisticConfig:
             ),
         },
         evidence=EvidenceConfig(),
-        spatial_field=SpatialFieldConfig(enabled=False),
+        spatial_field=SpatialFieldConfig(
+            enabled=False,
+            lattice_centers_per_dimension=_NC_SMALL,
+        ),
         inference=InferenceConfig(backend="gblk"),
         calibration=CalibrationConfig(method="none"),
         cross_validation=__import__(
@@ -109,6 +115,51 @@ def _cfg(wells_path: Path, output_dir: Path) -> ProbabilisticConfig:
     )
 
 
+def _mismatched_gaussian_prior_case(
+    tmp_path: Path,
+) -> tuple[dict, ProbabilisticConfig]:
+    """Return a Gaussian prior on a coarse grid inside a canonical grid."""
+    fixture = make_synthetic_pfa(grid_n=3, n_wells=8, seed=912)
+    components = fixture.pfa["criteria"]["geologic"]["components"]
+    coarse_component = components["component_b"]
+    coarse_grid = coarse_component["pr_norm"]
+    x = coarse_grid.geometry.x.to_numpy()
+    y = coarse_grid.geometry.y.to_numpy()
+    corners = np.isin(x, [x.min(), x.max()]) & np.isin(y, [y.min(), y.max()])
+    coarse_grid = coarse_grid.loc[corners].reset_index(drop=True).copy()
+    coarse_component["pr_norm"] = coarse_grid.copy()
+    thermal_model = coarse_grid[["geometry"]].copy()
+    thermal_model["value_interpolated"] = [0.0, 10.0, 0.0, 10.0]
+    thermal_model["temperature_sd_c"] = [1.0, 10.0, 1.0, 10.0]
+    coarse_component["layers"]["prior_layer_b"]["model"] = thermal_model
+
+    base = _cfg(tmp_path / "unused.gpkg", tmp_path / "gaussian_resampling")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            observation_models={
+                "component_b": ObservationModelConfig(family="gaussian")
+            },
+        ),
+        alpha={
+            "component_a": replace(
+                base.alpha["component_a"], force_prior_predictive=True
+            ),
+            "component_b": AlphaModeConfig(
+                mode="thermal_layer_exceedance",
+                layer="prior_layer_b",
+                threshold=5.0,
+                uncertainty_column="temperature_sd_c",
+                p_min=0.05,
+                p_max=0.95,
+                force_prior_predictive=True,
+            ),
+        },
+    )
+    return fixture.pfa, cfg
+
+
 def _run(
     tmp_path: Path, *, spatial: bool = False
 ) -> tuple[ProbabilisticResult, dict]:
@@ -124,7 +175,6 @@ def _run(
     result = run_gblk_probabilistic(
         fixture.pfa,
         cfg,
-        nc=_NC_SMALL,
         max_outer_iter=_OUTER_SMALL,
         irls_max_iter=_IRLS_SMALL,
     )
@@ -136,6 +186,75 @@ def test_direct_gblk_runner_rejects_non_gblk_config(tmp_path: Path) -> None:
     cfg = replace(cfg, inference=InferenceConfig(backend="sequential"))
     with pytest.raises(GEOPFAValueError, match="backend.*gblk"):
         run_gblk_probabilistic({}, cfg)
+
+
+def test_direct_gblk_runner_rejects_nc_that_conflicts_with_config(
+    tmp_path: Path,
+) -> None:
+    cfg = _cfg(tmp_path / "missing.gpkg", tmp_path / "out")
+
+    with pytest.raises(GEOPFAValueError, match="nc.*conflicts.*spatial_field"):
+        run_gblk_probabilistic({}, cfg, nc=_NC_SMALL + 1)
+
+
+def test_direct_gblk_runner_derives_nc_from_config(tmp_path: Path) -> None:
+    result, _ = _run(tmp_path, spatial=True)
+
+    diagnostics = next(iter(result.components.values())).diagnostics
+    assert diagnostics["nc"] == _NC_SMALL
+
+
+@pytest.mark.parametrize(
+    "distance_contract",
+    ["predictive_stacking", "physical_isotropic"],
+)
+def test_gblk_metric_distance_controls_require_projected_metre_crs(
+    tmp_path: Path,
+    distance_contract: str,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=8, n_wells=30, seed=72)
+    components = fixture.pfa["criteria"]["geologic"]["components"]
+    for component in components.values():
+        component["pr_norm"] = component["pr_norm"].set_crs(
+            "EPSG:4326", allow_override=True
+        )
+    cfg = _cfg(tmp_path / "not-read.gpkg", tmp_path / "metric-crs")
+    cfg = replace(
+        cfg,
+        spatial_field=replace(
+            cfg.spatial_field,
+            enabled=True,
+            coordinate_scaling=(
+                "physical_isotropic"
+                if distance_contract == "physical_isotropic"
+                else "axis_range"
+            ),
+        ),
+        inference=replace(
+            cfg.inference,
+            gblk_bayesian=GBLKBayesianConfig(
+                enabled=True,
+                n_draws=4,
+                cluster_effect=False,
+                validate_inla=False,
+            ),
+            predictive_stacking=PredictiveStackingConfig(
+                enabled=distance_contract == "predictive_stacking"
+            ),
+        ),
+        cross_validation=replace(
+            cfg.cross_validation,
+            buffer_km=(
+                1.0 if distance_contract == "predictive_stacking" else 0.0
+            ),
+        ),
+    )
+
+    with pytest.raises(
+        GEOPFAValueError,
+        match="projected metre-based CRS",
+    ):
+        run_gblk_probabilistic(fixture.pfa, cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -185,26 +304,21 @@ def test_p_gblk_runner_jointly_fits_declared_evidence(tmp_path: Path) -> None:
         )
 
 
-def test_p_gblk_evidence_only_ablation_uses_declared_prior_means(
+def test_p_gblk_evidence_only_ablation_uses_explicit_prior_means(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = make_synthetic_pfa(grid_n=8, n_wells=50, seed=27)
     wells_path = tmp_path / "wells_prior_means.gpkg"
     fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
-    monkeypatch.setitem(
-        PLAY_TYPE_REGISTRY,
-        "test_gradient",
-        {
-            "pattern_weights": {"gradient": 2.0},
-            "pattern_means": {"gradient": 0.75},
-        },
-    )
     cfg = _cfg(wells_path, tmp_path / "out_prior_means")
     cfg = replace(
         cfg,
         evidence=replace(
             cfg.evidence,
-            regularization=RegularizationConfig(play_type="test_gradient"),
+            regularization=RegularizationConfig(
+                prior_means={"gradient": 0.75},
+                prior_precisions={"gradient": 2.0},
+            ),
         ),
     )
     observed_prior_means: list[np.ndarray | None] = []
@@ -251,6 +365,8 @@ def test_p_gblk_joint_and_evidence_only_use_partial_evidence_rows(
         well_offsets=np.zeros((8, 1)),
         grid_offsets=np.zeros((2, 1)),
         well_coords=np.column_stack([np.arange(8), np.zeros(8)]),
+        well_ids=np.array([f"well-{index}" for index in range(8)]),
+        well_depths_m=None,
         grid_coords=np.array([[0.0, 0.0], [1.0, 0.0]]),
         evidence={"component_a": evidence},
         grid_evidence={"component_a": np.array([[0.0, 2.0], [np.nan, 3.0]])},
@@ -295,7 +411,7 @@ def test_p_gblk_joint_and_evidence_only_use_partial_evidence_rows(
     )
     with pytest.raises(
         GEOPFAValueError,
-        match="fewer than 4 finite observed values.*feature_b=3",
+        match="fewer than 4 finite observed wells.*feature_b=3 wells",
     ):
         gblk_runner._prepare_joint_evidence(unsupported, cfg)  # noqa: SLF001
 
@@ -317,7 +433,7 @@ def test_p_gblk_joint_and_evidence_only_use_partial_evidence_rows(
         grid_evidence={"component_a": np.zeros((2, 0))},
         layer_names={"component_a": []},
     )
-    with pytest.raises(GEOPFAValueError, match="fewer than 4 observed labels"):
+    with pytest.raises(GEOPFAValueError, match="fewer than 4 observed wells"):
         gblk_runner._prepare_joint_evidence(no_evidence_sparse, cfg)  # noqa: SLF001
 
     train_mask = np.array([True] * 6 + [False] * 2)
@@ -413,20 +529,111 @@ def test_p_gblk_runner_force_prior_predictive_bypasses_joint_fit(
     assert prior_component.diagnostics["inference_role"] == "prior_predictive"
 
 
-def test_deterministic_gblk_honors_geometric_mean_for_prior_components(
+def test_deterministic_prior_only_gaussian_reports_response_distribution(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=8, n_wells=50, seed=311)
+    heat = fixture.pfa["criteria"]["geologic"]["components"]["component_a"]
+    thermal = heat["layers"]["prior_layer_a"]["model"]
+    thermal_mean = np.linspace(150.0, 250.0, len(thermal))
+    thermal_sd = np.linspace(15.0, 30.0, len(thermal))
+    thermal["value_interpolated"] = thermal_mean
+    thermal["temperature_sd_c"] = thermal_sd
+    wells_path = tmp_path / "wells_gaussian_prior.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    base = _cfg(wells_path, tmp_path / "out_gaussian_prior")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            observation_models={
+                "component_a": ObservationModelConfig(family="gaussian")
+            },
+        ),
+        alpha={
+            "component_a": AlphaModeConfig(
+                mode="thermal_layer_exceedance",
+                layer="prior_layer_a",
+                threshold=200.0,
+                uncertainty_column="temperature_sd_c",
+                p_min=1e-12,
+                p_max=1.0 - 1e-12,
+                force_prior_predictive=True,
+            ),
+            "component_b": base.alpha["component_b"],
+        },
+    )
+
+    result = run_gblk_probabilistic(fixture.pfa, cfg)
+
+    component = result.components["component_a"]
+    response = component.probability
+    np.testing.assert_allclose(
+        response["response_predictive_mean"], thermal_mean
+    )
+    expected_z = 1.6448536269514722
+    np.testing.assert_allclose(
+        response["response_predictive_lo"],
+        thermal_mean - expected_z * thermal_sd,
+    )
+    np.testing.assert_allclose(
+        response["response_predictive_hi"],
+        thermal_mean + expected_z * thermal_sd,
+    )
+    np.testing.assert_allclose(
+        response["probability"],
+        ndtr((thermal_mean - 200.0) / thermal_sd),
+    )
+    assert component.diagnostics["observation_family"] == "gaussian"
+    assert component.diagnostics["event_threshold"] == 200.0
+    assert (
+        component.diagnostics["response_summary_estimand"]
+        == "prior_predictive_response"
+    )
+    assert component.diagnostics[
+        "response_interval_includes_prior_uncertainty"
+    ]
+
+
+def test_deterministic_gaussian_prior_resampling_preserves_one_estimand(
+    tmp_path: Path,
+) -> None:
+    pfa, cfg = _mismatched_gaussian_prior_case(tmp_path)
+
+    result = run_gblk_probabilistic(pfa, cfg)
+
+    response = result.components["component_b"].probability
+    mean = response["response_predictive_mean"].to_numpy()
+    sd = (
+        response["response_predictive_hi"].to_numpy()
+        - response["response_predictive_lo"].to_numpy()
+    ) / (2.0 * 1.6448536269514722)
+    expected = np.clip(ndtr((mean - 5.0) / sd), 0.05, 0.95)
+    np.testing.assert_allclose(response["probability"], expected)
+    assert mean[4] == pytest.approx(5.0)
+    assert sd[4] == pytest.approx(5.5)
+    assert response["probability"].iloc[4] == pytest.approx(0.5)
+    component_a = (
+        result.components["component_a"].probability["probability"].to_numpy()
+    )
+    np.testing.assert_allclose(
+        result.combined["probability"], component_a * expected
+    )
+
+
+def test_deterministic_gblk_uses_product_for_prior_components(
     tmp_path: Path,
 ) -> None:
     fixture = make_synthetic_pfa(grid_n=8, n_wells=30, seed=45)
     wells_path = tmp_path / "wells.gpkg"
     fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
-    base = _cfg(wells_path, tmp_path / "geometric")
+    base = _cfg(wells_path, tmp_path / "product")
     cfg = replace(
         base,
         alpha={
             name: replace(alpha, force_prior_predictive=True)
             for name, alpha in base.alpha.items()
         },
-        combination=CombinationConfig(rule="geometric_mean"),
     )
 
     result = run_gblk_probabilistic(fixture.pfa, cfg)
@@ -439,26 +646,13 @@ def test_deterministic_gblk_honors_geometric_mean_for_prior_components(
 
     np.testing.assert_allclose(
         result.combined["probability"],
-        np.exp(np.mean(np.log(component_values), axis=1)),
+        np.prod(component_values, axis=1),
     )
 
 
-def test_forward_state_rejects_unrepresented_combination_rule(
-    tmp_path: Path,
-) -> None:
-    cfg = replace(
-        _cfg(tmp_path / "unused.gpkg", tmp_path / "unused"),
-        combination=CombinationConfig(rule="geometric_mean"),
-    )
-
-    with pytest.raises(GEOPFAValueError, match="only the product"):
-        freeze_gblk_forward_state(
-            {},
-            cfg,
-            ProbabilisticResult(config=cfg),
-            coordinate_units="m",
-            structural_scenario="baseline",
-        )
+def test_combination_config_rejects_geometric_mean() -> None:
+    with pytest.raises(ValueError, match="geometric_mean"):
+        CombinationConfig(rule="geometric_mean")
 
 
 def test_p_gblk_runner_freezes_decomposed_forward_state(
@@ -521,6 +715,110 @@ def test_p_gblk_runner_freezes_decomposed_forward_state(
         atol=1e-12,
     )
     np.testing.assert_allclose(state.spatial_logit[:, 1], 0.0)
+
+
+def test_forward_state_reuses_run_grid_and_aligns_prior_only_component(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=8, n_wells=50, seed=131)
+    component_b = fixture.pfa["criteria"]["geologic"]["components"][
+        "component_b"
+    ]
+    component_b["pr_norm"] = (
+        component_b["pr_norm"].iloc[::-1].reset_index(drop=True)
+    )
+    wells_path = tmp_path / "wells_reversed_prior.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    base = _cfg(wells_path, tmp_path / "out_reversed_prior")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            label_columns={"component_a": "heat_label"},
+        ),
+        alpha={
+            "component_a": base.alpha["component_a"],
+            "component_b": replace(
+                base.alpha["component_b"],
+                force_prior_predictive=True,
+            ),
+        },
+        spatial_field=replace(base.spatial_field, enabled=True, n_levels=1),
+    )
+    result = run_gblk_probabilistic(
+        fixture.pfa,
+        cfg,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
+    )
+
+    state = freeze_gblk_forward_state(
+        fixture.pfa,
+        cfg,
+        result,
+        coordinate_units="m",
+        structural_scenario="reversed-prior-grid",
+    )
+
+    prior_index = state.component_names.index("component_b")
+    np.testing.assert_allclose(
+        1.0 / (1.0 + np.exp(-state.prior_logit[:, prior_index])),
+        result.components["component_b"].probability["probability"],
+        rtol=0.0,
+        atol=1e-12,
+    )
+
+
+def test_forward_state_uses_prior_first_canonical_grid_for_fitted_component(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=8, n_wells=50, seed=132)
+    component_a = fixture.pfa["criteria"]["geologic"]["components"][
+        "component_a"
+    ]
+    component_a["pr_norm"] = (
+        component_a["pr_norm"].iloc[::-1].reset_index(drop=True)
+    )
+    wells_path = tmp_path / "wells_prior_first.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    base = _cfg(wells_path, tmp_path / "out_prior_first")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            label_columns={"component_b": "reservoir_label"},
+        ),
+        alpha={
+            "component_a": replace(
+                base.alpha["component_a"],
+                force_prior_predictive=True,
+            ),
+            "component_b": base.alpha["component_b"],
+        },
+        spatial_field=replace(base.spatial_field, enabled=True, n_levels=1),
+    )
+    result = run_gblk_probabilistic(
+        fixture.pfa,
+        cfg,
+        nc=_NC_SMALL,
+        max_outer_iter=_OUTER_SMALL,
+        irls_max_iter=_IRLS_SMALL,
+    )
+
+    state = freeze_gblk_forward_state(
+        fixture.pfa,
+        cfg,
+        result,
+        coordinate_units="m",
+        structural_scenario="prior-first-grid",
+    )
+
+    expected_x = result.combined.geometry.x.to_numpy(dtype=float)
+    expected_y = result.combined.geometry.y.to_numpy(dtype=float)
+    np.testing.assert_allclose(
+        state.coordinates, np.column_stack([expected_x, expected_y])
+    )
 
 
 def test_p_gblk_runner_force_prior_predictive_ignores_configured_labels(
@@ -809,6 +1107,7 @@ def test_prediction_support_standardization_is_identified_with_one_label(
         layer_names={"component_a": ["gradient"]},
         y_train=np.array([[1.0]]),
         observed_train=np.array([[True]]),
+        well_ids=np.array(["well-0"]),
         cfg=cfg,
     )
 
@@ -819,6 +1118,67 @@ def test_prediction_support_standardization_is_identified_with_one_label(
     diagnostics = design.diagnostics["component_a"]
     assert diagnostics["evidence_standardization"] == "prediction_support"
     assert diagnostics["evidence_center"] == [2.0]
+
+
+def test_calibration_cv_standardizes_evidence_on_canonical_grid_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = _cfg(tmp_path / "unused.gpkg", tmp_path / "cv-support")
+    cfg = replace(
+        base,
+        labels=replace(base.labels, min_wells_for_fit=2),
+        evidence=replace(base.evidence, standardization="prediction_support"),
+    )
+    assembled = gblk_runner.AssembledInputs(
+        component_names=("component_a",),
+        y=np.array([[0.0], [1.0], [0.0], [1.0]]),
+        observed_mask=np.ones((4, 1), dtype=bool),
+        labeled_mask=np.ones(4, dtype=bool),
+        well_offsets=np.zeros((4, 1)),
+        grid_offsets=np.zeros((2, 1)),
+        well_coords=np.column_stack([np.arange(4), np.zeros(4)]),
+        grid_coords=np.array([[0.0, 0.0], [1.0, 0.0]]),
+        well_ids=np.array(["a", "b", "c", "d"]),
+        well_depths_m=None,
+        evidence={"component_a": np.array([[0.0], [10.0], [100.0], [200.0]])},
+        grid_evidence={"component_a": np.array([[0.0], [10.0]])},
+        layer_names={"component_a": ["gradient"]},
+    )
+    train_mask = np.array([True, True, False, False])
+    test_mask = ~train_mask
+
+    design = gblk_runner._cv_joint_evidence(  # noqa: SLF001
+        assembled,
+        np.arange(4, dtype=np.intp),
+        (0,),
+        train_mask,
+        test_mask,
+        cfg=cfg,
+    )
+    assert design.diagnostics["component_a"]["evidence_center"] == [5.0]
+
+    captured: dict[str, np.ndarray] = {}
+
+    def fake_fit(x, *_args, **_kwargs):
+        captured["train"] = np.asarray(x)
+        return SimpleNamespace(x=np.ones(x.shape[1]), success=True)
+
+    monkeypatch.setattr(gblk_runner, "_fit_offset_logit", fake_fit)
+    _, test_offsets = gblk_runner._cv_evidence_only_offsets(  # noqa: SLF001
+        assembled,
+        np.arange(4, dtype=np.intp),
+        (0,),
+        train_mask,
+        test_mask,
+        cfg=cfg,
+    )
+
+    np.testing.assert_allclose(captured["train"][:, 0], [-1.0, 1.0])
+    np.testing.assert_allclose(
+        test_offsets[:, 0],
+        [(100.0 - 5.0) / 5.0, (200.0 - 5.0) / 5.0],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -835,7 +1195,8 @@ def test_p_gblk_runner_omega_nontrivial_on_coupled_data(
     fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
     cfg = _cfg(wells_path, tmp_path / "out_coupled")
     cfg = replace(
-        cfg, spatial_field=SpatialFieldConfig(enabled=True, n_levels=1)
+        cfg,
+        spatial_field=replace(cfg.spatial_field, enabled=True, n_levels=1),
     )
     result = run_gblk_probabilistic(
         fixture.pfa,

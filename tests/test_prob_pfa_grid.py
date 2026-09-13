@@ -111,6 +111,24 @@ def test_validate_passes_for_synthetic_2d() -> None:
     )
 
 
+def test_2d_validation_rejects_component_grid_with_z_coordinates() -> None:
+    fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=71)
+    component = fixture.pfa["criteria"]["geologic"]["components"][
+        "component_b"
+    ]
+    component["pr_norm"] = component["pr_norm"].set_geometry(
+        [
+            Point(point.x, point.y, 100.0)
+            for point in component["pr_norm"].geometry
+        ]
+    )
+
+    with pytest.raises(ValueError, match="must not carry a Z coordinate"):
+        validate_pfa_for_probabilistic(
+            fixture.pfa, criteria="geologic", dimensions="2d"
+        )
+
+
 def test_validate_raises_on_missing_criteria() -> None:
     pfa = {"criteria": {}}
     with pytest.raises(KeyError, match="geologic"):
@@ -260,6 +278,32 @@ def test_3d_validation_raises_when_geometry_lacks_z() -> None:
         }
     }
     with pytest.raises(ValueError, match="Z coordinate"):
+        validate_pfa_for_probabilistic(
+            pfa, criteria="geologic", dimensions="3d"
+        )
+
+
+def test_3d_validation_rejects_mixed_component_grid_dimensions() -> None:
+    pfa = _make_minimal_3d_pfa()
+    component = pfa["criteria"]["geologic"]["components"]["heat"]
+    geometry = component["pr_norm"].geometry.to_list()
+    geometry[-1] = Point(geometry[-1].x, geometry[-1].y)
+    component["pr_norm"] = component["pr_norm"].set_geometry(geometry)
+
+    with pytest.raises(ValueError, match="every row"):
+        validate_pfa_for_probabilistic(
+            pfa, criteria="geologic", dimensions="3d"
+        )
+
+
+def test_3d_validation_rejects_nonfinite_component_grid_z() -> None:
+    pfa = _make_minimal_3d_pfa()
+    component = pfa["criteria"]["geologic"]["components"]["heat"]
+    geometry = component["pr_norm"].geometry.to_list()
+    geometry[-1] = Point(geometry[-1].x, geometry[-1].y, np.nan)
+    component["pr_norm"] = component["pr_norm"].set_geometry(geometry)
+
+    with pytest.raises(ValueError, match="finite X, Y, and Z"):
         validate_pfa_for_probabilistic(
             pfa, criteria="geologic", dimensions="3d"
         )

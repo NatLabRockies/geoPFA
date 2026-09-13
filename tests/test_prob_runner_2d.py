@@ -9,6 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from geopfa.exceptions import GEOPFAValueError
 from geopfa.prob.config import load_probabilistic_config
 from geopfa.prob.runner import run_probabilistic
 from tests.fixtures.synthetic_prob import make_synthetic_pfa
@@ -145,7 +146,7 @@ def test_2d_runner_writes_geotiff(tmp_path):
     assert (out_dir / "combined_probability.tif").exists()
 
 
-def test_2d_runner_probability_raster_toggle_suppresses_geotiff(tmp_path):
+def test_2d_runner_rejects_disabled_requested_probability_raster(tmp_path):
     fixture, wells_path = _write_fixture(tmp_path, seed=12)
     out_dir = tmp_path / "out"
     cfg_path = _write_config(
@@ -164,13 +165,13 @@ def test_2d_runner_probability_raster_toggle_suppresses_geotiff(tmp_path):
     )
     cfg = load_probabilistic_config(cfg_path)
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
+    with pytest.raises(
+        GEOPFAValueError,
+        match="probability_rasters=false.*geotiff",
+    ):
         run_probabilistic(fixture.pfa, cfg)
 
-    assert (out_dir / "component_a_probability.csv").is_file()
-    assert not (out_dir / "component_a_probability.tif").exists()
-    assert not (out_dir / "combined_probability.tif").exists()
+    assert not out_dir.exists()
 
 
 def test_2d_runner_alpha_provenance_json(tmp_path):

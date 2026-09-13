@@ -73,6 +73,38 @@ def test_minimal_config_parses_with_defaults() -> None:
     assert cfg.outputs.posterior_draw_block_size == 20
 
 
+@pytest.mark.parametrize("reserved_name", ["combined", "Combined"])
+def test_component_name_cannot_collide_with_combined_output(
+    reserved_name: str,
+) -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["label_columns"] = {reserved_name: "heat_label"}
+    raw["alpha"] = {
+        reserved_name: {"mode": "scalar", "scalar_fallback_pr0": 0.5}
+    }
+
+    with pytest.raises(ValueError, match="reserved.*combined"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_component_names_must_be_portable() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["label_columns"] = {"../heat": "heat_label"}
+    raw["alpha"] = {"../heat": {"mode": "scalar", "scalar_fallback_pr0": 0.5}}
+
+    with pytest.raises(ValueError, match="portable surface name"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_component_names_must_not_have_case_normalized_collisions() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["label_columns"] = {"Heat": "heat_label"}
+    raw["alpha"] = {"heat": {"mode": "scalar", "scalar_fallback_pr0": 0.5}}
+
+    with pytest.raises(ValueError, match="case-insensitive collision"):
+        ProbabilisticConfig.from_dict(raw)
+
+
 def test_posterior_draw_output_config_roundtrips() -> None:
     raw = _minimal_config_dict()
     raw["inference"] = {
@@ -209,6 +241,409 @@ def test_gaussian_component_requires_explicit_response_scale() -> None:
         ProbabilisticConfig.from_dict(raw)
 
 
+def test_labels_csv_coordinate_contract_roundtrips() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"].update(
+        {
+            "source": "data/wells.csv",
+            "source_crs": "EPSG:32611",
+            "x_col": "easting_m",
+            "y_col": "northing_m",
+            "depth_col": "depth_m",
+        }
+    )
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.labels.source_crs == "EPSG:32611"
+    assert cfg.labels.x_col == "easting_m"
+    assert cfg.labels.y_col == "northing_m"
+    assert cfg.labels.z_col is None
+    assert cfg.labels.depth_col == "depth_m"
+    labels_payload = cfg.to_dict()["labels"]
+    assert labels_payload["source_crs"] == "EPSG:32611"
+    assert labels_payload["x_col"] == "easting_m"
+    assert labels_payload["y_col"] == "northing_m"
+    assert labels_payload["depth_col"] == "depth_m"
+
+
+def test_labels_allow_distinct_cartesian_z_and_scientific_depth_columns() -> (
+    None
+):
+    raw = _minimal_config_dict()
+    raw["labels"].update(
+        {
+            "source": "data/wells.csv",
+            "source_crs": "EPSG:32611",
+            "x_col": "x_m",
+            "y_col": "y_m",
+            "z_col": "z_m",
+            "depth_col": "depth_m",
+        }
+    )
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.labels.z_col == "z_m"
+    assert cfg.labels.depth_col == "depth_m"
+    assert cfg.to_dict()["labels"]["z_col"] == "z_m"
+    assert cfg.to_dict()["labels"]["depth_col"] == "depth_m"
+
+
+def test_explicit_prior_only_gaussian_does_not_require_bayesian_fit() -> None:
+    raw = _minimal_config_dict()
+    del raw["labels"]["label_columns"]["heat"]
+    raw["labels"]["observation_models"] = {"heat": {"family": "gaussian"}}
+    raw["alpha"]["heat"] = {
+        "mode": "thermal_layer_exceedance",
+        "layer": "temperature_model",
+        "threshold": 400.0,
+        "uncertainty_column": "temperature_sd_c",
+        "force_prior_predictive": True,
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.labels.observation_model_for("heat").family == "gaussian"
+    assert cfg.labels.observation_model_for("heat").response_scale is None
+    assert cfg.alpha["heat"].force_prior_predictive is True
+    assert cfg.inference.gblk_bayesian.enabled is False
+
+
+def test_labelled_gaussian_can_explicitly_bypass_outcome_fitting() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {"heat": {"family": "gaussian"}}
+    raw["alpha"]["heat"] = {
+        "mode": "thermal_layer_exceedance",
+        "layer": "temperature_model",
+        "threshold": 400.0,
+        "uncertainty_column": "temperature_sd_c",
+        "force_prior_predictive": True,
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.labels.observation_model_for("heat").family == "gaussian"
+    assert cfg.alpha["heat"].force_prior_predictive is True
+    assert cfg.inference.gblk_bayesian.enabled is False
+
+
+def test_all_prior_only_gaussian_config_does_not_require_label_mapping() -> (
+    None
+):
+    raw = _minimal_config_dict()
+    raw["labels"]["label_columns"] = {}
+    raw["labels"]["observation_models"] = {"heat": {"family": "gaussian"}}
+    raw["alpha"] = {
+        "heat": {
+            "mode": "thermal_layer_exceedance",
+            "layer": "temperature_model",
+            "threshold": 400.0,
+            "uncertainty_column": "temperature_sd_c",
+            "force_prior_predictive": True,
+        }
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.labels.label_columns == {}
+    assert cfg.labels.observation_model_for("heat").family == "gaussian"
+
+
+def test_all_fixed_prior_gblk_config_does_not_require_labels_block() -> None:
+    raw = _minimal_config_dict()
+    del raw["labels"]
+    raw["alpha"] = {
+        "heat": {
+            "mode": "scalar",
+            "scalar_fallback_pr0": 0.4,
+            "force_prior_predictive": True,
+        }
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.labels.source is None
+    assert cfg.labels.id_col is None
+    assert cfg.labels.label_columns == {}
+
+
+def test_prior_only_gaussian_can_declare_only_observation_model() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"] = {"observation_models": {"heat": {"family": "gaussian"}}}
+    raw["alpha"] = {
+        "heat": {
+            "mode": "thermal_layer_exceedance",
+            "layer": "temperature_model",
+            "threshold": 400.0,
+            "uncertainty_column": "temperature_sd_c",
+            "force_prior_predictive": True,
+        }
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.labels.source is None
+    assert cfg.labels.id_col is None
+    assert cfg.labels.label_columns == {}
+    assert cfg.labels.observation_model_for("heat").family == "gaussian"
+
+
+def test_data_informed_config_requires_complete_labels_contract() -> None:
+    raw = _minimal_config_dict()
+    del raw["labels"]
+    raw["alpha"] = {"heat": {"mode": "scalar"}}
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "data-informed components require labels.source, labels.id_col, "
+            "and non-empty labels.label_columns"
+        ),
+    ):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_site_selection_requires_complete_labels_contract() -> None:
+    raw = _minimal_config_dict()
+    del raw["labels"]
+    raw["alpha"] = {
+        "heat": {
+            "mode": "scalar",
+            "force_prior_predictive": True,
+        }
+    }
+    raw["site_selection"] = {
+        "mode": "joint_binary",
+        "candidate_source": "candidates.csv",
+        "id_col": "candidate_id",
+        "outcome_feature_columns": ["temperature"],
+        "selection_feature_columns": ["road_distance"],
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "site_selection requires labels.source, labels.id_col, and "
+            "non-empty labels.label_columns"
+        ),
+    ):
+        ProbabilisticConfig.from_dict(raw)
+
+
+@pytest.mark.parametrize(
+    "mode", ["thermal_exceedance", "thermal_layer_exceedance"]
+)
+def test_thermal_alpha_defaults_to_near_open_probability_bounds(
+    mode: str,
+) -> None:
+    direct_kwargs = (
+        {"thermal_raster": "temperature.tif"}
+        if mode == "thermal_exceedance"
+        else {"layer": "temperature_model"}
+    )
+    direct = AlphaModeConfig(
+        mode=mode,
+        threshold=350.0,
+        force_prior_predictive=True,
+        **direct_kwargs,
+    )
+    parsed = AlphaModeConfig.from_dict(
+        {
+            "mode": mode,
+            "threshold": 350.0,
+            "force_prior_predictive": True,
+            **direct_kwargs,
+        },
+        "heat",
+    )
+
+    assert direct.p_min == pytest.approx(1e-12)
+    assert direct.p_max == pytest.approx(1.0 - 1e-12)
+    assert parsed.p_min == direct.p_min
+    assert parsed.p_max == direct.p_max
+
+
+def test_layer_logit_retains_material_probability_bound_defaults() -> None:
+    direct = AlphaModeConfig(mode="layer_logit", layer="favorability")
+    parsed = AlphaModeConfig.from_dict(
+        {"mode": "layer_logit", "layer": "favorability"},
+        "heat",
+    )
+
+    assert direct.p_min == pytest.approx(0.2)
+    assert direct.p_max == pytest.approx(0.8)
+    assert parsed.p_min == direct.p_min
+    assert parsed.p_max == direct.p_max
+
+
+def test_csv_labels_reject_unused_vector_layer_selector() -> None:
+    with pytest.raises(ValueError, match="labels.layer.*CSV"):
+        LabelsConfig(
+            source="wells.csv",
+            id_col="well_id",
+            label_columns={"heat": "heat_label"},
+            source_crs="EPSG:32611",
+            x_col="x",
+            y_col="y",
+            layer="wells",
+        )
+
+
+@pytest.mark.parametrize(
+    ("mode_config", "unused_field"),
+    [
+        ({"mode": "scalar", "threshold": 350.0}, "threshold"),
+        ({"mode": "scalar", "p_min": 0.1}, "p_min"),
+        (
+            {
+                "mode": "layer_logit",
+                "layer": "favorability",
+                "thermal_raster": "temperature.tif",
+            },
+            "thermal_raster",
+        ),
+        (
+            {
+                "mode": "multi_layer",
+                "layers": ["a", "b"],
+                "uncertainty_column": "temperature_sd_c",
+            },
+            "uncertainty_column",
+        ),
+        (
+            {
+                "mode": "thermal_exceedance",
+                "thermal_raster": "temperature.tif",
+                "threshold": 350.0,
+                "layer": "temperature",
+            },
+            "layer",
+        ),
+        (
+            {
+                "mode": "thermal_layer_exceedance",
+                "layer": "temperature",
+                "threshold": 350.0,
+                "uncertainty_raster": "temperature_sd.tif",
+            },
+            "uncertainty_raster",
+        ),
+    ],
+)
+def test_alpha_modes_reject_fields_they_do_not_use(
+    mode_config: dict[str, object], unused_field: str
+) -> None:
+    with pytest.raises(ValueError, match=unused_field):
+        AlphaModeConfig.from_dict(mode_config, "heat")
+
+
+def test_direct_scalar_alpha_rejects_unused_probability_bounds() -> None:
+    with pytest.raises(ValueError, match="scalar.*p_min"):
+        AlphaModeConfig(mode="scalar", p_min=0.1)
+
+
+@pytest.mark.parametrize(
+    ("mode", "source_field", "source_value", "uncertainty_field"),
+    [
+        (
+            "thermal_layer_exceedance",
+            "layer",
+            "temperature_model",
+            "uncertainty_column",
+        ),
+        (
+            "thermal_exceedance",
+            "thermal_raster",
+            "temperature.tif",
+            "uncertainty_raster",
+        ),
+    ],
+)
+def test_prior_only_gaussian_requires_declared_response_uncertainty(
+    mode: str,
+    source_field: str,
+    source_value: str,
+    uncertainty_field: str,
+) -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {"heat": {"family": "gaussian"}}
+    raw["alpha"]["heat"] = {
+        "mode": mode,
+        source_field: source_value,
+        "threshold": 400.0,
+        "force_prior_predictive": True,
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=rf"Gaussian prior-only.*{uncertainty_field}",
+    ):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_prior_only_gaussian_rejects_logit_evidence_prior() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {"heat": {"family": "gaussian"}}
+    raw["alpha"]["heat"] = {
+        "mode": "thermal_layer_exceedance",
+        "layer": "temperature_model",
+        "threshold": 400.0,
+        "uncertainty_column": "temperature_sd_c",
+        "force_prior_predictive": True,
+        "use_evidence_prior": True,
+    }
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="Gaussian prior-only.*use_evidence_prior",
+    ):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_prior_only_gaussian_rejects_unused_response_scale() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+    raw["alpha"]["heat"] = {
+        "mode": "thermal_layer_exceedance",
+        "layer": "temperature_model",
+        "threshold": 400.0,
+        "uncertainty_column": "temperature_sd_c",
+        "force_prior_predictive": True,
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="Gaussian prior-only.*response_scale",
+    ):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_unlabelled_observation_model_requires_explicit_prior_only_alpha() -> (
+    None
+):
+    raw = _minimal_config_dict()
+    del raw["labels"]["label_columns"]["heat"]
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+    raw["alpha"]["heat"] = {
+        "mode": "thermal_layer_exceedance",
+        "layer": "temperature_model",
+        "threshold": 400.0,
+        "uncertainty_column": "temperature_sd_c",
+    }
+
+    with pytest.raises(ValueError, match="force_prior_predictive"):
+        ProbabilisticConfig.from_dict(raw)
+
+
 def test_predictive_stacking_config_roundtrips() -> None:
     raw = _minimal_config_dict()
     raw["inference"] = {
@@ -227,9 +662,48 @@ def test_predictive_stacking_config_roundtrips() -> None:
     }
 
 
+def test_predictive_stacking_minimum_training_wells_roundtrips() -> None:
+    raw = _minimal_config_dict()
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+        "predictive_stacking": {
+            "enabled": True,
+            "minimum_training_wells": 3,
+        },
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.inference.predictive_stacking.minimum_training_wells == 3
+    assert cfg.to_dict()["inference"]["predictive_stacking"] == {
+        "enabled": True,
+        "minimum_training_wells": 3,
+    }
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, True, "2"])
+def test_predictive_stacking_minimum_training_wells_must_be_positive_integer(
+    value: object,
+) -> None:
+    raw = _minimal_config_dict()
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+        "predictive_stacking": {
+            "enabled": True,
+            "minimum_training_wells": value,
+        },
+    }
+
+    with pytest.raises(ValueError, match="minimum_training_wells"):
+        ProbabilisticConfig.from_dict(raw)
+
+
 def test_predictive_stacking_target_depth_roundtrips() -> None:
     raw = _minimal_config_dict()
     raw["dimensions"] = "3d"
+    raw["labels"]["depth_col"] = "depth_m"
     raw["inference"] = {
         "backend": "gblk",
         "gblk_bayesian": {"enabled": True},
@@ -268,6 +742,7 @@ def test_predictive_stacking_target_depth_requires_3d() -> None:
 def test_predictive_stacking_target_depth_rejects_unknown_component() -> None:
     raw = _minimal_config_dict()
     raw["dimensions"] = "3d"
+    raw["labels"]["depth_col"] = "depth_m"
     raw["inference"] = {
         "backend": "gblk",
         "gblk_bayesian": {"enabled": True},
@@ -280,6 +755,22 @@ def test_predictive_stacking_target_depth_rejects_unknown_component() -> None:
     with pytest.raises(
         ValueError, match="validation_depths_m.*not_a_component"
     ):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_predictive_stacking_target_depth_requires_scientific_depth() -> None:
+    raw = _minimal_config_dict()
+    raw["dimensions"] = "3d"
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+        "predictive_stacking": {
+            "enabled": True,
+            "validation_depths_m": {"heat": 3_000.0},
+        },
+    }
+
+    with pytest.raises(ValueError, match="validation_depths_m.*depth_col"):
         ProbabilisticConfig.from_dict(raw)
 
 
@@ -408,7 +899,18 @@ def test_explicit_gaussian_evidence_priors_roundtrip_without_layer_weights() -> 
     }
     assert cfg.to_dict()["evidence"]["regularization"] == raw["evidence"][
         "regularization"
-    ] | {"C": 1.0, "per_feature_weights": {}, "play_type": None}
+    ] | {"C": 1.0, "per_feature_weights": {}}
+
+
+def test_regularization_rejects_removed_play_type_key() -> None:
+    raw = _minimal_config_dict()
+    raw["evidence"] = {"regularization": {"play_type": "extensional"}}
+
+    with pytest.raises(
+        ValueError,
+        match=r"unknown evidence\.regularization config key.*play_type",
+    ):
+        ProbabilisticConfig.from_dict(raw)
 
 
 def test_prediction_support_evidence_standardization_roundtrips() -> None:
@@ -447,14 +949,12 @@ def test_full_config_roundtrips_via_to_dict() -> None:
         "enabled": True,
         "output_dir": "out/",
         "dimensions": "3d",
-        "grid": {"nx": 100, "ny": 80, "nz": 20, "crs": "EPSG:32611"},
+        "grid": {},
         "labels": {
             "source": "wells.gpkg",
             "layer": "great_basin",
             "id_col": "well_id",
             "label_columns": {"heat": "heat_label"},
-            "label_quality_col": "quality",
-            "label_source_col": "source",
             "min_wells_for_fit": 6,
             "pu_mode": "off",
         },
@@ -473,7 +973,6 @@ def test_full_config_roundtrips_via_to_dict() -> None:
             "regularization": {
                 "C": 0.5,
                 "per_feature_weights": {"layer_a": 2.0},
-                "play_type": "extensional",
             },
             "include_layers": ["layer_a", "layer_b"],
             "exclude_layers": ["bad_layer"],
@@ -482,12 +981,7 @@ def test_full_config_roundtrips_via_to_dict() -> None:
         },
         "spatial_field": {
             "enabled": True,
-            "backend": "rbf",
-            "kernel": "matern32",
-            "n_inducing": 250,
-            "lengthscale_lower_frac": 0.05,
-            "lengthscale_upper_frac": 0.30,
-            "optimize_restarts": 2,
+            "backend": "latticekrigx",
             "n_levels": 3,
             "lattice_centers_per_dimension": 4,
             "coordinate_scaling": "physical_isotropic",
@@ -502,9 +996,8 @@ def test_full_config_roundtrips_via_to_dict() -> None:
             },
         },
         "calibration": {
-            "method": "isotonic",
-            "fit_on": "holdout",
-            "report_temperature": False,
+            "method": "none",
+            "fit_on": "block_cv",
             "n_bins": 8,
         },
         "cross_validation": {
@@ -513,7 +1006,7 @@ def test_full_config_roundtrips_via_to_dict() -> None:
             "block_size_km": 25.0,
             "grid_size": 5,
         },
-        "combination": {"rule": "product", "barrier_inverse": False},
+        "combination": {"rule": "product"},
         "scenarios": [
             {
                 "name": "full",
@@ -534,14 +1027,14 @@ def test_full_config_roundtrips_via_to_dict() -> None:
             "calibration_artifacts": False,
             "decision_artifacts": True,
             "scenarios": True,
-            "format": ["geotiff", "parquet", "vtk"],
+            "format": ["parquet", "vtk"],
         },
     }
     cfg = ProbabilisticConfig.from_dict(raw)
     out = cfg.to_dict()
     # Round-trip preserves user-visible structure (Path objects become strings):
     assert out["dimensions"] == raw["dimensions"]
-    assert out["grid"]["nx"] == raw["grid"]["nx"]
+    assert out["grid"]["nx"] is None
     assert out["labels"]["pu_mode"] == "off"
     assert out["spatial_field"]["n_levels"] == 3
     assert out["spatial_field"]["lattice_centers_per_dimension"] == 4
@@ -551,18 +1044,106 @@ def test_full_config_roundtrips_via_to_dict() -> None:
         out["evidence"]["regularization"]["per_feature_weights"]["layer_a"]
         == 2.0
     )
-    assert out["spatial_field"]["backend"] == "rbf"
+    assert out["spatial_field"]["backend"] == "latticekrigx"
     assert out["inference"]["gblk_bayesian"]["n_draws"] == 500
-    assert out["calibration"]["method"] == "isotonic"
+    assert out["calibration"]["method"] == "none"
     assert out["cross_validation"]["block_type"] == "grid"
     assert out["combination"]["rule"] == "product"
-    assert out["outputs"]["format"] == ["geotiff", "parquet", "vtk"]
+    assert out["outputs"]["format"] == ["parquet", "vtk"]
     assert len(out["scenarios"]) == 2
+
+
+def test_nondefault_grid_override_fails_closed() -> None:
+    raw = _minimal_config_dict()
+    raw["grid"] = {"nx": 100, "ny": 80, "crs": "EPSG:32611"}
+
+    with pytest.raises(ValueError, match="grid overrides are not implemented"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_gblk_rejects_non_latticekrigx_spatial_backend() -> None:
+    raw = _minimal_config_dict()
+    raw["spatial_field"] = {"enabled": True, "backend": "rbf"}
+
+    with pytest.raises(ValueError, match="backend='latticekrigx'"):
+        ProbabilisticConfig.from_dict(raw)
 
 
 def test_spatial_field_rejects_unknown_coordinate_scaling() -> None:
     with pytest.raises(ValueError, match="coordinate_scaling"):
         SpatialFieldConfig.from_dict({"coordinate_scaling": "vertical_magic"})
+
+
+@pytest.mark.parametrize(
+    ("block", "key", "value"),
+    [
+        ("spatial_field", "kernel", "matern32"),
+        ("spatial_field", "n_inducing", 100),
+        ("spatial_field", "lengthscale_lower_frac", 0.05),
+        ("spatial_field", "lengthscale_upper_frac", 0.3),
+        ("spatial_field", "optimize_restarts", 2),
+        ("labels", "label_quality_col", "quality"),
+        ("labels", "label_source_col", "source"),
+        ("calibration", "report_temperature", True),
+        ("combination", "barrier_inverse", False),
+    ],
+)
+def test_retired_no_effect_config_fields_fail_closed(
+    block: str,
+    key: str,
+    value: object,
+) -> None:
+    """A config key must not survive when no execution path honors it."""
+    raw = _minimal_config_dict()
+    raw.setdefault(block, {})[key] = value
+
+    with pytest.raises(ValueError, match=key):
+        ProbabilisticConfig.from_dict(raw)
+
+
+@pytest.mark.parametrize("fit_on", ["holdout", "in_sample"])
+def test_calibration_rejects_unimplemented_fit_populations(
+    fit_on: str,
+) -> None:
+    with pytest.raises(ValueError, match="fit_on"):
+        CalibrationConfig.from_dict({"fit_on": fit_on})
+
+
+def test_gblk_config_rejects_unimplemented_posthoc_calibration() -> None:
+    raw = _minimal_config_dict()
+    raw["calibration"] = {"method": "isotonic", "fit_on": "block_cv"}
+
+    with pytest.raises(ValueError, match="GBLK.*calibration.method='none'"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+@pytest.mark.parametrize(
+    ("dimensions", "formats", "match_text"),
+    [
+        ("3d", ["geotiff", "csv"], "GeoTIFF.*3-D"),
+        ("2d", ["vtk", "csv"], "VTK.*2-D"),
+    ],
+)
+def test_output_formats_must_match_model_dimension(
+    dimensions: str,
+    formats: list[str],
+    match_text: str,
+) -> None:
+    raw = _minimal_config_dict()
+    raw["dimensions"] = dimensions
+    raw["outputs"] = {"format": formats}
+
+    with pytest.raises(ValueError, match=match_text):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_3d_config_uses_dimension_appropriate_default_outputs() -> None:
+    raw = _minimal_config_dict()
+    raw["dimensions"] = "3d"
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.outputs.format == ("vtk", "csv")
 
 
 @pytest.mark.parametrize(
@@ -611,6 +1192,25 @@ def test_load_probabilistic_config_reads_top_level_block(
     cfg = load_probabilistic_config(cfg_path)
     assert isinstance(cfg, ProbabilisticConfig)
     assert cfg.enabled is True
+
+
+def test_load_prior_only_config_without_labels_block(tmp_path: Path) -> None:
+    raw = _minimal_config_dict()
+    del raw["labels"]
+    raw["alpha"] = {
+        "heat": {
+            "mode": "scalar",
+            "force_prior_predictive": True,
+        }
+    }
+    cfg_path = tmp_path / "pfa_config.json"
+    cfg_path.write_text(json.dumps({"probabilistic": raw}))
+
+    cfg = load_probabilistic_config(cfg_path)
+
+    assert cfg.labels.source is None
+    assert cfg.labels.id_col is None
+    assert cfg.labels.label_columns == {}
 
 
 def test_load_probabilistic_config_resolves_declared_paths_from_config_dir(
@@ -748,6 +1348,13 @@ def test_retired_shared_field_combination_is_rejected() -> None:
         ProbabilisticConfig.from_dict(raw)
 
 
+def test_geometric_mean_combination_is_rejected() -> None:
+    raw = _minimal_config_dict()
+    raw["combination"] = {"rule": "geometric_mean"}
+    with pytest.raises(ValueError, match="geometric_mean"):
+        ProbabilisticConfig.from_dict(raw)
+
+
 @pytest.mark.parametrize(
     ("patch", "match_text"),
     [
@@ -764,15 +1371,6 @@ def test_retired_shared_field_combination_is_rejected() -> None:
             "cor_scale_median",
         ),
         (
-            {
-                "spatial_field": {
-                    "lengthscale_lower_frac": 0.0,
-                    "lengthscale_upper_frac": 0.2,
-                }
-            },
-            "lengthscale_lower_frac",
-        ),
-        (
             {"evidence": {"sparse_binary_threshold": 1.01}},
             "sparse_binary_threshold",
         ),
@@ -783,10 +1381,6 @@ def test_retired_shared_field_combination_is_rejected() -> None:
                 }
             },
             "per_feature_weights",
-        ),
-        (
-            {"spatial_field": {"optimize_restarts": -1}},
-            "optimize_restarts",
         ),
         (
             {"cross_validation": {"block_size_km": 0.0}},
@@ -833,7 +1427,12 @@ def test_direct_alpha_construction_rejects_infinite_logit_bounds(
     p_min: float, p_max: float
 ) -> None:
     with pytest.raises(ValueError, match="strictly in \\(0, 1\\)"):
-        AlphaModeConfig(p_min=p_min, p_max=p_max)
+        AlphaModeConfig(
+            mode="layer_logit",
+            layer="favorability",
+            p_min=p_min,
+            p_max=p_max,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -859,7 +1458,6 @@ def test_evidence_defaults() -> None:
     cfg = ProbabilisticConfig.from_dict(_minimal_config_dict())
     assert cfg.evidence.regularization.C == pytest.approx(1.0)
     assert cfg.evidence.regularization.per_feature_weights == {}
-    assert cfg.evidence.regularization.play_type is None
     assert cfg.evidence.include_layers is None
     assert cfg.evidence.exclude_layers == ()
     assert "inverted_y" in cfg.evidence.coordinate_blacklist
@@ -1333,14 +1931,6 @@ def test_validate_catches_gblk_bayesian_invalid_ci_level(
     assert any("ci_level" in e for e in errors)
 
 
-def test_validate_catches_spatial_n_inducing_zero() -> None:
-    cfg = _make_valid_cfg(
-        spatial_field=SpatialFieldConfig(enabled=True, n_inducing=0)
-    )
-    errors = cfg.validate()
-    assert any("spatial_field.n_inducing" in e for e in errors)
-
-
 def test_validate_catches_nonpositive_lattice_centers() -> None:
     cfg = _make_valid_cfg(
         spatial_field=SpatialFieldConfig(
@@ -1352,47 +1942,15 @@ def test_validate_catches_nonpositive_lattice_centers() -> None:
     assert any("lattice_centers_per_dimension" in error for error in errors)
 
 
-def test_validate_catches_lengthscale_lower_frac_zero() -> None:
-    cfg = _make_valid_cfg(
-        spatial_field=SpatialFieldConfig(
-            enabled=True,
-            lengthscale_lower_frac=0.0,
-            lengthscale_upper_frac=0.2,
-        )
-    )
-    errors = cfg.validate()
-    assert any("lengthscale_lower_frac" in e for e in errors)
-
-
-def test_validate_catches_lengthscale_upper_not_greater_than_lower() -> None:
-    cfg = _make_valid_cfg(
-        spatial_field=SpatialFieldConfig(
-            enabled=True,
-            lengthscale_lower_frac=0.3,
-            lengthscale_upper_frac=0.2,
-        )
-    )
-    errors = cfg.validate()
-    assert any("lengthscale_upper_frac" in e for e in errors)
-
-
-def test_validate_catches_lengthscale_upper_equal_to_lower() -> None:
-    cfg = _make_valid_cfg(
-        spatial_field=SpatialFieldConfig(
-            enabled=True,
-            lengthscale_lower_frac=0.2,
-            lengthscale_upper_frac=0.2,
-        )
-    )
-    errors = cfg.validate()
-    assert any("lengthscale_upper_frac" in e for e in errors)
-
-
 def test_validate_catches_alpha_p_min_too_large() -> None:
     cfg = _make_valid_cfg(
         alpha={
             "a": AlphaModeConfig(
-                mode="scalar", scalar_fallback_pr0=0.5, p_min=0.6, p_max=0.9
+                mode="layer_logit",
+                layer="favorability",
+                scalar_fallback_pr0=0.5,
+                p_min=0.6,
+                p_max=0.9,
             )
         }
     )
@@ -1404,7 +1962,11 @@ def test_validate_catches_alpha_p_max_too_small() -> None:
     cfg = _make_valid_cfg(
         alpha={
             "a": AlphaModeConfig(
-                mode="scalar", scalar_fallback_pr0=0.5, p_min=0.2, p_max=0.4
+                mode="layer_logit",
+                layer="favorability",
+                scalar_fallback_pr0=0.5,
+                p_min=0.2,
+                p_max=0.4,
             )
         }
     )
@@ -1415,7 +1977,11 @@ def test_validate_catches_alpha_p_max_too_small() -> None:
 def test_validate_catches_alpha_p_min_not_less_than_p_max() -> None:
     with pytest.raises(ValueError, match="p_min < p_max"):
         AlphaModeConfig(
-            mode="scalar", scalar_fallback_pr0=0.5, p_min=0.3, p_max=0.3
+            mode="layer_logit",
+            layer="favorability",
+            scalar_fallback_pr0=0.5,
+            p_min=0.3,
+            p_max=0.3,
         )
 
 
@@ -1459,8 +2025,6 @@ def _assign_nested(
         ("spatial_field", "enabled"),
         ("inference", "gblk_bayesian", "enabled"),
         ("inference", "gblk_bayesian", "separate_ranges"),
-        ("calibration", "report_temperature"),
-        ("combination", "barrier_inverse"),
         ("scenarios", 0, "include_priors"),
         ("scenarios", 0, "include_spatial"),
         ("outputs", "probability_rasters"),
@@ -1495,8 +2059,6 @@ def test_json_boolean_fields_reject_truthy_strings(
     ("path", "value"),
     [
         (("labels", "min_wells_for_fit"), 4.5),
-        (("spatial_field", "n_inducing"), True),
-        (("spatial_field", "optimize_restarts"), 1.5),
         (("spatial_field", "n_levels"), "2"),
         (("spatial_field", "lattice_centers_per_dimension"), 2.5),
         (("inference", "gblk_bayesian", "n_draws"), "100"),
@@ -1529,7 +2091,6 @@ def test_json_integer_fields_reject_coercible_nonintegers(
     [
         (("evidence", "regularization", "C"), float("nan")),
         (("evidence", "sparse_binary_threshold"), float("inf")),
-        (("spatial_field", "lengthscale_lower_frac"), "0.02"),
         (("inference", "gblk_bayesian", "ci_level"), float("nan")),
         (("cross_validation", "block_size_km"), "20"),
         (("cross_validation", "buffer_km"), float("nan")),

@@ -1,6 +1,6 @@
 """Probabilistic workflow for geoPFA.
 
-This package implements the hierarchical-component probabilistic model as a
+This package implements the componentwise probabilistic model as a
 standalone, config-driven workflow that users can choose instead of the
 existing deterministic favorability calculation.
 
@@ -17,10 +17,9 @@ Modules
   thermal-exceedance / multi-layer).
 * ``data`` — generic raster sampling at labelled point locations.
 * ``labels`` — config-driven labelled-well loading.
-* ``play_types`` — play-type defaults registry for per-feature regularization.
 * ``pu`` — non-negative Positive-Unlabeled logistic risk estimation.
 * ``site_selection`` — optional finite-candidate preferential-sampling model.
-* ``regions`` — multi-region label splitting for hierarchical pooling.
+* ``regions`` — explicit region-stratified label and summary helpers.
 * ``scenario`` — reduced-form coordinate-trend sensitivity diagnostics.
 * ``variogram`` — empirical variogram range estimation for auto block-size CV.
 * ``calibration`` — ECE / MCE / Brier / log-loss, post-hoc calibration maps.
@@ -67,7 +66,6 @@ from .site_selection import (
 from .regions import (
     RegionLabels,
     check_region_label_coverage,
-    combine_region_beta_summaries,
     split_by_region,
 )
 from .variogram import (
@@ -81,6 +79,7 @@ from .config import (
     CombinationConfig,
     CrossValidationConfig,
     EvidenceConfig,
+    GBLKBayesianConfig,
     GridConfig,
     InferenceConfig,
     LabelsConfig,
@@ -118,6 +117,7 @@ from .forward import (
     load_frozen_gblk_forward_state,
     save_frozen_gblk_forward_state,
 )
+from .gblk_runner import run_gblk_calibration_cv
 from .fit_dispatch import build_fit_kwargs, fit_component_from_config
 from .io import (
     PersistedPosteriorDrawState,
@@ -148,11 +148,6 @@ from .pfa_grid import (
     layer_model_gdf,
     validate_pfa_for_probabilistic,
 )
-from .play_types import (
-    PLAY_TYPE_REGISTRY,
-    available_play_types,
-    play_type_defaults,
-)
 from .plotting import (
     PlotStyle,
     plot_component_panel,
@@ -177,7 +172,6 @@ from .scenario import (
 from .spatial import SpatialFieldResult, fit_spatial_field_gp
 
 __all__ = [
-    "PLAY_TYPE_REGISTRY",
     "AlphaCResult",
     "AlphaModeConfig",
     "CVResult",
@@ -196,6 +190,7 @@ __all__ = [
     "Fitter",
     "FrozenGBLKForwardResult",
     "FrozenGBLKForwardState",
+    "GBLKBayesianConfig",
     "GridConfig",
     "InferenceConfig",
     "LabelsConfig",
@@ -223,14 +218,12 @@ __all__ = [
     "TopNRow",
     "auc_tie_safe",
     "available_components",
-    "available_play_types",
     "brier_score",
     "build_alpha_c",
     "build_fit_kwargs",
     "calibration_summary",
     "check_region_label_coverage",
     "combine_probability_surfaces",
-    "combine_region_beta_summaries",
     "component_labels",
     "component_layers",
     "component_names",
@@ -259,7 +252,6 @@ __all__ = [
     "load_probabilistic_config",
     "log_loss",
     "maximum_calibration_error",
-    "play_type_defaults",
     "plot_component_panel",
     "plot_confusion_matrix",
     "plot_decision_class_bar",
@@ -271,6 +263,7 @@ __all__ = [
     "recommend_block_size_km",
     "run_block_cv",
     "run_coordinate_trend_sensitivity",
+    "run_gblk_calibration_cv",
     "run_probabilistic",
     "run_probabilistic_pfa",
     "run_site_selection_analysis",

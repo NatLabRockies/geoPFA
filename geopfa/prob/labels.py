@@ -133,14 +133,45 @@ def _maybe_reproject(
     return gdf.to_crs(target_crs)
 
 
-def load_labels(  # noqa: PLR0913
+def _apply_declared_source_crs(
+    gdf: gpd.GeoDataFrame, source_crs: str | None
+) -> gpd.GeoDataFrame:
+    """Apply a missing declared CRS or reject conflict with embedded metadata."""
+    if source_crs is None:
+        return gdf
+    if gdf.crs is None:
+        return gdf.set_crs(source_crs)
+    if gdf.crs != source_crs:
+        raise ValueError(
+            "labels.source_crs conflicts with the CRS embedded in the label source"
+        )
+    return gdf
+
+
+def _validated_depth(gdf: gpd.GeoDataFrame, depth_col: str) -> np.ndarray:
+    """Return a finite, nonnegative, positive-down scientific depth."""
+    if depth_col not in gdf.columns:
+        raise KeyError(
+            f"labelled-well file missing depth column {depth_col!r}"
+        )
+    numeric = pd.to_numeric(gdf[depth_col], errors="coerce")
+    depth = numeric.to_numpy(dtype=float, na_value=np.nan)
+    if not np.all(np.isfinite(depth)):
+        raise ValueError(
+            f"depth column {depth_col!r} must contain finite numeric values"
+        )
+    if np.any(depth < 0.0):
+        raise ValueError(
+            f"depth column {depth_col!r} must use nonnegative positive-down depth"
+        )
+    gdf[depth_col] = numeric.astype(float)
+    return depth
+
+
+def load_labels(
     cfg: LabelsConfig,
     *,
-    source_crs: str | None = None,
     target_crs: str | None = None,
-    x_col: str | None = None,
-    y_col: str | None = None,
-    z_col: str | None = None,
 ) -> LoadedLabels:
     """Load labelled wells from ``cfg.source`` using existing geoPFA readers.
 
@@ -149,14 +180,14 @@ def load_labels(  # noqa: PLR0913
     cfg
         :class:`~geopfa.prob.config.LabelsConfig` block from the user's PFA
         config.
-    source_crs
-        CRS of the CSV coordinate columns (required for CSV sources without
-        a CRS column).
     target_crs
         Optional CRS to reproject into. ``None`` keeps the file's CRS.
-    x_col, y_col, z_col
-        Column names for CSV sources. Defaults: ``"longitude"``,
-        ``"latitude"``, no ``z`` column.
+
+    CSV source CRS and coordinate-column semantics come exclusively from
+    ``cfg``. ``z_col`` is a Cartesian model coordinate. ``depth_col`` is a
+    separate nonnegative, positive-down scientific depth. When only depth is
+    declared, model geometry uses ``z = -depth``; when both are declared,
+    ``z_col`` controls geometry and ``depth_col`` is retained separately.
 
     Returns
     -------
@@ -166,28 +197,51 @@ def load_labels(  # noqa: PLR0913
     path = Path(cfg.source)
     suffix = path.suffix.lower()
     if suffix in _VECTOR_EXTS:
+        if any(
+            value is not None for value in (cfg.x_col, cfg.y_col, cfg.z_col)
+        ):
+            raise ValueError(
+                "labels.x_col, y_col, and z_col apply only to CSV sources; "
+                "vector-source geometry is authoritative"
+            )
         if cfg.layer is not None:
             gdf = gpd.read_file(path, layer=cfg.layer)
         else:
             gdf = GeospatialDataReaders.read_shapefile(path)
+        gdf = _apply_declared_source_crs(gdf, cfg.source_crs)
     elif suffix in _CSV_EXTS:
-        if source_crs is None:
+        if cfg.source_crs is None:
             raise ValueError(
-                "loading CSV labels requires source_crs (the CRS of the "
+                "loading CSV labels requires labels.source_crs (the CRS of the "
                 "coordinate columns)",
+            )
+        if cfg.x_col is None or cfg.y_col is None:
+            raise ValueError(
+                "loading CSV labels requires labels.x_col and labels.y_col"
             )
         gdf = GeospatialDataReaders.read_csv(
             str(path),
-            source_crs,
-            x_col=x_col or "longitude",
-            y_col=y_col or "latitude",
-            z_col=z_col,
+            cfg.source_crs,
+            x_col=cfg.x_col,
+            y_col=cfg.y_col,
+            z_col=cfg.z_col,
         )
     else:
         raise ValueError(
             f"unsupported labels source format: {suffix!r}; expected one of "
             f"{sorted(_VECTOR_EXTS | _CSV_EXTS)}",
         )
+
+    if cfg.depth_col is not None:
+        depth = _validated_depth(gdf, cfg.depth_col)
+        if cfg.z_col is None and suffix in _CSV_EXTS:
+            gdf = gdf.set_geometry(
+                gpd.points_from_xy(
+                    gdf[cfg.x_col],
+                    gdf[cfg.y_col],
+                    z=-depth,
+                )
+            )
 
     _validate_columns(gdf, cfg)
     gdf = _maybe_reproject(gdf, target_crs)

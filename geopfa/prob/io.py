@@ -1,7 +1,7 @@
 """Output writers for the probabilistic-method runner.
 
 Supports GeoTIFF (2D rasters via point-grid rasterisation), Parquet (long-form
-per-cell tables), and VTK (3D voxel volumes via PyVista). All writers operate
+per-cell tables), and VTK (3D point clouds via PyVista). All writers operate
 on per-component GeoDataFrames with a ``probability`` column (and optional
 uncertainty / spatial-residual columns) — the same shape the runner produces.
 
@@ -32,17 +32,18 @@ import rasterio
 from rasterio.transform import from_origin
 
 from .config import (
-    ALLOWED_COMBINATION_RULES,
     ALLOWED_OUTPUT_FORMATS,
     ProbabilisticConfig,
+    validate_surface_names,
 )
-from geopfa.io.data_writers import GeospatialDataWriters
 from geopfa.exceptions import GEOPFAValueError
 
 _MIN_POINTS_FOR_SPACING_CHECK = 3
 _DRAW_ARRAY_DIMENSIONS = 2
 _SUMMARY_CELL_CHUNK_SIZE = 2_048
 _INCREMENTAL_DRAW_SCHEMA_VERSION = 2
+_RUN_RESUME_SCHEMA_VERSION = 1
+_RUN_RESUME_FILENAME = ".probabilistic_run.incomplete.json"
 _RUNTIME_SOURCE_SUFFIXES = {
     ".c",
     ".dll",
@@ -53,6 +54,154 @@ _RUNTIME_SOURCE_SUFFIXES = {
     ".pyi",
     ".so",
 }
+_SHAPEFILE_REQUIRED_SIDECARS = (".dbf", ".shx")
+_SHAPEFILE_OPTIONAL_SIDECARS = (".cpg", ".prj")
+_SPATIAL_DIMENSION_2D = 2
+_SPATIAL_DIMENSION_3D = 3
+
+
+def _surface_point_dimension(name: str, gdf: gpd.GeoDataFrame) -> int:
+    """Validate point geometry and return its uniform coordinate dimension."""
+    geometry = gdf.geometry
+    if geometry.isna().any() or geometry.is_empty.any():
+        raise ValueError(
+            f"surface {name!r} geometry must contain non-empty points"
+        )
+    if not geometry.geom_type.eq("Point").all():
+        raise ValueError(f"surface {name!r} geometry must contain only points")
+    has_z = geometry.has_z.to_numpy(dtype=bool)
+    if has_z.any() and not has_z.all():
+        raise ValueError(f"surface {name!r} cannot mix 2-D and 3-D points")
+    dimension = _SPATIAL_DIMENSION_3D if has_z.all() else _SPATIAL_DIMENSION_2D
+    axes = [
+        geometry.x.to_numpy(dtype=float),
+        geometry.y.to_numpy(dtype=float),
+    ]
+    if dimension == _SPATIAL_DIMENSION_3D:
+        axes.append(geometry.z.to_numpy(dtype=float))
+    if not np.isfinite(np.column_stack(axes)).all():
+        raise ValueError(f"surface {name!r} coordinates must be finite")
+    return dimension
+
+
+def _validate_surface_value(
+    name: str, gdf: gpd.GeoDataFrame, *, value_col: str
+) -> None:
+    """Require one named surface value to be present, numeric, and finite."""
+    if value_col not in gdf.columns:
+        raise ValueError(
+            f"surface {name!r} is missing requested column {value_col!r}"
+        )
+    try:
+        values = gdf[value_col].to_numpy(dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"surface {name!r} column {value_col!r} must be numeric"
+        ) from exc
+    if not np.isfinite(values).all():
+        raise ValueError(
+            f"surface {name!r} column {value_col!r} must be finite"
+        )
+
+
+def _preflight_probability_surfaces(
+    surfaces: Mapping[str, gpd.GeoDataFrame],
+    *,
+    value_col: str = "probability",
+    required_dimension: int | None = None,
+    format_name: str | None = None,
+) -> None:
+    """Validate a complete writer request before filesystem mutation."""
+    validate_surface_names(surfaces, context="probability surface")
+    dimensions: set[int] = set()
+    for name, gdf in surfaces.items():
+        if not isinstance(gdf, gpd.GeoDataFrame):
+            raise TypeError(
+                f"surface {name!r} must be a GeoDataFrame; "
+                f"got {type(gdf).__name__}"
+            )
+        if len(gdf) == 0:
+            continue
+        _validate_surface_value(name, gdf, value_col=value_col)
+        dimension = _surface_point_dimension(name, gdf)
+        dimensions.add(dimension)
+        if required_dimension is not None and dimension != required_dimension:
+            label = format_name or "requested"
+            raise ValueError(
+                f"{label} output requires {required_dimension}-D surfaces; "
+                f"surface {name!r} is {dimension}-D"
+            )
+    if len(dimensions) > 1:
+        raise ValueError("one output request cannot mix 2-D and 3-D surfaces")
+
+
+def _preflight_geotiff_surfaces(
+    surfaces: Mapping[str, gpd.GeoDataFrame], *, value_col: str
+) -> None:
+    """Validate GeoTIFF dimensionality and raster support for every surface."""
+    _preflight_probability_surfaces(
+        surfaces,
+        value_col=value_col,
+        required_dimension=2,
+        format_name="GeoTIFF",
+    )
+    for gdf in surfaces.values():
+        if len(gdf) > 0:
+            _gdf_to_raster(gdf, value_col=value_col)
+
+
+def _preflight_vtk_attributes(
+    surfaces: Mapping[str, gpd.GeoDataFrame],
+) -> None:
+    """Require VTK point attributes to be numeric before any file is written."""
+    _preflight_probability_surfaces(
+        surfaces,
+        required_dimension=3,
+        format_name="VTK",
+    )
+    for name, gdf in surfaces.items():
+        if len(gdf) == 0:
+            continue
+        geometry_name = gdf.geometry.name
+        for column in gdf.columns:
+            if column == geometry_name:
+                continue
+            try:
+                values = gdf[column].to_numpy(dtype=float)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"surface {name!r} VTK attribute {column!r} must be numeric"
+                ) from exc
+            if not np.isfinite(values).all():
+                raise ValueError(
+                    f"surface {name!r} VTK attribute {column!r} must be finite"
+                )
+
+
+def _preflight_output_request(
+    surfaces: Mapping[str, gpd.GeoDataFrame],
+    *,
+    formats: tuple[str, ...],
+    include_uncertainty: bool,
+) -> None:
+    """Preflight every requested output format as one validation transaction."""
+    _preflight_probability_surfaces(surfaces)
+    if "geotiff" in formats:
+        _preflight_geotiff_surfaces(surfaces, value_col="probability")
+        if include_uncertainty:
+            for value_col in (
+                "spatial_u_std",
+                "probability_lo",
+                "probability_hi",
+            ):
+                selected = {
+                    name: gdf
+                    for name, gdf in surfaces.items()
+                    if value_col in gdf.columns
+                }
+                _preflight_geotiff_surfaces(selected, value_col=value_col)
+    if "vtk" in formats:
+        _preflight_vtk_attributes(surfaces)
 
 
 # ---------------------------------------------------------------------------
@@ -116,20 +265,14 @@ def write_geotiff_outputs(
 ) -> list[Path]:
     """Write one GeoTIFF per surface (2D point grids only).
 
-    3D grids are skipped — use :func:`write_vtk_outputs` for those.
+    Three-dimensional input is rejected; use :func:`write_vtk_outputs` for it.
     """
+    _preflight_geotiff_surfaces(surfaces, value_col=value_col)
     output_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for name, gdf in surfaces.items():
         if len(gdf) == 0:
             continue
-        # Skip 3D surfaces; their value-per-(x,y,z) doesn't fit a GeoTIFF.
-        if gdf.geometry.has_z.any():
-            continue
-        if value_col not in gdf.columns:
-            raise ValueError(
-                f"surface {name!r} is missing requested column {value_col!r}"
-            )
         arr, transform, crs = _gdf_to_raster(gdf, value_col=value_col)
         out_path = output_dir / f"{name}_{value_col}.tif"
         with rasterio.open(
@@ -159,6 +302,7 @@ def write_parquet_outputs(
     output_dir: Path,
 ) -> list[Path]:
     """Write one Parquet file per surface with (x, y[, z], probability)."""
+    _preflight_probability_surfaces(surfaces)
     output_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for name, gdf in surfaces.items():
@@ -169,7 +313,7 @@ def write_parquet_outputs(
         out_df["y"] = out_df.geometry.y
         if out_df.geometry.has_z.any():
             out_df["z"] = out_df.geometry.z
-        out_df = out_df.drop(columns=["geometry"])
+        out_df = out_df.drop(columns=[out_df.geometry.name])
         out_path = output_dir / f"{name}_probability.parquet"
         out_df.to_parquet(out_path, index=False)
         written.append(out_path)
@@ -177,7 +321,7 @@ def write_parquet_outputs(
 
 
 # ---------------------------------------------------------------------------
-# VTK (3D voxel volumes)
+# VTK (3D point clouds)
 # ---------------------------------------------------------------------------
 
 
@@ -185,14 +329,11 @@ def write_vtk_outputs(
     surfaces: dict[str, gpd.GeoDataFrame],
     output_dir: Path,
 ) -> list[Path]:
-    """Write one VTK ``.vtp`` per 3D surface (skips 2D ones)."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    eligible = {
-        name: gdf
-        for name, gdf in surfaces.items()
-        if len(gdf) > 0 and gdf.geometry.has_z.any()
-    }
+    """Write one VTK ``.vtp`` per 3D surface."""
+    _preflight_vtk_attributes(surfaces)
+    eligible = {name: gdf for name, gdf in surfaces.items() if len(gdf) > 0}
     if not eligible:
+        output_dir.mkdir(parents=True, exist_ok=True)
         return []
     try:
         import pyvista as pv  # noqa: PLC0415
@@ -200,6 +341,7 @@ def write_vtk_outputs(
         raise ImportError(
             "PyVista is required to write requested 3-D VTK outputs"
         ) from exc
+    output_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for name, gdf in eligible.items():
         coords = np.column_stack(
@@ -210,8 +352,9 @@ def write_vtk_outputs(
             ]
         )
         cloud = pv.PolyData(coords)
+        geometry_name = gdf.geometry.name
         for col in gdf.columns:
-            if col == "geometry":
+            if col == geometry_name:
                 continue
             cloud.point_data[col] = gdf[col].to_numpy(dtype=float)
         out_path = output_dir / f"{name}_probability.vtp"
@@ -223,6 +366,30 @@ def write_vtk_outputs(
 # ---------------------------------------------------------------------------
 # Unified writer + manifest
 # ---------------------------------------------------------------------------
+
+
+def write_csv_outputs(
+    surfaces: dict[str, gpd.GeoDataFrame],
+    output_dir: Path,
+) -> list[Path]:
+    """Write one coordinate-explicit CSV per probability surface."""
+    _preflight_probability_surfaces(surfaces)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for name, gdf in surfaces.items():
+        if len(gdf) == 0:
+            continue
+        out_df = gdf.copy()
+        geometry = out_df.geometry
+        out_df["x"] = geometry.x
+        out_df["y"] = geometry.y
+        if geometry.has_z.any():
+            out_df["z"] = geometry.z
+        out_df = out_df.drop(columns=[geometry.name])
+        out_path = output_dir / f"{name}_probability.csv"
+        out_df.to_csv(out_path, index=False)
+        written.append(out_path)
+    return written
 
 
 def write_probability_outputs(
@@ -239,7 +406,11 @@ def write_probability_outputs(
             f"unknown output format(s): {unknown}; "
             f"expected a subset of {list(ALLOWED_OUTPUT_FORMATS)}"
         )
-    output_dir.mkdir(parents=True, exist_ok=True)
+    _preflight_output_request(
+        surfaces,
+        formats=formats,
+        include_uncertainty=include_uncertainty,
+    )
     written: list[Path] = []
     if "geotiff" in formats:
         written.extend(
@@ -270,10 +441,7 @@ def write_probability_outputs(
     if "vtk" in formats:
         written.extend(write_vtk_outputs(surfaces, output_dir))
     if "csv" in formats:
-        for name, gdf in surfaces.items():
-            out_path = output_dir / f"{name}_probability.csv"
-            GeospatialDataWriters.write_csv(gdf, str(out_path))
-            written.append(out_path)
+        written.extend(write_csv_outputs(surfaces, output_dir))
     return written
 
 
@@ -335,26 +503,14 @@ def _combined_draw_estimand(
     *,
     combination_rule: str,
 ) -> tuple[np.ndarray, str]:
-    """Evaluate the configured component combination within each draw."""
-    if combination_rule == "product":
-        return (
-            np.prod(component_block, axis=2),
-            "within_draw_component_product",
+    """Evaluate the component-probability product within each draw."""
+    if combination_rule != "product":
+        raise ValueError(
+            f"combination_rule must be 'product' (got {combination_rule!r})"
         )
-    if combination_rule == "geometric_mean":
-        return (
-            np.exp(
-                np.mean(
-                    np.log(np.clip(component_block, 1e-12, 1.0)),
-                    axis=2,
-                )
-            ),
-            "within_draw_component_geometric_mean",
-        )
-    allowed = ", ".join(ALLOWED_COMBINATION_RULES)
-    raise ValueError(
-        f"combination_rule must be one of: {allowed} "
-        f"(got {combination_rule!r})"
+    return (
+        np.prod(component_block, axis=2),
+        "within_draw_component_product",
     )
 
 
@@ -446,15 +602,44 @@ def _state_array_name(name: str) -> str:
     return name
 
 
-def _verify_file_record(root: Path, record: Mapping[str, Any]) -> None:
-    """Fail closed when one indexed payload is absent or corrupted."""
-    path = root / str(record["path"])
+def _file_record_path(root: Path, record: Mapping[str, Any]) -> Path:
+    """Resolve one indexed payload without leaving its owning namespace."""
+    root = Path(root).resolve()
+    raw_path = record.get("path")
+    if not isinstance(raw_path, str):
+        raise TypeError("posterior draw payload path must be a string")
+    relative = Path(raw_path)
+    candidate = root / relative
+    if (
+        not relative.parts
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or any(
+            (root.joinpath(*relative.parts[:index])).is_symlink()
+            for index in range(1, len(relative.parts) + 1)
+        )
+    ):
+        raise ValueError(
+            "posterior draw payload must remain inside its posterior namespace"
+        )
+    path = candidate.resolve()
+    if root not in path.parents:
+        raise ValueError(
+            "posterior draw payload must remain inside its posterior namespace"
+        )
+    return path
+
+
+def _verify_file_record(root: Path, record: Mapping[str, Any]) -> Path:
+    """Fail closed when one contained payload is absent or corrupted."""
+    path = _file_record_path(root, record)
     if not path.is_file():
         raise ValueError(f"posterior draw payload is missing: {path}")
     if path.stat().st_size != int(record["size_bytes"]):
         raise ValueError(f"posterior draw payload size mismatch: {path}")
     if _file_sha256(path) != record["sha256"]:
         raise ValueError(f"posterior draw payload hash mismatch: {path}")
+    return path
 
 
 class PosteriorDrawBlockWriter:
@@ -926,11 +1111,13 @@ class PosteriorDrawBlockWriter:
         return self._summarize(self.final_dir, ci_level)
 
 
-def load_posterior_draw_state(  # noqa: PLR0914
+def load_posterior_draw_state(  # noqa: PLR0913, PLR0914
     output_dir: Path,
     grid_gdf: gpd.GeoDataFrame,
     *,
     expected_config_hash: str,
+    expected_analysis_input_sha256: str,
+    expected_implementation_sha256: str,
     expected_scope: str,
 ) -> PersistedPosteriorDrawState | None:
     """Reopen exact state for restart without refitting the Bayesian model."""
@@ -973,6 +1160,20 @@ def load_posterior_draw_state(  # noqa: PLR0914
     if state_metadata.get("config_hash") != expected_config_hash:
         raise ValueError(
             "persisted posterior config hash differs from this run"
+        )
+    if (
+        state_metadata.get("analysis_input_sha256")
+        != expected_analysis_input_sha256
+    ):
+        raise ValueError(
+            "persisted posterior analysis inputs differ from this run"
+        )
+    if (
+        state_metadata.get("implementation_sha256")
+        != expected_implementation_sha256
+    ):
+        raise ValueError(
+            "persisted posterior implementation differs from this run"
         )
     if payload.get("scope") != expected_scope:
         raise ValueError("persisted posterior scope differs from this run")
@@ -1254,13 +1455,50 @@ def _probabilistic_implementation_hash() -> str:
     return digest.hexdigest()
 
 
+def _shapefile_sidecar(source: Path, suffix: str) -> Path | None:
+    """Resolve one Shapefile sidecar, including case-only suffix variants."""
+    if not source.parent.is_dir():
+        return None
+    matches = sorted(
+        path
+        for path in source.parent.iterdir()
+        if path.is_file()
+        and path.stem.casefold() == source.stem.casefold()
+        and path.suffix.casefold() == suffix
+    )
+    if len(matches) > 1:
+        raise ValueError(
+            f"Shapefile input has ambiguous {suffix} sidecars: {source}"
+        )
+    return matches[0].resolve() if matches else None
+
+
+def _manifest_input_bundle(name: str, source: str | Path) -> dict[str, Path]:
+    """Expand one logical input into every file used by its data format."""
+    path = Path(source).resolve()
+    if path.suffix.casefold() != ".shp":
+        return {name: path}
+
+    bundle = {name: path}
+    for suffix in _SHAPEFILE_REQUIRED_SIDECARS:
+        sidecar = _shapefile_sidecar(path, suffix)
+        bundle[f"{name}{suffix}"] = (
+            path.with_suffix(suffix).resolve() if sidecar is None else sidecar
+        )
+    for suffix in _SHAPEFILE_OPTIONAL_SIDECARS:
+        sidecar = _shapefile_sidecar(path, suffix)
+        if sidecar is not None:
+            bundle[f"{name}{suffix}"] = sidecar
+    return bundle
+
+
 def _manifest_inputs(
     config: ProbabilisticConfig,
     input_artifacts: Mapping[str, str | Path] | None,
 ) -> dict[str, Path]:
-    configured: dict[str, str | Path] = {
-        "labels.source": config.labels.source,
-    }
+    configured: dict[str, str | Path] = {}
+    if config.labels.source is not None:
+        configured["labels.source"] = config.labels.source
     for component, alpha in sorted(config.alpha.items()):
         if alpha.thermal_raster is not None:
             configured[f"alpha.{component}.thermal_raster"] = (
@@ -1282,9 +1520,43 @@ def _manifest_inputs(
             + ", ".join(sorted(overlap))
         )
     configured.update(supplied)
-    return {
-        name: Path(source).resolve() for name, source in configured.items()
-    }
+    expanded: dict[str, Path] = {}
+    for name, source in sorted(configured.items()):
+        for member_name, member_path in _manifest_input_bundle(
+            name, source
+        ).items():
+            if member_name in expanded:
+                raise ValueError(
+                    "input artifact names collide after Shapefile bundle "
+                    f"expansion: {member_name}"
+                )
+            expanded[member_name] = member_path
+    return expanded
+
+
+def _manifest_input_records(
+    config: ProbabilisticConfig,
+    input_artifacts: Mapping[str, str | Path] | None,
+) -> list[dict[str, Any]]:
+    """Resolve and fingerprint every file consumed by a manifest run."""
+    records: list[dict[str, Any]] = []
+    for name, path in sorted(
+        _manifest_inputs(config, input_artifacts).items()
+    ):
+        if not path.is_file():
+            raise FileNotFoundError(
+                "manifest input artifact does not exist or is not a file: "
+                f"{path}"
+            )
+        records.append(
+            {
+                "name": name,
+                "path": str(path),
+                "size_bytes": path.stat().st_size,
+                "sha256": _file_sha256(path),
+            }
+        )
+    return records
 
 
 def _verify_manifest_inputs(
@@ -1325,6 +1597,7 @@ def _verify_manifest_outputs(
     records: Any,
     *,
     allow_resumable_posterior: bool,
+    ignored_root_names: frozenset[str] = frozenset(),
 ) -> int:
     if not isinstance(records, list):
         raise TypeError("run manifest files must be a list")
@@ -1362,6 +1635,7 @@ def _verify_manifest_outputs(
         for path in output_dir.rglob("*")
         if path.is_file()
         and path != manifest_path
+        and not (path.name in ignored_root_names and path.parent == output_dir)
         and not (
             allow_resumable_posterior
             and ".posterior_draws.incomplete" in path.parts
@@ -1370,6 +1644,214 @@ def _verify_manifest_outputs(
     if recorded_paths != present_paths:
         raise ValueError("run manifest has unlisted or missing output files")
     return len(recorded_paths)
+
+
+def _read_json_mapping(path: Path, *, context: str) -> dict[str, Any]:
+    """Read one strict JSON object with a user-facing failure context."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{context} is unreadable: {path}") from exc
+    if not isinstance(payload, dict):
+        raise TypeError(f"{context} must contain a JSON object")
+    return payload
+
+
+def _resume_record_paths(
+    root: Path,
+    records: Any,
+    *,
+    context: str,
+) -> set[Path]:
+    """Resolve the exact file set declared by posterior metadata."""
+    if not isinstance(records, list):
+        raise TypeError(f"{context} files must be a list")
+    root = root.resolve()
+    paths: set[Path] = set()
+    for record in records:
+        if not isinstance(record, dict) or not isinstance(
+            record.get("path"), str
+        ):
+            raise TypeError(f"{context} contains an invalid file record")
+        path = _file_record_path(root, record)
+        if not path.is_file():
+            raise ValueError(f"{context} file is missing: {path}")
+        if path in paths:
+            raise ValueError(f"{context} contains a repeated file path")
+        paths.add(path)
+    return paths
+
+
+def _verify_incomplete_draw_prefix(payload: Mapping[str, Any]) -> None:
+    """Require incomplete draw blocks to be one contiguous prefix."""
+    expected_start = 0
+    n_draws = int(payload["n_draws"])
+    for record in payload.get("blocks", []):
+        draw_start = int(record["draw_start"])
+        draw_stop = int(record["draw_stop"])
+        if (
+            draw_start != expected_start
+            or not draw_start < draw_stop <= n_draws
+        ):
+            raise ValueError(
+                "incomplete posterior blocks are not a contiguous prefix"
+            )
+        expected_start = draw_stop
+
+
+def _posterior_resume_files(
+    namespace: Path,
+    *,
+    complete: bool,
+    expected_scope: str,
+    expected_config_hash: str,
+    expected_implementation_sha256: str,
+) -> set[Path]:
+    """Verify one resumable posterior namespace and return its files."""
+    metadata_path = namespace / ("index.json" if complete else "progress.json")
+    if not metadata_path.is_file():
+        raise ValueError(
+            "resumable posterior namespace lacks "
+            f"{metadata_path.name}: {namespace}"
+        )
+    payload = _read_json_mapping(
+        metadata_path, context="resumable posterior metadata"
+    )
+    if payload.get("schema_version") != _INCREMENTAL_DRAW_SCHEMA_VERSION:
+        raise ValueError("resumable posterior schema is unsupported")
+    state_metadata = (
+        payload.get("state", {}).get("metadata")
+        if complete and isinstance(payload.get("state"), dict)
+        else payload.get("state_metadata")
+    )
+    if not isinstance(state_metadata, dict):
+        raise TypeError("resumable posterior state metadata is invalid")
+    if payload.get("scope") != expected_scope:
+        raise ValueError("resumable posterior scope differs from this run")
+    if state_metadata.get("config_hash") != expected_config_hash:
+        raise ValueError("resumable posterior config differs from this scope")
+    if (
+        state_metadata.get("implementation_sha256")
+        != expected_implementation_sha256
+    ):
+        raise ValueError(
+            "resumable posterior implementation differs from this run"
+        )
+    state = payload.get("state") if complete else None
+    state_records = (
+        state.get("arrays", [])
+        if isinstance(state, dict)
+        else payload.get("state_arrays", [])
+    )
+    indexed_records = [
+        payload.get("coordinates"),
+        *state_records,
+        *payload.get("blocks", []),
+    ]
+    if any(not isinstance(record, dict) for record in indexed_records):
+        raise TypeError("resumable posterior file records are invalid")
+    indexed_paths = _resume_record_paths(
+        namespace,
+        indexed_records,
+        context="resumable posterior",
+    )
+    if not complete:
+        _verify_incomplete_draw_prefix(payload)
+    expected_files = indexed_paths | {metadata_path.resolve()}
+    present_files = {
+        path.resolve() for path in namespace.rglob("*") if path.is_file()
+    }
+    if present_files != expected_files:
+        raise ValueError("resumable posterior namespace has unindexed files")
+    if any(path.is_symlink() for path in namespace.rglob("*")):
+        raise ValueError("resumable posterior namespace contains a symlink")
+    return expected_files
+
+
+def _run_scope_layout(
+    config: ProbabilisticConfig,
+) -> tuple[tuple[str, str], ...]:
+    """Return the ordered output namespace owned by each run scope."""
+    return (
+        ("baseline", "."),
+        *(
+            (f"scenario:{scenario.name}", f"scenarios/{scenario.name}")
+            for scenario in config.scenarios
+        ),
+    )
+
+
+def _validate_run_resume_marker(  # noqa: PLR0913
+    output_dir: Path,
+    payload: Mapping[str, Any],
+    *,
+    config: ProbabilisticConfig,
+    input_artifacts: Mapping[str, str | Path] | None,
+    implementation_sha256: str,
+    expected_scopes: list[dict[str, str]],
+    validate_namespace: bool,
+    verify_input_files: bool = True,
+) -> None:
+    """Validate the identity and optional files of one interrupted run."""
+    if set(payload) != {
+        "schema_version",
+        "config_hash",
+        "implementation_sha256",
+        "inputs",
+        "scopes",
+    }:
+        raise ValueError("run resume marker has an unsupported schema")
+    if payload.get("schema_version") != _RUN_RESUME_SCHEMA_VERSION:
+        raise ValueError("run resume marker schema_version is unsupported")
+    if payload.get("config_hash") != _config_hash(config):
+        raise ValueError(
+            "run resume marker was made by a different effective config"
+        )
+    if payload.get("implementation_sha256") != implementation_sha256:
+        raise ValueError(
+            "run resume marker was made by a different probabilistic "
+            "implementation"
+        )
+    if verify_input_files:
+        _verify_manifest_inputs(
+            payload.get("inputs"), _manifest_inputs(config, input_artifacts)
+        )
+    if payload.get("scopes") != expected_scopes:
+        raise ValueError("run resume scope plan differs from this run")
+    if not validate_namespace:
+        return
+
+    allowed_files = {(output_dir / _RUN_RESUME_FILENAME).resolve()}
+    for scope in expected_scopes:
+        relative = Path(scope["output_dir"])
+        scope_dir = (
+            output_dir if relative == Path() else output_dir / relative
+        ).resolve()
+        complete_dir = scope_dir / "posterior_draws"
+        incomplete_dir = scope_dir / ".posterior_draws.incomplete"
+        present = [
+            path for path in (complete_dir, incomplete_dir) if path.exists()
+        ]
+        if len(present) > 1 or any(not path.is_dir() for path in present):
+            raise ValueError("run resume posterior namespace is ambiguous")
+        if present:
+            allowed_files.update(
+                _posterior_resume_files(
+                    present[0],
+                    complete=present[0] == complete_dir,
+                    expected_scope=scope["name"],
+                    expected_config_hash=scope["config_hash"],
+                    expected_implementation_sha256=implementation_sha256,
+                )
+            )
+
+    if any(path.is_symlink() for path in output_dir.rglob("*")):
+        raise ValueError("run resume namespace contains a symlink")
+    present_files = {
+        path.resolve() for path in output_dir.rglob("*") if path.is_file()
+    }
+    if present_files != allowed_files:
+        raise ValueError("run resume namespace contains untracked artifacts")
 
 
 def verify_manifest(
@@ -1446,10 +1928,11 @@ def validate_output_namespace(
 ) -> None:
     """Reject output directories that could mix incompatible run artifacts.
 
-    A directory may be fresh, contain only a resumable incremental posterior
-    workspace, or contain a completed manifest made by the same effective
-    configuration and implementation. Anything else requires a new output
-    directory (or an explicit user-controlled archive/removal step).
+    A directory may be fresh or contain only a resumable incremental posterior
+    workspace. A completed manifest is immutable, including when it matches
+    the effective configuration and implementation. Any completed or invalid
+    namespace requires a new output directory (or an explicit user-controlled
+    archive/removal step).
     """
     output_dir = Path(output_dir)
     if not output_dir.exists():
@@ -1492,7 +1975,7 @@ def validate_output_namespace(
             require_current_implementation=True,
             allow_resumable_posterior=incomplete.is_dir(),
         )
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         message = str(exc)
         if "different effective config" in message:
             message = "output_dir contains artifacts from a different effective config"
@@ -1504,6 +1987,254 @@ def validate_output_namespace(
         raise GEOPFAValueError(
             f"{message}; choose a fresh output_dir"
         ) from exc
+    raise GEOPFAValueError(
+        "output_dir contains a completed manifested run; choose a fresh "
+        "output_dir"
+    )
+
+
+def _run_resume_scopes(
+    output_dir: Path,
+    config: ProbabilisticConfig,
+    scope_configs: Mapping[str, ProbabilisticConfig],
+) -> list[dict[str, str]]:
+    """Bind each streamed posterior scope to its exact effective config."""
+    layout = _run_scope_layout(config)
+    if tuple(scope_configs) != tuple(name for name, _ in layout):
+        raise ValueError("run resume scope configs differ from the run plan")
+    scopes: list[dict[str, str]] = []
+    for name, relative in layout:
+        scope_config = scope_configs[name]
+        expected_output_dir = (
+            output_dir
+            if relative == "."
+            else (output_dir / relative).resolve()
+        )
+        if scope_config.output_dir.resolve() != expected_output_dir:
+            raise ValueError(
+                f"run resume scope {name!r} has an unexpected output_dir"
+            )
+        scopes.append(
+            {
+                "name": name,
+                "output_dir": relative,
+                "config_hash": _config_hash(scope_config),
+            }
+        )
+    return scopes
+
+
+def _verify_manifest_before_marker_removal(
+    output_dir: Path,
+    *,
+    config: ProbabilisticConfig,
+    input_artifacts: Mapping[str, str | Path] | None,
+    implementation_sha256: str,
+) -> None:
+    """Verify a completed manifest while its owned resume marker remains."""
+    manifest_path = output_dir / "manifest.json"
+    manifest = _read_json_mapping(manifest_path, context="run manifest")
+    if manifest.get("schema_version") != 1:
+        raise ValueError("unsupported run manifest schema_version")
+    if manifest.get("config_hash") != _config_hash(config):
+        raise ValueError(
+            "run manifest was made by a different effective config"
+        )
+    if manifest.get("implementation_sha256") != implementation_sha256:
+        raise ValueError(
+            "run manifest was made by a different probabilistic implementation"
+        )
+    _verify_manifest_inputs(
+        manifest.get("inputs"), _manifest_inputs(config, input_artifacts)
+    )
+    _verify_manifest_outputs(
+        output_dir,
+        manifest.get("files"),
+        allow_resumable_posterior=False,
+        ignored_root_names=frozenset({_RUN_RESUME_FILENAME}),
+    )
+
+
+def _accept_new_manifest(
+    output_dir: Path,
+    marker: Mapping[str, Any],
+    *,
+    config: ProbabilisticConfig,
+    implementation_sha256: str,
+) -> None:
+    """Accept the manifest just produced from the marker-bound run."""
+    manifest = _read_json_mapping(
+        output_dir / "manifest.json", context="run manifest"
+    )
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("config_hash") != _config_hash(config)
+        or manifest.get("implementation_sha256") != implementation_sha256
+        or manifest.get("inputs") != marker.get("inputs")
+    ):
+        raise ValueError(
+            "completed manifest differs from its run resume marker"
+        )
+    files = manifest.get("files")
+    if not isinstance(files, list) or any(
+        not isinstance(record, dict)
+        or record.get("path") == _RUN_RESUME_FILENAME
+        for record in files
+    ):
+        raise ValueError("completed manifest contains an invalid file list")
+    if _probabilistic_implementation_hash() != implementation_sha256:
+        raise RuntimeError(
+            "geoPFA or LatticeKrigX runtime source changed during run"
+        )
+
+
+@dataclass
+class _StreamedRunResumeGuard:
+    """Own one marker that permits exact streamed GBLK resumption."""
+
+    output_dir: Path
+    config: ProbabilisticConfig
+    input_artifacts: Mapping[str, str | Path] | None
+    implementation_sha256: str
+    scopes: list[dict[str, str]]
+    managed: bool
+
+    def finish(self, manifest_path: Path) -> None:
+        """Remove the marker only after the completed manifest verifies."""
+        if not self.managed:
+            return
+        expected_manifest = self.output_dir / "manifest.json"
+        if manifest_path.resolve() != expected_manifest.resolve():
+            raise ValueError(
+                "run resume guard received an unexpected manifest"
+            )
+        marker_path = self.output_dir / _RUN_RESUME_FILENAME
+        payload = _read_json_mapping(marker_path, context="run resume marker")
+        _validate_run_resume_marker(
+            self.output_dir,
+            payload,
+            config=self.config,
+            input_artifacts=self.input_artifacts,
+            implementation_sha256=self.implementation_sha256,
+            expected_scopes=self.scopes,
+            validate_namespace=False,
+            verify_input_files=False,
+        )
+        _accept_new_manifest(
+            self.output_dir,
+            payload,
+            config=self.config,
+            implementation_sha256=self.implementation_sha256,
+        )
+        marker_path.unlink()
+        self.managed = False
+
+
+def _begin_streamed_run_resume(
+    output_dir: Path,
+    config: ProbabilisticConfig,
+    *,
+    scope_configs: Mapping[str, ProbabilisticConfig],
+    input_artifacts: Mapping[str, str | Path] | None,
+    expected_implementation_sha256: str,
+) -> _StreamedRunResumeGuard:
+    """Create or verify the marker for a streamed GBLK run."""
+    output_dir = Path(output_dir).resolve()
+    implementation_sha256 = _probabilistic_implementation_hash()
+    if implementation_sha256 != expected_implementation_sha256:
+        raise RuntimeError(
+            "geoPFA or LatticeKrigX runtime source changed before run startup"
+        )
+    scopes = _run_resume_scopes(output_dir, config, scope_configs)
+    marker_path = output_dir / _RUN_RESUME_FILENAME
+    manifest_path = output_dir / "manifest.json"
+
+    if marker_path.is_file():
+        completed_manifest = False
+        try:
+            payload = _read_json_mapping(
+                marker_path, context="run resume marker"
+            )
+            _validate_run_resume_marker(
+                output_dir,
+                config=config,
+                payload=payload,
+                input_artifacts=input_artifacts,
+                implementation_sha256=implementation_sha256,
+                expected_scopes=scopes,
+                validate_namespace=not manifest_path.is_file(),
+            )
+            if manifest_path.is_file():
+                _verify_manifest_before_marker_removal(
+                    output_dir,
+                    config=config,
+                    input_artifacts=input_artifacts,
+                    implementation_sha256=implementation_sha256,
+                )
+                marker_path.unlink()
+                managed = False
+                completed_manifest = True
+            else:
+                managed = True
+        except (KeyError, TypeError, ValueError) as exc:
+            message = str(exc)
+            if "different effective config" in message:
+                message = (
+                    "output_dir contains artifacts from a different "
+                    "effective config"
+                )
+            elif "different probabilistic implementation" in message:
+                message = (
+                    "output_dir contains artifacts from a different "
+                    "probabilistic implementation"
+                )
+            raise GEOPFAValueError(
+                f"{message}; choose a fresh output_dir"
+            ) from exc
+        if completed_manifest:
+            raise GEOPFAValueError(
+                "output_dir contains a completed manifested run; choose a "
+                "fresh output_dir"
+            )
+        return _StreamedRunResumeGuard(
+            output_dir,
+            config,
+            input_artifacts,
+            implementation_sha256,
+            scopes,
+            managed,
+        )
+
+    validate_output_namespace(
+        output_dir, config, input_artifacts=input_artifacts
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": _RUN_RESUME_SCHEMA_VERSION,
+        "config_hash": _config_hash(config),
+        "implementation_sha256": implementation_sha256,
+        "inputs": _manifest_input_records(config, input_artifacts),
+        "scopes": scopes,
+    }
+    _atomic_json_write(marker_path, payload)
+    _validate_run_resume_marker(
+        output_dir,
+        payload,
+        config=config,
+        input_artifacts=input_artifacts,
+        implementation_sha256=implementation_sha256,
+        expected_scopes=scopes,
+        validate_namespace=True,
+    )
+    return _StreamedRunResumeGuard(
+        output_dir,
+        config,
+        input_artifacts,
+        implementation_sha256,
+        scopes,
+        True,
+    )
 
 
 def write_manifest(
@@ -1536,24 +2267,13 @@ def write_manifest(
             "sha256": _file_sha256(path),
         }
         for path in sorted(output_dir.rglob("*"))
-        if path.is_file() and path.name != "manifest.json"
-    ]
-    configured_inputs = _manifest_inputs(config, input_artifacts)
-    inputs = []
-    for name, source in sorted(configured_inputs.items()):
-        path = Path(source)
-        if not path.is_file():
-            raise FileNotFoundError(
-                f"manifest input artifact does not exist or is not a file: {path}"
-            )
-        inputs.append(
-            {
-                "name": name,
-                "path": str(path),
-                "size_bytes": path.stat().st_size,
-                "sha256": _file_sha256(path),
-            }
+        if path.is_file()
+        and path.name != "manifest.json"
+        and not (
+            path.parent == output_dir and path.name == _RUN_RESUME_FILENAME
         )
+    ]
+    inputs = _manifest_input_records(config, input_artifacts)
     from geopfa import __version__  # noqa: PLC0415
 
     payload = {
@@ -1571,10 +2291,13 @@ def write_manifest(
         "inputs": inputs,
         "files": files,
     }
+    if _probabilistic_implementation_hash() != implementation_sha256:
+        raise RuntimeError(
+            "geoPFA or LatticeKrigX runtime source changed while the run "
+            "manifest was being assembled"
+        )
     manifest_path = output_dir / "manifest.json"
-    manifest_path.write_text(
-        json.dumps(payload, indent=2, default=str), encoding="utf-8"
-    )
+    _atomic_json_write(manifest_path, payload)
     return manifest_path
 
 
@@ -1586,6 +2309,7 @@ __all__ = [
     "validate_output_namespace",
     "verify_manifest",
     "verify_posterior_draw_bundle",
+    "write_csv_outputs",
     "write_geotiff_outputs",
     "write_manifest",
     "write_parquet_outputs",

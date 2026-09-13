@@ -60,8 +60,12 @@ def build_fit_kwargs(  # noqa: PLR0913
     elif alpha_config.mode == "multi_layer":
         excluded.update(alpha_config.layers)
 
-    # Explicit per-feature overrides from config.
+    # Explicit proper Gaussian coefficient priors from config. The newer
+    # ``prior_precisions`` spelling takes precedence when both mappings name
+    # the same feature.
     explicit_weights = dict(evidence_config.regularization.per_feature_weights)
+    explicit_weights.update(evidence_config.regularization.prior_precisions)
+    explicit_means = dict(evidence_config.regularization.prior_means)
 
     return {
         "prior_probability": alpha_config.scalar_fallback_pr0,
@@ -76,15 +80,10 @@ def build_fit_kwargs(  # noqa: PLR0913
         "coordinate_blacklist": tuple(evidence_config.coordinate_blacklist),
         "force_prior_predictive": alpha_config.force_prior_predictive,
         "per_feature_weights": explicit_weights or None,
-        "prior_means": None,
-        "_play_type": evidence_config.regularization.play_type,
+        "prior_means": explicit_means or None,
         "pu_mode": pu_mode,
         "pu_class_prior": pu_class_prior,
         "min_wells": min_wells,
-        "spatial_n_inducing": spatial_field_config.n_inducing,
-        "spatial_lower_frac": spatial_field_config.lengthscale_lower_frac,
-        "spatial_upper_frac": spatial_field_config.lengthscale_upper_frac,
-        "spatial_optimize_restarts": spatial_field_config.optimize_restarts,
     }
 
 
@@ -123,9 +122,6 @@ def fit_component_from_config(  # noqa: PLR0913
         evidence_config=evidence_config,
         spatial_field_config=spatial_field_config,
     )
-    # _play_type is resolved by the runner with actual feature names; strip
-    # it here so it doesn't propagate to fit_component_probability.
-    kwargs.pop("_play_type", None)
     alpha_result = build_alpha_c(
         component_data,
         alpha_config,

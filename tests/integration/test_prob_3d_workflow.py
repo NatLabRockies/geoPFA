@@ -6,6 +6,7 @@ Validates the full pipeline: alpha_c → sequential fitting → calibration → 
 
 from __future__ import annotations
 
+import pickle
 import warnings
 from pathlib import Path
 
@@ -136,9 +137,13 @@ def test_run_probabilistic_pfa_integration(tmp_path: Path, fixture_3d) -> None:
         "combination": {"rule": "product"},
     }
 
+    pfa_path = tmp_path / "pfa.pkl"
+    with pfa_path.open("wb") as stream:
+        pickle.dump(pfa_with_config, stream)
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        result = run_probabilistic_pfa(pfa_with_config)
+        result = run_probabilistic_pfa(pfa_path)
 
     assert not result.skipped
     assert "component_a" in result.components

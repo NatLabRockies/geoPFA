@@ -267,13 +267,44 @@ def scale_spatial_coordinates(
     grid: NDArray[np.float64],
     *,
     mode: str = "axis_range",
+    spatial_domain: NDArray[np.float64] | None = None,
 ) -> tuple[
     NDArray[np.float64],
     NDArray[np.float64],
     NDArray[np.float64],
     NDArray[np.float64],
 ]:
-    """Apply one auditable coordinate transform to training and grid points."""
+    """Apply one auditable coordinate transform to training and grid points.
+
+    When supplied, ``spatial_domain`` is a ``(D, 2)`` array whose columns are
+    the lower and upper physical-coordinate bounds. It fixes the transform
+    independently of the particular training and prediction subsets.
+    """
+    transformed = _transform_spatial_coordinates(
+        coords,
+        grid,
+        mode=mode,
+        spatial_domain=spatial_domain,
+    )
+    return transformed[:4]
+
+
+def _transform_spatial_coordinates(
+    coords: NDArray[np.float64],
+    grid: NDArray[np.float64],
+    *,
+    mode: str,
+    spatial_domain: NDArray[np.float64] | None,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    bool,
+]:
+    """Validate and transform coordinates against one physical domain."""
     train = np.asarray(coords, dtype=np.float64)
     prediction = np.asarray(grid, dtype=np.float64)
     if train.ndim != 2 or train.shape[1] not in _SPATIAL_DIMS:  # noqa: PLR2004
@@ -286,11 +317,39 @@ def scale_spatial_coordinates(
     all_coords = np.vstack([train, prediction])
     if not np.all(np.isfinite(all_coords)):
         raise ValueError("coords and grid must contain only finite values")
-    lower = all_coords.min(axis=0)
-    raw_span = all_coords.max(axis=0) - lower
+
+    domain_is_explicit = spatial_domain is not None
+    if spatial_domain is None:
+        lower = all_coords.min(axis=0)
+        upper = all_coords.max(axis=0)
+        domain = np.column_stack([lower, upper])
+    else:
+        domain = np.asarray(spatial_domain, dtype=np.float64)
+        expected_shape = (train.shape[1], 2)
+        if domain.shape != expected_shape:
+            raise ValueError(
+                "spatial_domain must have shape "
+                f"{expected_shape} with lower and upper bounds; got "
+                f"{domain.shape}"
+            )
+        if not np.all(np.isfinite(domain)):
+            raise ValueError("spatial_domain bounds must be finite")
+        lower = domain[:, 0]
+        upper = domain[:, 1]
+
+    raw_span = upper - lower
     if np.any(raw_span <= 0.0):
         raise ValueError(
-            "each spatial coordinate axis must have positive span"
+            "spatial_domain upper bounds must be strictly greater than lower "
+            "bounds on every axis"
+        )
+    if domain_is_explicit and np.any(
+        (all_coords < lower[np.newaxis, :])
+        | (all_coords > upper[np.newaxis, :])
+    ):
+        raise ValueError(
+            "training or prediction coordinates fall outside spatial_domain "
+            "bounds"
         )
     if mode == "axis_range":
         scale = raw_span
@@ -301,7 +360,16 @@ def scale_spatial_coordinates(
         raise ValueError(
             "coordinate scaling mode must be 'axis_range' or 'physical_isotropic'"
         )
-    return (train - lower) / scale, (prediction - lower) / scale, lower, scale
+    domain_model = (domain - lower[:, np.newaxis]) / scale[:, np.newaxis]
+    return (
+        (train - lower) / scale,
+        (prediction - lower) / scale,
+        lower,
+        scale,
+        domain,
+        domain_model,
+        domain_is_explicit,
+    )
 
 
 def _prepare_joint_designs(
@@ -403,6 +471,7 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
     fixed_effects_grid: NDArray[np.float64] | None = None,
     fixed_precision: NDArray[np.float64] | None = None,
     fixed_prior_mean: NDArray[np.float64] | None = None,
+    spatial_domain: NDArray[np.float64] | None = None,
     nc: int = 6,
     nlevel: int = 1,
     a_wght: float = 4.5,
@@ -529,15 +598,26 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
                 f"grid_offsets must be finite with shape {expected_grid_shape}"
             )
 
-    coords_model, grid_model, lower, coordinate_scale = (
-        scale_spatial_coordinates(coords, grid, mode=coordinate_scaling)
+    (
+        coords_model,
+        grid_model,
+        lower,
+        coordinate_scale,
+        fitted_domain,
+        domain_model,
+        domain_is_explicit,
+    ) = _transform_spatial_coordinates(
+        coords,
+        grid,
+        mode=coordinate_scaling,
+        spatial_domain=spatial_domain,
     )
-    coordinate_span = np.ptp(np.vstack([coords, grid]), axis=0)
-    domain = np.vstack([coords_model, grid_model])
-    domain_lower = domain.min(axis=0) - 1e-3
-    domain_upper = domain.max(axis=0) + 1e-3
+    coordinate_span = fitted_domain[:, 1] - fitted_domain[:, 0]
+    domain_coords = domain_model.T
+    domain_lower = domain_model[:, 0] - 1e-3
+    domain_upper = domain_model[:, 1] + 1e-3
     lkinfo = lk_setup(
-        domain,
+        domain_coords,
         nc=nc,
         nlevel=nlevel,
         nc_buffer=2,
@@ -718,6 +798,8 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         "coordinate_span": coordinate_span.tolist(),
         "coordinate_scale": coordinate_scale.tolist(),
         "coordinate_transform": coordinate_scaling,
+        "spatial_domain": fitted_domain.tolist(),
+        "spatial_domain_explicit": domain_is_explicit,
         "training_offsets_in_likelihood": True,
         "paige_prior": {
             "cor_scale_median": bayes_config.cor_scale_median,
@@ -876,6 +958,7 @@ def fit_gblk_gaussian_bayesian_joint(  # noqa: PLR0913
     fixed_effects_grid: NDArray[np.float64] | None = None,
     fixed_precision: NDArray[np.float64] | None = None,
     fixed_prior_mean: NDArray[np.float64] | None = None,
+    spatial_domain: NDArray[np.float64] | None = None,
     nc: int = 6,
     nlevel: int = 1,
     a_wght: float = 4.5,
@@ -896,6 +979,7 @@ def fit_gblk_gaussian_bayesian_joint(  # noqa: PLR0913
         fixed_effects_grid=fixed_effects_grid,
         fixed_precision=fixed_precision,
         fixed_prior_mean=fixed_prior_mean,
+        spatial_domain=spatial_domain,
         nc=nc,
         nlevel=nlevel,
         a_wght=a_wght,
@@ -951,6 +1035,7 @@ def fit_gblk_bayesian_joint(  # noqa: PLR0913
     fixed_effects_grid: NDArray[np.float64] | None = None,
     fixed_precision: NDArray[np.float64] | None = None,
     fixed_prior_mean: NDArray[np.float64] | None = None,
+    spatial_domain: NDArray[np.float64] | None = None,
     nc: int = 6,
     nlevel: int = 1,
     a_wght: float = 4.5,
@@ -971,6 +1056,7 @@ def fit_gblk_bayesian_joint(  # noqa: PLR0913
         fixed_effects_grid=fixed_effects_grid,
         fixed_precision=fixed_precision,
         fixed_prior_mean=fixed_prior_mean,
+        spatial_domain=spatial_domain,
         nc=nc,
         nlevel=nlevel,
         a_wght=a_wght,
@@ -1010,6 +1096,7 @@ def fit_gblk_joint(  # noqa: PLR0913, PLR0914
     fixed_effects_grid: NDArray[np.float64] | None = None,
     fixed_precision: NDArray[np.float64] | None = None,
     fixed_prior_mean: NDArray[np.float64] | None = None,
+    spatial_domain: NDArray[np.float64] | None = None,
     nc: int = 6,
     nlevel: int = 1,
     a_wght: float = 4.5,
@@ -1038,6 +1125,10 @@ def fit_gblk_joint(  # noqa: PLR0913, PLR0914
     grid_offsets
         ``(G, Q)`` per-component logit-scale prior offsets at the grid, or
         ``None`` for zero offsets.
+    spatial_domain
+        Optional ``(D, 2)`` lower/upper physical-coordinate bounds. Supply the
+        full study domain to keep scaling and lattice geometry fixed across
+        final and cross-validation fits.
     nc, a_wght
         LatticeKrig lattice knobs (see :func:`build_lkinfo_2d`).
     max_outer_iter, irls_max_iter
@@ -1080,11 +1171,22 @@ def fit_gblk_joint(  # noqa: PLR0913, PLR0914
         )
 
     ndim = int(coords.shape[1])
-    coords_model, grid_model, lower, coordinate_scale = (
-        scale_spatial_coordinates(coords, grid, mode=coordinate_scaling)
+    (
+        coords_model,
+        grid_model,
+        lower,
+        coordinate_scale,
+        fitted_domain,
+        domain_model,
+        domain_is_explicit,
+    ) = _transform_spatial_coordinates(
+        coords,
+        grid,
+        mode=coordinate_scaling,
+        spatial_domain=spatial_domain,
     )
-    coordinate_span = np.ptp(np.vstack([coords, grid]), axis=0)
-    domain_coords = np.vstack([coords_model, grid_model])
+    coordinate_span = fitted_domain[:, 1] - fitted_domain[:, 0]
+    domain_coords = domain_model.T
 
     lkinfo = build_lkinfo(
         domain_coords,
@@ -1154,6 +1256,8 @@ def fit_gblk_joint(  # noqa: PLR0913, PLR0914
             "coordinate_span": coordinate_span.tolist(),
             "coordinate_scale": coordinate_scale.tolist(),
             "coordinate_transform": coordinate_scaling,
+            "spatial_domain": fitted_domain.tolist(),
+            "spatial_domain_explicit": domain_is_explicit,
             "fixed_effects_in_joint_likelihood": fixed_effects is not None,
             "fixed_effect_mode": (
                 None

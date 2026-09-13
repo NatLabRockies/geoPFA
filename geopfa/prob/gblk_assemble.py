@@ -14,6 +14,10 @@ Translates :class:`~geopfa.prob.pfa_grid.PFAGridAdapter`,
 * ``evidence`` — per-component ``(n, L_q)`` evidence design matrix built
   from the processed layer values at well locations.
 * ``well_coords (n, D)`` / ``grid_coords (G, D)`` — spatial coordinates.
+* ``well_ids (n,)`` — configured well identities retained for grouped
+  support checks and spatial holdouts.
+* ``well_depths_m (n,)`` — optional positive-down scientific depths retained
+  independently of the Cartesian geometry Z coordinate.
 
 Component ordering is fixed (sorted alphabetically) and reproducible.
 
@@ -25,19 +29,12 @@ quadrature objects from geoPFA observation metadata. Pass a list of such
 objects to :func:`build_observation_basis` to obtain the ``(n, M)`` sparse
 averaged-basis-row matrix consumed by the GBLK fitter.
 
-Regional pooling
-----------------
-:func:`pool_regional_coefficients` maps per-region coefficient estimates
-``d_hat`` and variances ``d_var`` onto
-:func:`latticekrigx.glk.hierarchy.eb_pool_coefficients` using play type
-(from :mod:`geopfa.prob.play_types`) as the pooling group.  Regions with the
-same play type share a common prior mean and between-region variance.
-
 Notes
 -----
 Grid offsets for wells are obtained by dimension-aware nearest-neighbour
-snapping onto the first component's ``pr_norm`` grid. Rectilinear component
-grids are linearly resampled to that canonical support; incomplete,
+snapping onto a caller-supplied canonical reference grid, or the first fitted
+component's ``pr_norm`` grid when no reference is supplied. Rectilinear
+component grids are linearly resampled to that canonical support; incomplete,
 duplicated, or non-covering grids fail closed.
 """
 
@@ -48,7 +45,6 @@ from dataclasses import dataclass, field
 import geopandas as gpd
 import numpy as np
 import scipy.sparse
-from latticekrigx.glk.hierarchy import EBPoolResult, eb_pool_coefficients
 from latticekrigx.glk.support import Support, averaged_basis_row
 from latticekrigx.model.config import LKInfo
 from numpy.typing import NDArray
@@ -97,6 +93,13 @@ class AssembledInputs:
         ``(n, 3)`` for 3-D.
     grid_coords
         Grid cell spatial coordinates, shape ``(G, 2)`` or ``(G, 3)``.
+    well_ids
+        Configured well identifier for each observation row. Repeated values
+        preserve multiple observations from one well as one support unit.
+    well_depths_m
+        Configured positive-down depth for each observation row, or ``None``
+        when no scientific depth column is declared. This remains distinct
+        from Cartesian geometry Z.
     evidence
         Per-component evidence design matrices keyed by component name.
         Each value has shape ``(n, L_q)`` where ``L_q`` is the number of
@@ -123,6 +126,8 @@ class AssembledInputs:
     grid_offsets: NDArray[np.float64]
     well_coords: NDArray[np.float64]
     grid_coords: NDArray[np.float64]
+    well_ids: NDArray[np.object_]
+    well_depths_m: NDArray[np.float64] | None
     evidence: dict[str, NDArray[np.float64]] = field(default_factory=dict)
     grid_evidence: dict[str, NDArray[np.float64]] = field(default_factory=dict)
     layer_names: dict[str, list[str]] = field(default_factory=dict)
@@ -132,6 +137,21 @@ class AssembledInputs:
     prior_response_mean_well: NDArray[np.float64] | None = None
     prior_response_sd_grid: NDArray[np.float64] | None = None
     prior_response_sd_well: NDArray[np.float64] | None = None
+
+    def __post_init__(self) -> None:
+        """Require row-aligned identity and optional scientific depth."""
+        if np.asarray(self.well_ids).shape != (self.n,):
+            raise ValueError(
+                f"well_ids must have shape ({self.n},); "
+                f"got {np.asarray(self.well_ids).shape}"
+            )
+        if self.well_depths_m is not None:
+            depths = np.asarray(self.well_depths_m)
+            if depths.shape != (self.n,) or not np.all(np.isfinite(depths)):
+                raise ValueError(
+                    "well_depths_m must be a finite vector aligned to "
+                    f"{self.n} observation rows"
+                )
 
     @property
     def n(self) -> int:
@@ -218,6 +238,78 @@ def _build_labels_array(
     labeled_mask = np.all(observed_mask, axis=1)
     y = np.where(np.isfinite(y_raw), y_raw, 0.0)
     return y, observed_mask, labeled_mask
+
+
+def _build_well_metadata(
+    wells_gdf: gpd.GeoDataFrame,
+    labels_config: LabelsConfig,
+) -> tuple[NDArray[np.object_], NDArray[np.float64] | None]:
+    """Return row-aligned well identities and configured scientific depths."""
+    if labels_config.id_col not in wells_gdf.columns:
+        raise GEOPFAValueError(
+            f"labelled wells are missing id column {labels_config.id_col!r}"
+        )
+    identifiers = wells_gdf[labels_config.id_col]
+    if identifiers.isna().any():
+        raise GEOPFAValueError(
+            f"well id column {labels_config.id_col!r} contains missing values"
+        )
+    well_ids = identifiers.to_numpy(dtype=object, copy=True)
+
+    depth_col = labels_config.depth_col
+    if depth_col is None:
+        return well_ids, None
+    if depth_col not in wells_gdf.columns:
+        raise GEOPFAValueError(
+            f"labelled wells are missing depth column {depth_col!r}"
+        )
+    try:
+        well_depths_m = wells_gdf[depth_col].to_numpy(
+            dtype=np.float64,
+            na_value=np.nan,
+        )
+    except (TypeError, ValueError) as exc:
+        raise GEOPFAValueError(
+            f"well depth column {depth_col!r} must contain numeric values"
+        ) from exc
+    if not np.all(np.isfinite(well_depths_m)):
+        raise GEOPFAValueError(
+            f"well depth column {depth_col!r} must contain finite values"
+        )
+    if np.any(well_depths_m < 0.0):
+        raise GEOPFAValueError(
+            f"well depth column {depth_col!r} must use nonnegative "
+            "positive-down depth"
+        )
+    return well_ids, well_depths_m
+
+
+def _resolve_reference_grid(
+    adapter: PFAGridAdapter,
+    component_names: tuple[str, ...],
+    reference_grid: gpd.GeoDataFrame | None,
+) -> tuple[gpd.GeoDataFrame, NDArray[np.float64]]:
+    """Validate and return the canonical prediction support and coordinates."""
+    grid_gdf = (
+        adapter.pr_norm(component_names[0])
+        if reference_grid is None
+        else reference_grid
+    )
+    if not isinstance(grid_gdf, gpd.GeoDataFrame):
+        raise TypeError("reference_grid must be a GeoDataFrame")
+    grid_coords = extract_coordinates(grid_gdf)
+    expected_dimension = 3 if adapter.dimensions == "3d" else 2
+    if grid_coords.shape[1] != expected_dimension:
+        raise GEOPFAValueError(
+            "reference_grid coordinate dimension does not match the PFA "
+            f"adapter: expected {expected_dimension}, got "
+            f"{grid_coords.shape[1]}"
+        )
+    if np.unique(grid_coords, axis=0).shape[0] != len(grid_gdf):
+        raise GEOPFAValueError(
+            "duplicate coordinates are not allowed in the reference grid"
+        )
+    return grid_gdf, grid_coords
 
 
 def select_component_evidence_layers(
@@ -350,6 +442,8 @@ def build_component_grid_evidence(
     component: str,
     alpha_result: AlphaCResult,
     evidence_config: EvidenceConfig,
+    *,
+    reference_grid: gpd.GeoDataFrame | None = None,
 ) -> tuple[NDArray[np.float64], list[str]]:
     """Build canonical grid evidence without requiring outcome locations."""
     layer_names = select_component_evidence_layers(
@@ -358,7 +452,11 @@ def build_component_grid_evidence(
         {component: alpha_result},
         evidence_config,
     )
-    reference = adapter.pr_norm(component)
+    reference = (
+        adapter.pr_norm(component)
+        if reference_grid is None
+        else reference_grid
+    )
     evidence = _build_grid_evidence(
         adapter,
         (component,),
@@ -406,13 +504,14 @@ def _validated_component_names(
     )
 
 
-def assemble_gblk_inputs(  # noqa: PLR0914
+def assemble_gblk_inputs(  # noqa: PLR0913, PLR0914
     adapter: PFAGridAdapter,
     loaded_labels: LoadedLabels,
     alpha_results: dict[str, AlphaCResult],
     *,
     evidence_config: EvidenceConfig,
     prior_probability_results: dict[str, AlphaCResult] | None = None,
+    reference_grid: gpd.GeoDataFrame | None = None,
 ) -> AssembledInputs:
     """Build ``fit_joint`` inputs from geoPFA data structures.
 
@@ -435,6 +534,10 @@ def assemble_gblk_inputs(  # noqa: PLR0914
         Optional alpha results that retain the configured event-probability
         logits when ``alpha_results`` has been transformed to another
         likelihood scale, such as a Gaussian response mean.
+    reference_grid
+        Optional caller-selected canonical prediction grid. Every component
+        offset, prior moment, and evidence layer is aligned to this exact row
+        order. When omitted, the first fitted component's grid is used.
 
     Returns
     -------
@@ -465,8 +568,11 @@ def assemble_gblk_inputs(  # noqa: PLR0914
             f"{sorted(alpha_results)}"
         )
 
-    grid_gdf = adapter.pr_norm(component_names[0])
-    grid_coords = extract_coordinates(grid_gdf)
+    grid_gdf, grid_coords = _resolve_reference_grid(
+        adapter,
+        component_names,
+        reference_grid,
+    )
     aligned_offsets = [
         _component_values_on_reference(
             grid_gdf,
@@ -533,6 +639,10 @@ def assemble_gblk_inputs(  # noqa: PLR0914
 
     wells_gdf = align_to_grid_crs(loaded_labels.gdf, grid_gdf)
     well_coords = extract_coordinates(wells_gdf)
+    well_ids, well_depths_m = _build_well_metadata(
+        wells_gdf,
+        loaded_labels.config,
+    )
     well_grid_indices = snap_to_grid_indices(wells_gdf, grid_gdf)
     well_offsets = grid_offsets[well_grid_indices]
     prior_probability_well = prior_probability_grid[well_grid_indices]
@@ -573,6 +683,8 @@ def assemble_gblk_inputs(  # noqa: PLR0914
         grid_offsets=grid_offsets,
         well_coords=well_coords,
         grid_coords=grid_coords,
+        well_ids=well_ids,
+        well_depths_m=well_depths_m,
         evidence=evidence,
         grid_evidence=grid_evidence,
         layer_names=layer_names_map,
@@ -668,71 +780,6 @@ def make_areal_support(
     return Support(x=pts_arr, w=w, kind="areal")
 
 
-def pool_regional_coefficients(
-    d_hat: NDArray[np.float64],
-    d_var: NDArray[np.float64],
-    play_type_per_region: list[str] | NDArray,
-) -> EBPoolResult:
-    """Partial-pool per-region evidence coefficients grouped by play type.
-
-    Wraps :func:`latticekrigx.glk.hierarchy.eb_pool_coefficients` with
-    the geoPFA convention that **play type is the pooling group**.  Each
-    region belongs to exactly one play type; regions within the same play
-    type share a common prior mean and between-region variance.
-
-    The shrinkage factor for region ``r`` and coefficient ``j`` is::
-
-        B[r, j] = sigma2[r, j] / (tau2[t(r), j] + sigma2[r, j])
-
-    *  **Data-rich region** (``sigma2 ≈ 0``): ``B ≈ 0``; posterior ≈
-       unpooled estimate ``d_hat``.
-    *  **Data-poor region** (``sigma2 ≫ tau2``): ``B ≈ 1``; posterior
-       shrinks toward the play-type mean ``mu_{t(r)}``.
-    *  **Single region** (``R = 1``): ``tau2`` is estimated as 0, so
-       ``B = 1`` and ``d_post = mu = d_hat``.
-
-    Parameters
-    ----------
-    d_hat : np.ndarray
-        Per-region raw (OLS/MLE) coefficient estimates, shape ``(R,)``
-        or ``(R, p)``.
-    d_var : np.ndarray
-        Sampling variances for each coefficient, same shape as ``d_hat``.
-        All values must be non-negative.
-    play_type_per_region : list[str] or np.ndarray
-        Play-type label for each of the ``R`` regions, shape ``(R,)``.
-        Regions with the same play type are pooled together.
-
-    Returns
-    -------
-    latticekrigx.glk.hierarchy.EBPoolResult
-        Shrinkage-pooled coefficients and diagnostics.  ``d_pooled`` has
-        shape ``(R, p)`` (or ``(R, 1)`` for scalar input).
-
-    Raises
-    ------
-    geopfa.exceptions.GEOPFAValueError
-        If ``play_type_per_region`` has a different length from ``d_hat``,
-        or if any ``d_var`` value is negative.
-    """
-    d_hat_arr = np.asarray(d_hat, dtype=np.float64)
-    d_var_arr = np.asarray(d_var, dtype=np.float64)
-    region_to_group = np.asarray(play_type_per_region)
-
-    R = d_hat_arr.shape[0]
-    if region_to_group.shape[0] != R:
-        raise GEOPFAValueError(
-            f"play_type_per_region length {region_to_group.shape[0]} does "
-            f"not match d_hat row count {R}"
-        )
-    if np.any(d_var_arr < 0):
-        raise GEOPFAValueError(
-            "d_var must be non-negative; found negative values"
-        )
-
-    return eb_pool_coefficients(d_hat_arr, d_var_arr, region_to_group)
-
-
 def build_observation_basis(
     supports: list[Support],
     lkinfo: LKInfo,
@@ -774,5 +821,4 @@ __all__ = [
     "make_areal_support",
     "make_interval_support",
     "make_point_support",
-    "pool_regional_coefficients",
 ]

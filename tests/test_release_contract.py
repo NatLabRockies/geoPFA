@@ -46,6 +46,13 @@ def test_local_gate_checks_ruff_formatting_like_ci() -> None:
     assert "ruff format --check geopfa tests" in gate
 
 
+def test_generated_version_module_is_excluded_from_formatting() -> None:
+    manifest = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    excluded = manifest["tool"]["ruff"]["format"]["exclude"]
+
+    assert "geopfa/_version.py" in excluded
+
+
 def test_examples_track_notebooks_but_no_generated_visual_artifacts() -> None:
     prohibited_suffixes = {
         ".gif",

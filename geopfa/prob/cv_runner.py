@@ -162,21 +162,6 @@ def component_oof_predictions(  # noqa: PLR0914
     wells = align_to_grid_crs(labels.gdf, grid_gdf)
     coords = extract_coordinates(wells)
     kwargs_base = _fit_kwargs_for(config, component)
-    # Resolve play-type defaults — mirrors the logic in runner._fit_component.
-    # OOF fits must use the same regularization as the deployed model; skipping
-    # this resolution would cause calibration metrics to reflect a different
-    # model than the one actually deployed.
-    play_type = kwargs_base.pop("_play_type", None)
-    if play_type:
-        from .play_types import play_type_defaults  # noqa: PLC0415
-
-        layer_names = list(comp_data.get("layers", {}).keys())
-        pt_defaults = play_type_defaults(play_type, layer_names=layer_names)
-        merged_weights = {**pt_defaults["per_feature_weights"]}
-        merged_weights.update(kwargs_base.get("per_feature_weights") or {})
-        merged_means = {**pt_defaults["prior_means"]}
-        kwargs_base["per_feature_weights"] = merged_weights or None
-        kwargs_base["prior_means"] = merged_means or None
     alpha_result = build_alpha_c(
         comp_data, config.alpha[component], grid_gdf=comp_data["pr_norm"]
     )

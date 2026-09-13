@@ -200,24 +200,15 @@ def test_rejects_unsupported_ndim():
         fit_lkx_field(x, y, config=LkxConfig())
 
 
-def test_fallback_too_few_training_points_returns_zero_field():
+def test_too_few_training_points_fails_closed():
     rng = np.random.default_rng(3)
     x_train = rng.uniform(-1.0, 1.0, size=(3, 2))
     y_train = rng.normal(size=3)
-    grid = rng.uniform(-1.0, 1.0, size=(25, 2))
-
-    model = fit_lkx_field(x_train, y_train)
-    assert model.fit is None
-    assert model.constraint_info["fallback"] == "too_few_training_points"
-
-    mean, std = lkx_predict(model, grid)
-    assert mean.shape == (grid.shape[0],)
-    assert std.shape == (grid.shape[0],)
-    assert np.all(mean == 0.0)
-    assert np.all(std == 0.0)
+    with pytest.raises(GEOPFAValueError, match="at least 4"):
+        fit_lkx_field(x_train, y_train)
 
 
-def test_fallback_constant_y_returns_zero_field():
+def test_constant_y_returns_exact_degenerate_constant_field():
     rng = np.random.default_rng(4)
     x_train = rng.uniform(-1.0, 1.0, size=(30, 2))
     y_train = np.full(30, 0.75)
@@ -225,11 +216,11 @@ def test_fallback_constant_y_returns_zero_field():
 
     model = fit_lkx_field(x_train, y_train)
     assert model.fit is None
-    assert model.constraint_info["fallback"] == "constant_Y"
+    assert model.constraint_info["degenerate"] == "constant_response"
 
     mean, std = lkx_predict(model, grid)
     assert mean.shape == (grid.shape[0],)
-    assert np.all(mean == 0.0)
+    assert np.all(mean == 0.75)
     assert np.all(std == 0.0)
 
 

@@ -284,22 +284,24 @@ def compute_lkx_config(
     )
 
 
-def _flat_fallback_model(
+def _constant_model(
     ndim: int,
     geometry: str,
     n_train: int,
-    reason: str,
+    mean: float,
 ) -> LkxModel:
+    """Represent an exactly constant response without fitting a field."""
     return LkxModel(
         fit=None,
-        Y_train_mean=0.0,
+        Y_train_mean=mean,
         ndim=ndim,
         geometry=geometry,
         constraint_info={
             "geometry": geometry,
             "ndim": ndim,
             "n_train": n_train,
-            "fallback": reason,
+            "degenerate": "constant_response",
+            "constant_mean": mean,
         },
     )
 
@@ -371,10 +373,10 @@ def fit_lkx_field(
     -------
     LkxModel
         Fitted model bundling the underlying ``LKrigFit`` and the
-        diagnostic ``constraint_info`` dictionary. When training data
-        cannot support a fit (``N < 4`` or near-constant ``Y``), a
-        degenerate model with ``fit=None`` is returned; downstream
-        :func:`lkx_predict` calls on it emit a flat zero field.
+        diagnostic ``constraint_info`` dictionary. An exactly constant
+        response returns an explicit constant model with ``fit=None``;
+        downstream :func:`lkx_predict` calls preserve its observed mean.
+        Fewer than four observations raises an error.
 
     Notes
     -----
@@ -382,8 +384,8 @@ def fit_lkx_field(
     constant drift via ``m = 1`` (LK intercept fixed effect); nugget via
     ``lambda_``. When ``config.find_lambda`` (or ``config.find_a_wght``)
     is ``True``, ``lambda_`` (and optionally ``a_wght``) are chosen by
-    MLE (item 9). Fallbacks (item 12) return a degenerate flat-zero
-    model for pathological inputs.
+    MLE (item 9). An exactly constant response is represented by an explicit
+    degenerate constant model; insufficient support fails closed.
     """
     if config is None:
         cfg = LkxConfig()
@@ -409,18 +411,16 @@ def fit_lkx_field(
     geometry = _GEOMETRY_BY_NDIM[ndim]
 
     if X.shape[0] < _MIN_TRAINING_POINTS:
-        return _flat_fallback_model(
-            ndim=ndim,
-            geometry=geometry,
-            n_train=int(X.shape[0]),
-            reason="too_few_training_points",
+        raise GEOPFAValueError(
+            "LatticeKrigX spatial fitting requires at least "
+            f"{_MIN_TRAINING_POINTS} training points; got {X.shape[0]}"
         )
     if float(Y.std()) < _CONSTANT_Y_STD_ATOL:
-        return _flat_fallback_model(
+        return _constant_model(
             ndim=ndim,
             geometry=geometry,
             n_train=int(X.shape[0]),
-            reason="constant_Y",
+            mean=float(Y.mean()),
         )
 
     kwargs: dict[str, Any] = dict(cfg.extra)
@@ -509,9 +509,9 @@ def lkx_predict(
 
     Notes
     -----
-    When ``model.fit is None`` (fallback fit), returns a flat zero
-    ``(mean, std)`` pair of length ``M``, matching the ``build_and_fit_gp``
-    fallback contract (item 12).
+    When ``model.fit is None``, the model is an explicitly identified exact
+    constant response and returns that constant with zero predictive standard
+    deviation.
     """
     X = _as_2d_x(X_std)
     if X.shape[1] != model.ndim:
@@ -523,7 +523,7 @@ def lkx_predict(
     m_pred = X.shape[0]
     if model.fit is None:
         return (
-            np.zeros(m_pred, dtype=np.float64),
+            np.full(m_pred, model.Y_train_mean, dtype=np.float64),
             np.zeros(m_pred, dtype=np.float64),
         )
 

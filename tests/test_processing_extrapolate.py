@@ -99,7 +99,6 @@ def test_extrapolate_2d_lkx_fills_all_nans():
         "crit",
         "comp",
         "layer",
-        backend="latticekrigx",
         verbose=False,
     )
     layer = _layer(result)
@@ -112,32 +111,31 @@ def test_extrapolate_2d_lkx_fills_all_nans():
 def test_extrapolate_2d_lkx_pfa_metadata():
     pfa = _make_pfa_2d()
     result = Processing.extrapolate_2d(
-        pfa, "crit", "comp", "layer", backend="latticekrigx", verbose=False
+        pfa, "crit", "comp", "layer", verbose=False
     )
     layer = _layer(result)
     assert layer["model_data_col"] == "value_extrapolated"
     assert layer["model_units"] == "degC"
 
 
-def test_extrapolate_2d_default_backend_is_latticekrigx():
-    pfa_default = _make_pfa_2d()
-    pfa_explicit = _make_pfa_2d()
+def test_extrapolate_2d_is_reproducible():
+    pfa_first = _make_pfa_2d()
+    pfa_second = _make_pfa_2d()
 
-    result_default = Processing.extrapolate_2d(
-        pfa_default, "crit", "comp", "layer", verbose=False
+    result_first = Processing.extrapolate_2d(
+        pfa_first, "crit", "comp", "layer", verbose=False
     )
-    result_explicit = Processing.extrapolate_2d(
-        pfa_explicit,
+    result_second = Processing.extrapolate_2d(
+        pfa_second,
         "crit",
         "comp",
         "layer",
-        backend="latticekrigx",
         verbose=False,
     )
 
     np.testing.assert_array_equal(
-        _layer(result_default)["model"]["value_extrapolated"].to_numpy(),
-        _layer(result_explicit)["model"]["value_extrapolated"].to_numpy(),
+        _layer(result_first)["model"]["value_extrapolated"].to_numpy(),
+        _layer(result_second)["model"]["value_extrapolated"].to_numpy(),
     )
 
 
@@ -153,7 +151,6 @@ def test_extrapolate_3d_lkx_fills_all_nans():
         "crit",
         "comp",
         "layer",
-        backend="latticekrigx",
         verbose=False,
     )
     layer = _layer(result)
@@ -166,30 +163,29 @@ def test_extrapolate_3d_lkx_fills_all_nans():
 def test_extrapolate_3d_lkx_pfa_metadata():
     pfa = _make_pfa_3d()
     result = Processing.extrapolate_3d(
-        pfa, "crit", "comp", "layer", backend="latticekrigx", verbose=False
+        pfa, "crit", "comp", "layer", verbose=False
     )
     layer = _layer(result)
     assert layer["model_data_col"] == "value_extrapolated"
     assert layer["model_units"] == "m"
 
 
-def test_extrapolate_3d_default_backend_is_latticekrigx():
-    pfa_default = _make_pfa_3d()
-    pfa_explicit = _make_pfa_3d()
+def test_extrapolate_3d_is_reproducible():
+    pfa_first = _make_pfa_3d()
+    pfa_second = _make_pfa_3d()
 
-    result_default = Processing.extrapolate_3d(
-        pfa_default, "crit", "comp", "layer", verbose=False
+    result_first = Processing.extrapolate_3d(
+        pfa_first, "crit", "comp", "layer", verbose=False
     )
-    result_explicit = Processing.extrapolate_3d(
-        pfa_explicit,
+    result_second = Processing.extrapolate_3d(
+        pfa_second,
         "crit",
         "comp",
         "layer",
-        backend="latticekrigx",
         verbose=False,
     )
 
     np.testing.assert_array_equal(
-        _layer(result_default)["model"]["value_extrapolated"].to_numpy(),
-        _layer(result_explicit)["model"]["value_extrapolated"].to_numpy(),
+        _layer(result_first)["model"]["value_extrapolated"].to_numpy(),
+        _layer(result_second)["model"]["value_extrapolated"].to_numpy(),
     )

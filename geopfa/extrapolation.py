@@ -462,16 +462,9 @@ def compute_lengthscale_bounds_from_global_radius(
     return lower, upper
 
 
-def build_and_fit_gp(  # noqa: PLR0913, PLR0917
+def build_and_fit_gp(
     X_train_stdized: np.ndarray,
     Y_train_stdized: np.ndarray,
-    optimize_restarts: int = 0,  # noqa: ARG001
-    verbose: bool = False,  # noqa: ARG001
-    save_path: str | None = None,  # noqa: ARG001
-    n_inducing: int = 300,  # noqa: ARG001
-    lower_frac: float = 0.02,  # noqa: ARG001
-    upper_frac: float = 0.20,  # noqa: ARG001
-    backend: str = "latticekrigx",  # noqa: ARG001
 ) -> tuple:
     """
     Build and train a Sparse Gaussian Process regression model using LatticeKrigX.
@@ -482,21 +475,6 @@ def build_and_fit_gp(  # noqa: PLR0913, PLR0917
         Standardized training coordinates, shape ``(N, D)``.
     Y_train_stdized : numpy.ndarray
         Standardized training targets, shape ``(N, 1)``.
-    optimize_restarts : int, optional
-        Unused; kept for API compatibility.
-    verbose : bool, optional
-        Whether to print optimization diagnostics.
-    save_path : str or None, optional
-        Unused; kept for API compatibility.
-    n_inducing : int, optional
-        Target number of inducing points.
-    lower_frac : float, optional
-        Fraction of global radius used for lower lengthscale bounds.
-    upper_frac : float, optional
-        Fraction of global radius used for upper lengthscale bounds.
-    backend : str, default="latticekrigx"
-        Spatial regression backend. Only ``"latticekrigx"`` is supported.
-
     Returns
     -------
     model : LkxModel
@@ -514,13 +492,12 @@ def build_and_fit_gp(  # noqa: PLR0913, PLR0917
     return lkx_model, lkx_model.constraint_info
 
 
-def get_predictions(  # noqa: PLR0913, PLR0917
+def get_predictions(
     model,
     X: np.ndarray,
     kvals_df: pd.DataFrame | dict | None = None,
     Y_mean: float | None = None,
     Y_std: float | None = None,
-    backend: str = "latticekrigx",  # noqa: ARG001
 ):
     """
     Generate GP predictions, optionally converting back to original Y-units and
@@ -540,9 +517,6 @@ def get_predictions(  # noqa: PLR0913, PLR0917
         Mean of Y from the training dataset (for de-standardizing predictions).
     Y_std : float or None, optional
         Standard deviation of Y from the training dataset.
-    backend : str, default="latticekrigx"
-        Spatial regression backend. Only ``"latticekrigx"`` is supported.
-
     Returns
     -------
     numpy.ndarray or tuple
@@ -1492,7 +1466,6 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
     test_size: float = 0.2,
     seed: int = 42,
     verbose: bool = True,
-    backend: str = "latticekrigx",
 ) -> gpd.GeoDataFrame:
     """
     Perform Gaussian Process-based extrapolation (or interpolation) to fill
@@ -1526,10 +1499,6 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
         Random seed for train/validation splitting.
     verbose : bool, optional
         Whether to print progress, diagnostics, and plots.
-    backend : str, default="latticekrigx"
-        Spatial regression backend passed through to
-        :func:`build_and_fit_gp` and :func:`get_predictions`. Only
-        ``"latticekrigx"`` is supported.
 
     Returns
     -------
@@ -1579,9 +1548,6 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
     model, constraints = build_and_fit_gp(
         X_train,
         Y_train,
-        optimize_restarts=0,
-        verbose=verbose,
-        backend=backend,
     )
 
     # ------------------------------------------------------------------
@@ -1592,7 +1558,6 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
         X_val,
         Y_mean=Y_train_mean,
         Y_std=Y_train_std,
-        backend=backend,
     )
 
     # ------------------------------------------------------------------
@@ -1630,7 +1595,6 @@ def backfill_gdf(  # noqa: PLR0913, PLR0914
         X_missing_stdized,
         Y_mean=Y_train_mean,
         Y_std=Y_train_std,
-        backend=backend,
     )
 
     # ------------------------------------------------------------------
@@ -1689,11 +1653,7 @@ def backfill_gdf_3d(  # noqa: PLR0913, PLR0914
     z_col: str = "z",
     test_size: float = 0.2,
     seed: int = 42,
-    n_inducing: int = 300,
-    lower_frac: float = 0.02,
-    upper_frac: float = 0.20,
     verbose: bool = False,
-    backend: str = "latticekrigx",
 ) -> gpd.GeoDataFrame:
     """Extrapolate missing values in a 3-D point cloud using a sparse GP.
 
@@ -1720,16 +1680,8 @@ def backfill_gdf_3d(  # noqa: PLR0913, PLR0914
         Fraction of known points held out for validation.
     seed : int
         Random seed for train/validation split.
-    n_inducing : int
-        Target number of sparse-GP inducing points.
-    lower_frac, upper_frac : float
-        Lengthscale prior bounds as fractions of the global radius.
     verbose : bool
         Print diagnostics and assessment metrics.
-    backend : str, default="latticekrigx"
-        Spatial regression backend passed through to
-        :func:`build_and_fit_gp` and :func:`get_predictions`. Only
-        ``"latticekrigx"`` is supported.
 
     Returns
     -------
@@ -1787,11 +1739,6 @@ def backfill_gdf_3d(  # noqa: PLR0913, PLR0914
     model, constraints = build_and_fit_gp(
         X_tr_std,
         Y_tr_std,
-        n_inducing=n_inducing,
-        lower_frac=lower_frac,
-        upper_frac=upper_frac,
-        verbose=verbose,
-        backend=backend,
     )
 
     if verbose:
@@ -1800,7 +1747,6 @@ def backfill_gdf_3d(  # noqa: PLR0913, PLR0914
             X_val_std,
             Y_mean=Y_mean,
             Y_std=Y_std_val,
-            backend=backend,
         )
         assessment = assess_gp_model_fit(
             model,
@@ -1819,7 +1765,6 @@ def backfill_gdf_3d(  # noqa: PLR0913, PLR0914
         X_nan_std,
         Y_mean=Y_mean,
         Y_std=Y_std_val,
-        backend=backend,
     )
 
     # --- Write back ---

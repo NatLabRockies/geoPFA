@@ -42,7 +42,6 @@ def test_fit_spatial_field_gp_returns_typed_result() -> None:
             train_coords,
             residual,
             grid_coords,
-            n_inducing=10,
         )
     assert isinstance(result, SpatialFieldResult)
     assert result.u_mean.shape == (len(grid_coords),)
@@ -63,7 +62,6 @@ def test_fit_spatial_field_gp_recovers_linear_residual() -> None:
             train_coords,
             residual,
             grid_coords,
-            n_inducing=30,
         )
     assert np.mean(np.abs(result.u_mean - residual)) < 0.5
 
@@ -82,11 +80,10 @@ def test_fit_spatial_field_gp_with_constant_residual() -> None:
             train_coords,
             residual,
             grid_coords,
-            n_inducing=10,
         )
     np.testing.assert_allclose(result.u_mean, 0.4)
     np.testing.assert_array_equal(result.u_std, np.zeros(n))
-    assert result.diagnostics["fallback"] == "constant_residuals"
+    assert result.diagnostics["degenerate"] == "constant_residuals"
     assert result.diagnostics["n_train"] == n
 
 
@@ -139,7 +136,6 @@ def test_fit_spatial_field_gp_too_few_training_points_fails_closed() -> None:
             train_coords,
             residual,
             grid_coords,
-            n_inducing=10,
         )
 
 
@@ -153,7 +149,6 @@ def test_fit_spatial_field_gp_diagnostics_carry_kernel_info() -> None:
             train_coords,
             residual,
             grid_coords,
-            n_inducing=10,
         )
     assert "kernel" in result.diagnostics
     assert "n_train" in result.diagnostics

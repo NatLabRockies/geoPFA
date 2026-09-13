@@ -23,6 +23,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import geopandas as gpd
+import numpy as np
 
 from geopfa.exceptions import GEOPFAValueError
 
@@ -75,6 +76,50 @@ def _component_grid(comp: dict[str, Any]) -> gpd.GeoDataFrame | None:
     return None
 
 
+def _validate_component_grid_dimensions(
+    grid: gpd.GeoDataFrame,
+    *,
+    path: str,
+    dimensions: str,
+) -> None:
+    """Require one selected component grid to match the declared dimension."""
+    geometry = grid.geometry
+    if geometry.isna().any() or geometry.is_empty.any():
+        raise ValueError(f"{path} geometries must be non-empty points")
+    if not geometry.geom_type.eq("Point").all():
+        raise ValueError(f"{path} geometries must contain only points")
+    has_z = geometry.has_z.to_numpy(dtype=bool)
+    if dimensions == "2d":
+        if has_z.any():
+            raise ValueError(
+                f"{path} geometries must not carry a Z coordinate for 2D runs"
+            )
+        coordinates = np.column_stack(
+            (
+                geometry.x.to_numpy(dtype=float),
+                geometry.y.to_numpy(dtype=float),
+            )
+        )
+        if not np.all(np.isfinite(coordinates)):
+            raise ValueError(f"{path} geometries require finite X and Y")
+        return
+    if dimensions != "3d":
+        raise ValueError("dimensions must be '2d' or '3d'")
+    if not has_z.all():
+        raise ValueError(
+            f"{path} geometries must carry a Z coordinate on every row for 3D runs"
+        )
+    coordinates = np.column_stack(
+        (
+            geometry.x.to_numpy(dtype=float),
+            geometry.y.to_numpy(dtype=float),
+            geometry.z.to_numpy(dtype=float),
+        )
+    )
+    if not np.all(np.isfinite(coordinates)):
+        raise ValueError(f"{path} geometries require finite X, Y, and Z")
+
+
 def extract_grid_extent(
     pfa: dict, *, criteria: str, dimensions: str
 ) -> tuple[float, ...]:
@@ -95,13 +140,20 @@ def extract_grid_extent(
         ``(xmin, ymin, xmax, ymax)`` for 2D or
         ``(xmin, ymin, zmin, xmax, ymax, zmax)`` for 3D.
     """
+    if dimensions not in {"2d", "3d"}:
+        raise ValueError("dimensions must be '2d' or '3d'")
     xs: list[float] = []
     ys: list[float] = []
     zs: list[float] = []
-    for _, comp in iter_components(pfa, criteria=criteria):
+    for comp_name, comp in iter_components(pfa, criteria=criteria):
         grid = _component_grid(comp)
         if grid is None or len(grid) == 0:
             continue
+        _validate_component_grid_dimensions(
+            grid,
+            path=f"criteria/{criteria}/components/{comp_name} component grid",
+            dimensions=dimensions,
+        )
         xs.extend([float(grid.geometry.x.min()), float(grid.geometry.x.max())])
         ys.extend([float(grid.geometry.y.min()), float(grid.geometry.y.max())])
         if dimensions == "3d":
@@ -155,15 +207,6 @@ def validate_pfa_for_probabilistic(
                     f"criteria/{criteria}/components/{comp_name}/pr_norm must be "
                     "a GeoDataFrame",
                 )
-            if (
-                dimensions == "3d"
-                and len(grid) > 0
-                and not grid.geometry.has_z.any()
-            ):
-                raise ValueError(
-                    f"criteria/{criteria}/components/{comp_name}/pr_norm "
-                    "geometries must carry a Z coordinate for 3D runs",
-                )
         layers = comp_data.get("layers", {})
         if not layers:
             raise KeyError(
@@ -181,6 +224,17 @@ def validate_pfa_for_probabilistic(
                     f"criteria/{criteria}/components/{comp_name}/layers/"
                     f"{layer_name}/model must be a GeoDataFrame",
                 )
+        grid = _component_grid(comp_data)
+        if grid is None:
+            raise ValueError(
+                f"criteria/{criteria}/components/{comp_name} has no non-empty "
+                "component grid"
+            )
+        _validate_component_grid_dimensions(
+            grid,
+            path=f"criteria/{criteria}/components/{comp_name} component grid",
+            dimensions=dimensions,
+        )
 
 
 class PFAGridAdapter:

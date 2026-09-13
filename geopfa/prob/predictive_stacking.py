@@ -14,6 +14,20 @@ _DRAW_ARRAY_DIMENSIONS = 2
 
 
 @dataclass(frozen=True)
+class PredictiveStackingEvidence:
+    """Held-out values needed to reproduce one stacking choice."""
+
+    family: str
+    well_ids: np.ndarray
+    validation_coordinates: np.ndarray
+    outcomes: np.ndarray
+    prior_probability: np.ndarray | None = None
+    full_probability: np.ndarray | None = None
+    prior_log_density: np.ndarray | None = None
+    full_log_density: np.ndarray | None = None
+
+
+@dataclass(frozen=True)
 class PredictiveStackingResult:
     """Weight and proper-score diagnostics for one component."""
 
@@ -25,6 +39,7 @@ class PredictiveStackingResult:
     n_wells: int | None
     status: str
     validation_depth_m: float | None = None
+    evidence: PredictiveStackingEvidence | None = None
 
 
 def _validated_binary_inputs(
@@ -186,6 +201,7 @@ def apply_predictive_stacking(
 
 
 __all__ = [
+    "PredictiveStackingEvidence",
     "PredictiveStackingResult",
     "apply_predictive_stacking",
     "select_predictive_density_stacking_weight",

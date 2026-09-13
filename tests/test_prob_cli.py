@@ -55,7 +55,10 @@ def _make_config_with_pfa_pickle(tmp_path: Path) -> Path:
                     "scalar_fallback_pr0": 0.50,
                 },
             },
-            "spatial_field": {"enabled": True, "backend": "rbf"},
+            "spatial_field": {
+                "enabled": True,
+                "backend": "latticekrigx",
+            },
             "calibration": {"method": "none"},
             "outputs": {
                 "probability_rasters": False,

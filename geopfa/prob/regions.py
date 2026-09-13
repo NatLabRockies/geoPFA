@@ -5,8 +5,7 @@ not activate a second inference backend or silently pool regions. This module
 provides helpers to:
 
 * split a :class:`~geopfa.prob.labels.LoadedLabels` into per-region slices,
-* verify that every region has enough labelled wells to fit, and
-* combine region-level results into a unified output.
+* report whether each region meets a declared labelled-well threshold.
 """
 
 from __future__ import annotations
@@ -15,8 +14,6 @@ import warnings
 from dataclasses import dataclass
 
 import geopandas as gpd
-import numpy as np
-
 from .labels import LoadedLabels
 
 
@@ -82,8 +79,7 @@ def check_region_label_coverage(
 ) -> dict[str, bool]:
     """Return a dict mapping region name → whether it has enough labelled wells.
 
-    Regions with fewer than ``min_wells`` finite positive labels will use the
-    prior-predictive path.
+    This helper only reports coverage. It does not select an inference path.
     """
     coverage: dict[str, bool] = {}
     for rl in region_labels:
@@ -94,41 +90,15 @@ def check_region_label_coverage(
             warnings.warn(
                 f"region {rl.region_name!r} has only {n_pos} positive labels "
                 f"for component column {label_column!r} (<{min_wells}); "
-                "this region will use the prior-predictive surface",
+                "the requested regional support threshold is not met",
                 UserWarning,
                 stacklevel=2,
             )
     return coverage
 
 
-def combine_region_beta_summaries(
-    per_region_betas: dict[str, np.ndarray],
-) -> dict[str, float]:
-    """Compute a naïve pooled summary of per-region beta arrays.
-
-    Used by the sequential backend when hierarchical pooling is on to
-    record a global reference estimate for the diagnostics report.
-
-    Parameters
-    ----------
-    per_region_betas
-        ``{region_name: beta_array}`` dict.
-
-    Returns
-    -------
-    dict with ``mean`` and ``std`` arrays.
-    """
-    stacked = np.stack(list(per_region_betas.values()), axis=0)
-    return {
-        "mean": stacked.mean(axis=0).tolist(),
-        "std": stacked.std(axis=0).tolist(),
-        "n_regions": len(per_region_betas),
-    }
-
-
 __all__ = [
     "RegionLabels",
     "check_region_label_coverage",
-    "combine_region_beta_summaries",
     "split_by_region",
 ]
