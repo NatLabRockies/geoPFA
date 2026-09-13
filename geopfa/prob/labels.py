@@ -177,22 +177,23 @@ def load_labels(
 
     Parameters
     ----------
-    cfg
-        :class:`~geopfa.prob.config.LabelsConfig` block from the user's PFA
-        config.
-    target_crs
+    cfg : LabelsConfig
+        Label-loading block from the user's PFA configuration.
+    target_crs : str or None
         Optional CRS to reproject into. ``None`` keeps the file's CRS.
-
-    CSV source CRS and coordinate-column semantics come exclusively from
-    ``cfg``. ``z_col`` is a Cartesian model coordinate. ``depth_col`` is a
-    separate nonnegative, positive-down scientific depth. When only depth is
-    declared, model geometry uses ``z = -depth``; when both are declared,
-    ``z_col`` controls geometry and ``depth_col`` is retained separately.
 
     Returns
     -------
     LoadedLabels
         Container holding the loaded GeoDataFrame and the config.
+
+    Notes
+    -----
+    CSV source CRS and coordinate-column semantics come exclusively from
+    ``cfg``. ``z_col`` is a Cartesian model coordinate. ``depth_col`` is a
+    separate nonnegative, positive-down scientific depth. When only depth is
+    declared, model geometry uses ``z = -depth``; when both are declared,
+    ``z_col`` controls geometry and ``depth_col`` is retained separately.
     """
     path = Path(cfg.source)
     suffix = path.suffix.lower()

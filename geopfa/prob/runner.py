@@ -883,25 +883,28 @@ def run_probabilistic_pfa(
     ``"probabilistic"`` key alongside the usual ``"criteria"`` structure.
     The exact serialized artifact loaded here is recorded in ``manifest.json``.
 
+    Example configuration structure::
+
         pfa = {
-            "criteria": { "geologic": { "components": { ... } } },
+            "criteria": {"geologic": {"components": {...}}},
             "probabilistic": {
-                "enabled": true,
-                "labels": { "source": "wells.gpkg", ... },
-                ...
-            }
+                "enabled": True,
+                "labels": {"source": "wells.gpkg", ...},
+                ...,
+            },
         }
 
     Parameters
     ----------
-    pfa_pickle
+    pfa_pickle : str or pathlib.Path
         Path to the trusted serialized geoPFA dict produced by preprocessing.
-    criteria
+    criteria : str
         Criteria key to operate on.  Defaults to ``"geologic"``.
 
     Returns
     -------
     ProbabilisticResult
+        Fitted component and combined probability surfaces with diagnostics.
     """
     source = Path(pfa_pickle).resolve()
     if not source.is_file():

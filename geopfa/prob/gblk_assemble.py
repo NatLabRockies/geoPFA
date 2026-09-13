@@ -41,6 +41,7 @@ duplicated, or non-covering grids fail closed.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import geopandas as gpd
 import numpy as np
@@ -126,7 +127,7 @@ class AssembledInputs:
     grid_offsets: NDArray[np.float64]
     well_coords: NDArray[np.float64]
     grid_coords: NDArray[np.float64]
-    well_ids: NDArray[np.object_]
+    well_ids: NDArray[Any]
     well_depths_m: NDArray[np.float64] | None
     evidence: dict[str, NDArray[np.float64]] = field(default_factory=dict)
     grid_evidence: dict[str, NDArray[np.float64]] = field(default_factory=dict)
@@ -243,7 +244,7 @@ def _build_labels_array(
 def _build_well_metadata(
     wells_gdf: gpd.GeoDataFrame,
     labels_config: LabelsConfig,
-) -> tuple[NDArray[np.object_], NDArray[np.float64] | None]:
+) -> tuple[NDArray[Any], NDArray[np.float64] | None]:
     """Return row-aligned well identities and configured scientific depths."""
     if labels_config.id_col not in wells_gdf.columns:
         raise GEOPFAValueError(
