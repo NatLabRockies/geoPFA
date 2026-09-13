@@ -2813,6 +2813,7 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
     components: dict[str, ComponentProbability] = {}
     for name in ordered_names:
         q_index = component_index[name]
+        fixed_prior = False
         if fitted_state is not None and name in fitted_state.component_names:
             fitted_index = fitted_state.component_names.index(name)
             diagnostics = {
@@ -2837,6 +2838,7 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
         else:
             prior_state = prior_states[name]
             if prior_state is None:
+                fixed_prior = True
                 diagnostics = {
                     "inference_role": "fixed_prior_predictive",
                     "outcome_update": False,
@@ -2854,13 +2856,22 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 }
                 model = prior_state
                 feature_names = prior_state.feature_names
+        if fixed_prior:
+            fixed_probability = expit(prior_logit[:, q_index])
+            probability_values = fixed_probability
+            probability_lower = fixed_probability
+            probability_upper = fixed_probability
+        else:
+            probability_values = summary.component_mean[:, q_index]
+            probability_lower = summary.component_interval[0, :, q_index]
+            probability_upper = summary.component_interval[1, :, q_index]
         probability = (
             grid_gdf[["geometry"]]
             .copy()
             .assign(
-                probability=summary.component_mean[:, q_index],
-                probability_lo=summary.component_interval[0, :, q_index],
-                probability_hi=summary.component_interval[1, :, q_index],
+                probability=probability_values,
+                probability_lo=probability_lower,
+                probability_hi=probability_upper,
             )
         )
         if name in prior_names and _is_gaussian_component(cfg, name):
@@ -3127,7 +3138,8 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         for name, component_seed in zip(prior_names, prior_seeds, strict=True):
             prior_grid = adapter.pr_norm(name)
             gaussian_prior_response: _GaussianPriorResponseState | None = None
-            if cfg.alpha[name].use_evidence_prior:
+            fixed_prior = not cfg.alpha[name].use_evidence_prior
+            if not fixed_prior:
                 prior_draws = _prior_predictive_evidence_draws(
                     adapter,
                     name,
@@ -3177,14 +3189,23 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 }
                 model = None
             component_draws[name] = draws
-            interval = np.quantile(draws, [tail, 1.0 - tail], axis=0)
+            if fixed_prior:
+                probability_values = baseline
+                probability_interval = np.broadcast_to(
+                    baseline, (2, baseline.size)
+                )
+            else:
+                probability_values = draws.mean(axis=0)
+                probability_interval = np.quantile(
+                    draws, [tail, 1.0 - tail], axis=0
+                )
             probability = (
                 grid_gdf[["geometry"]]
                 .copy()
                 .assign(
-                    probability=draws.mean(axis=0),
-                    probability_lo=interval[0],
-                    probability_hi=interval[1],
+                    probability=probability_values,
+                    probability_lo=probability_interval[0],
+                    probability_hi=probability_interval[1],
                 )
             )
             if _is_gaussian_component(cfg, name):

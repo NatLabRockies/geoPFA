@@ -1971,6 +1971,52 @@ def test_bayesian_fixed_gaussian_prior_reports_response_distribution(
 
 
 @pytest.mark.parametrize("streamed", [False, True])
+def test_bayesian_fixed_bernoulli_prior_interval_is_exactly_degenerate(
+    tmp_path: Path,
+    streamed: bool,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=6, n_wells=30, seed=132)
+    wells_path = tmp_path / "wells.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    base = _cfg_bayesian(wells_path, tmp_path / f"out_{streamed}")
+    cfg = replace(
+        base,
+        alpha={
+            "component_a": base.alpha["component_a"],
+            "component_b": replace(
+                base.alpha["component_b"], force_prior_predictive=True
+            ),
+        },
+        inference=replace(
+            base.inference,
+            gblk_bayesian=replace(
+                base.inference.gblk_bayesian,
+                n_draws=7,
+                cluster_effect=not streamed,
+                kleiber_profiles={},
+            ),
+        ),
+        outputs=replace(
+            base.outputs,
+            posterior_draw_blocks=streamed,
+            posterior_draw_block_size=3,
+        ),
+    )
+
+    result = run_gblk_probabilistic(fixture.pfa, cfg)
+
+    component = result.components["component_b"]
+    probability = component.probability
+    assert component.diagnostics["inference_role"] == "fixed_prior_predictive"
+    np.testing.assert_array_equal(
+        probability["probability_lo"], probability["probability"]
+    )
+    np.testing.assert_array_equal(
+        probability["probability_hi"], probability["probability"]
+    )
+
+
+@pytest.mark.parametrize("streamed", [False, True])
 def test_bayesian_fixed_gaussian_prior_resampling_preserves_one_estimand(
     tmp_path: Path,
     streamed: bool,
