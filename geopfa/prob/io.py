@@ -1387,6 +1387,32 @@ def _runtime_tree_hash(root: Path) -> str:
     return digest.hexdigest()
 
 
+def _git_tracks_runtime_root(
+    git_executable: str, source_root: Path, runtime_root: Path
+) -> bool:
+    """Return whether the enclosing repository tracks the runtime tree."""
+    try:
+        relative = runtime_root.resolve().relative_to(source_root)
+        result = subprocess.run(  # noqa: S603
+            [
+                git_executable,
+                "-C",
+                str(source_root),
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                relative.as_posix(),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 def _git_source_provenance(root: Path) -> dict[str, str | bool | None]:
     """Return the live source revision and worktree state when Git is present."""
     git_executable = shutil.which("git")
@@ -1405,6 +1431,8 @@ def _git_source_provenance(root: Path) -> dict[str, str | bool | None]:
     if top_level.returncode != 0:
         return {"revision": None, "clean": None}
     source_root = Path(top_level.stdout.strip()).resolve()
+    if not _git_tracks_runtime_root(git_executable, source_root, root):
+        return {"revision": None, "clean": None}
     try:
         revision = subprocess.run(  # noqa: S603
             [git_executable, "-C", str(source_root), "rev-parse", "HEAD"],

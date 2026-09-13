@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import hashlib
+import shutil
+import subprocess
 import warnings
 from dataclasses import replace
 from pathlib import Path
@@ -30,6 +32,7 @@ from geopfa.prob.config import (
 from geopfa.prob.io import (
     PosteriorDrawBlockWriter,
     _gdf_to_raster,
+    _git_source_provenance,
     _require_version_matches_source,
     load_posterior_draw_state,
     write_geotiff_outputs,
@@ -442,8 +445,14 @@ def test_write_manifest_records_files_and_hashes(tmp_path: Path) -> None:
     assert dependency["package"] == "latticekrigx"
     assert dependency["version"] == "0.1.0.dev0"
     assert len(dependency["implementation_sha256"]) == 64
-    assert len(dependency["source"]["revision"]) == 40
-    assert isinstance(dependency["source"]["clean"], bool)
+    dependency_source = dependency["source"]
+    dependency_revision = dependency_source["revision"]
+    if dependency_revision is None:
+        assert dependency_source["clean"] is None
+    else:
+        assert len(dependency_revision) == 40
+        int(dependency_revision, 16)
+        assert isinstance(dependency_source["clean"], bool)
     assert data["config"] == cfg.to_dict()
     config_record = next(
         record for record in data["inputs"] if record["name"] == "config"
@@ -486,6 +495,39 @@ def test_version_source_check_accepts_matching_development_revision(
         {"revision": revision, "clean": True},
         Path("/unused"),
     )
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="Git is unavailable")
+def test_git_provenance_rejects_untracked_package_in_enclosing_repo(
+    tmp_path: Path,
+) -> None:
+    git_executable = shutil.which("git")
+    assert git_executable is not None
+    application_root = tmp_path / "application"
+    application_root.mkdir()
+    (application_root / "README.md").write_text("application\n")
+    for command in (
+        ("init",),
+        ("config", "user.email", "test@example.invalid"),
+        ("config", "user.name", "Test User"),
+        ("add", "README.md"),
+        ("commit", "-m", "initial"),
+    ):
+        subprocess.run(
+            [git_executable, *command],
+            cwd=application_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    installed_package = application_root / ".venv" / "site-packages" / "geopfa"
+    installed_package.mkdir(parents=True)
+    (installed_package / "__init__.py").write_text("__version__ = '1.0.0'\n")
+
+    assert _git_source_provenance(installed_package) == {
+        "revision": None,
+        "clean": None,
+    }
 
 
 def test_version_source_check_rejects_stale_development_revision(
