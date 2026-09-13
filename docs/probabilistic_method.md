@@ -339,7 +339,11 @@ log density, including the sampled residual precision, rather than discarding
 information by thresholding the observations. The selected distribution
 mixture induces the same mixture of event probabilities passed to component
 combination. The selected weight and the prior, full, and selected held-out log
-scores are recorded in component diagnostics. A component-specific validation
+scores are recorded in component diagnostics. Stacked component tables also
+retain `probability_prior` and `probability_full_update`, the two unstacked
+mean event-probability surfaces, so users can audit the selected mixture. The
+held-out evidence for a Gaussian component retains both continuous predictive
+log densities and target-event probabilities. A component-specific validation
 depth aligns this model-selection step with a target-depth map while the
 Gaussian fit can still use complete temperature profiles and other components
 retain their appropriate validation support. Gaussian predictive stacking

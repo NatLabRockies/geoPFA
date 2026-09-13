@@ -678,6 +678,8 @@ def test_gaussian_stacking_replaces_response_summary_with_selected_mixture() -> 
 
     response = components["heat"].probability
     np.testing.assert_allclose(response["probability"], 0.2)
+    np.testing.assert_allclose(response["probability_prior"], 0.2)
+    np.testing.assert_allclose(response["probability_full_update"], 0.8)
     np.testing.assert_allclose(response["response_predictive_mean"], 0.0)
     assert response["response_predictive_lo"].iloc[0] < 0.0
     assert response["response_predictive_hi"].iloc[0] > 0.0
@@ -764,6 +766,8 @@ def test_gaussian_stacking_uses_continuous_temperature_density(
         -0.5 * np.log(2.0 * np.pi) - np.log(50.0) - 2.0,
     )
     np.testing.assert_allclose(selection.evidence.full_log_density, -10.0)
+    np.testing.assert_allclose(selection.evidence.prior_probability, 0.01)
+    np.testing.assert_allclose(selection.evidence.full_probability, 0.99)
 
 
 def test_target_depth_stacking_retains_prior_with_too_few_wells() -> None:
@@ -1233,6 +1237,8 @@ def test_incomplete_gaussian_cv_preserves_physical_outcomes(
     )
     assert np.all(np.isfinite(selection.evidence.prior_log_density))
     assert np.all(np.isnan(selection.evidence.full_log_density))
+    np.testing.assert_allclose(selection.evidence.prior_probability, 0.4)
+    assert np.all(np.isnan(selection.evidence.full_probability))
 
 
 def test_nonfinite_backend_predictions_are_not_mislabeled_as_incomplete_cv(
@@ -2084,12 +2090,27 @@ def test_componentwise_stacking_shrinks_only_the_harmful_update(
 
     result = run_gblk_probabilistic(fixture.pfa, cfg, nc=3)
 
-    heat_prior = (
-        result.components["component_a"].probability["probability"].to_numpy()
-    )
+    heat_surface = result.components["component_a"].probability
+    hydraulic_surface = result.components["component_b"].probability
+    heat_prior = heat_surface["probability"].to_numpy()
     groups = stacking_inputs["groups"]
     expected_prior = groups["bernoulli"].prior_probability_grid[:, 0]
     np.testing.assert_allclose(heat_prior, expected_prior)
+    np.testing.assert_allclose(
+        heat_surface["probability_prior"], expected_prior
+    )
+    assert np.all(np.isfinite(heat_surface["probability_full_update"]))
+    assert not np.allclose(
+        heat_surface["probability_full_update"], expected_prior
+    )
+    np.testing.assert_allclose(
+        hydraulic_surface["probability"],
+        hydraulic_surface["probability_full_update"],
+    )
+    np.testing.assert_allclose(
+        hydraulic_surface["probability_prior"],
+        groups["bernoulli"].prior_probability_grid[:, 1],
+    )
     assert result.components["component_a"].diagnostics[
         "predictive_stacking_weight"
     ] == pytest.approx(0.0)

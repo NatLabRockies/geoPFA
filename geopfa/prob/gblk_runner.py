@@ -279,6 +279,8 @@ def _select_component_stacking(  # noqa: PLR0913
 def _select_component_density_stacking(  # noqa: PLR0913
     *,
     outcomes: np.ndarray,
+    prior_probability: np.ndarray,
+    full_probability: np.ndarray,
     prior_log_density: np.ndarray,
     full_log_density: np.ndarray,
     validation_coordinates: np.ndarray,
@@ -288,10 +290,21 @@ def _select_component_density_stacking(  # noqa: PLR0913
     """Select a continuous predictive-density mixture with support guards."""
     prior = np.asarray(prior_log_density, dtype=np.float64)
     full = np.asarray(full_log_density, dtype=np.float64)
+    prior_event = np.asarray(prior_probability, dtype=np.float64)
+    full_event = np.asarray(full_probability, dtype=np.float64)
     outcome_values = np.asarray(outcomes, dtype=np.float64)
     coordinates = np.asarray(validation_coordinates, dtype=np.float64)
     well_ids = np.asarray(validation_well_ids)
-    invalid_densities = prior.ndim != 1 or full.shape != prior.shape
+    invalid_densities = (
+        prior.ndim != 1
+        or full.shape != prior.shape
+        or prior_event.shape != prior.shape
+        or full_event.shape != prior.shape
+        or not np.all(np.isfinite(prior_event))
+        or np.any((prior_event < 0.0) | (prior_event > 1.0))
+        or not np.all(np.isfinite(full_event))
+        or np.any((full_event < 0.0) | (full_event > 1.0))
+    )
     invalid_coordinates = (
         coordinates.ndim != _TWO_DIMENSIONS
         or coordinates.shape[0] != prior.size
@@ -314,6 +327,8 @@ def _select_component_density_stacking(  # noqa: PLR0913
         well_ids=well_ids.copy(),
         validation_coordinates=coordinates.copy(),
         outcomes=outcome_values.copy(),
+        prior_probability=prior_event.copy(),
+        full_probability=full_event.copy(),
         prior_log_density=prior.copy(),
         full_log_density=full.copy(),
     )
@@ -1960,6 +1975,12 @@ def _incomplete_spatial_cv_selection(  # noqa: PLR0913
         )
         evidence_outcomes = outcomes.copy() * scale
         evidence_kwargs = {
+            "prior_probability": assembled.prior_probability_well[
+                observed, component_index
+            ].copy(),
+            "full_probability": full_probability[
+                observed, component_index
+            ].copy(),
             "prior_log_density": prior_log_density,
             "full_log_density": full_log_density[
                 observed, component_index
@@ -2095,6 +2116,10 @@ def _estimate_predictive_stacking(
                 )
                 selection = _select_component_density_stacking(
                     outcomes=outcomes_scaled * scale,
+                    prior_probability=assembled.prior_probability_well[
+                        observed, q_idx
+                    ],
+                    full_probability=full_probability[observed, q_idx],
                     prior_log_density=prior_log_density,
                     full_log_density=full_log_density[observed, q_idx],
                     validation_coordinates=assembled.well_coords[observed, :2],
@@ -2126,14 +2151,21 @@ def _apply_componentwise_stacking(  # noqa: PLR0913
             )
         for q_idx, name in enumerate(assembled.component_names):
             selection = stacking[name]
+            full_update_draws = component_draws[name]
             draws = apply_predictive_stacking(
                 assembled.prior_probability_grid[:, q_idx],
-                component_draws[name],
+                full_update_draws,
                 weight=selection.weight,
             )
             component_draws[name] = draws
             interval = np.quantile(draws, [tail, 1.0 - tail], axis=0)
             probability = components[name].probability.copy()
+            probability["probability_prior"] = (
+                assembled.prior_probability_grid[:, q_idx]
+            )
+            probability["probability_full_update"] = full_update_draws.mean(
+                axis=0
+            )
             probability["probability"] = draws.mean(axis=0)
             probability["probability_lo"] = interval[0]
             probability["probability_hi"] = interval[1]

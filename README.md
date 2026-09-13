@@ -80,6 +80,8 @@ probability map.
   configured event prior before component combination. Three-dimensional
   workflows can align each component's score with a configured target depth.
   Gaussian components use continuous predictive log density for this choice.
+  Stacked component tables retain the prior and unstacked full-update means in
+  `probability_prior` and `probability_full_update` for model checking.
 - GBLK inference — same-family multivariate Bernoulli-logit or Gaussian-identity
   fits via `latticekrigx.glk` (default), with a conditional plug-in
   co-occurrence surface. The sole Bayesian
