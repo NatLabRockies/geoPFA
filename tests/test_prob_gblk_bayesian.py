@@ -49,7 +49,9 @@ from geopfa.prob.gblk_backend import (  # noqa: E402
     project_gblk_bayesian_draw_block,
 )
 from geopfa.prob.gblk_runner import (  # noqa: E402
+    _gaussian_predictive_exceedance_draws,
     _spawn_child_seeds,
+    _stacking_fold_config,
     run_gblk_probabilistic,
 )
 from geopfa.prob.predictive_stacking import (  # noqa: E402
@@ -76,6 +78,39 @@ def test_spawned_bayesian_seeds_fit_legacy_numpy_seed_domain() -> None:
     assert len(set(seeds)) == 100
     assert min(seeds) >= 0
     assert max(seeds) <= np.iinfo(np.uint32).max
+
+
+def test_blocked_stacking_reserves_one_supported_well_for_validation(
+    tmp_path: Path,
+) -> None:
+    base = _cfg_bayesian(tmp_path / "wells.gpkg", tmp_path / "out")
+    cfg = replace(base, labels=replace(base.labels, min_wells_for_fit=4))
+
+    fold_cfg = _stacking_fold_config(cfg)
+
+    assert cfg.labels.min_wells_for_fit == 4
+    assert fold_cfg.labels.min_wells_for_fit == 3
+
+
+def test_gaussian_event_draws_remain_open_probabilities() -> None:
+    fit = GBLKGaussianFitResult(
+        component_names=("heat",),
+        response_grid=np.zeros((2, 1)),
+        response_interval=np.zeros((2, 2, 1)),
+        response_draws=np.array([[[-1e6], [1e6]]]),
+        likelihood_precision_draws=np.ones((1, 1)),
+        fixed_coef_draws=None,
+        fit=SimpleNamespace(inference="inla"),
+        diagnostics={},
+    )
+
+    probability = _gaussian_predictive_exceedance_draws(
+        fit,
+        component_index=0,
+        threshold_scaled=0.0,
+    )
+
+    assert np.all((probability > 0.0) & (probability < 1.0))
 
 
 def test_bayesian_projection_blocks_equal_one_shot_projection() -> None:

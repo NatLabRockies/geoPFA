@@ -73,6 +73,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 _TWO_DIMENSIONS = 2
 _THREE_DIMENSIONS = 3
+_OPEN_PROBABILITY_EPSILON = 1e-12
 
 
 def _spawn_child_seeds(seed: int, count: int) -> tuple[int, ...]:
@@ -80,6 +81,15 @@ def _spawn_child_seeds(seed: int, count: int) -> tuple[int, ...]:
     children = np.random.SeedSequence(seed).spawn(count)
     return tuple(
         int(child.generate_state(1, dtype=np.uint32)[0]) for child in children
+    )
+
+
+def _stacking_fold_config(cfg: ProbabilisticConfig) -> ProbabilisticConfig:
+    """Use the configured support rule after reserving one validation well."""
+    fold_minimum = max(1, cfg.labels.min_wells_for_fit - 1)
+    return replace(
+        cfg,
+        labels=replace(cfg.labels, min_wells_for_fit=fold_minimum),
     )
 
 
@@ -777,7 +787,11 @@ def _gaussian_predictive_exceedance_draws(
         raise RuntimeError(
             "Gaussian predictive exceedance produced nonfinite probabilities"
         )
-    return probabilities
+    return np.clip(
+        probabilities,
+        _OPEN_PROBABILITY_EPSILON,
+        1.0 - _OPEN_PROBABILITY_EPSILON,
+    )
 
 
 def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
@@ -976,6 +990,7 @@ def _blocked_family_predictions(
         cfg.inference.gblk_bayesian.seed,
         cfg.cross_validation.n_folds,
     )
+    fold_stage_cfg = _stacking_fold_config(cfg)
     for (train_mask, test_mask), fold_seed in zip(
         folds, fold_seeds, strict=True
     ):
@@ -996,7 +1011,7 @@ def _blocked_family_predictions(
             layer_names=assembled.layer_names,
             y_train=assembled.y[train_mask],
             observed_train=assembled.observed_mask[train_mask],
-            cfg=cfg,
+            cfg=fold_stage_cfg,
         )
         common = {
             "component_names": assembled.component_names,
