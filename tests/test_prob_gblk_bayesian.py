@@ -49,7 +49,9 @@ from geopfa.prob.gblk_backend import (  # noqa: E402
     project_gblk_bayesian_draw_block,
 )
 from geopfa.prob.gblk_runner import (  # noqa: E402
+    _estimate_predictive_stacking,
     _gaussian_predictive_exceedance_draws,
+    _gaussian_predictive_log_density,
     _select_component_stacking,
     _spawn_child_seeds,
     _stacking_fold_config,
@@ -113,6 +115,89 @@ def test_gaussian_event_draws_remain_open_probabilities() -> None:
     )
 
     assert np.all((probability > 0.0) & (probability < 1.0))
+
+
+def test_gaussian_predictive_density_averages_paired_draws() -> None:
+    fit = GBLKGaussianFitResult(
+        component_names=("heat",),
+        response_grid=np.zeros((1, 1)),
+        response_interval=np.zeros((2, 1, 1)),
+        response_draws=np.array([[[0.0]], [[2.0]]]),
+        likelihood_precision_draws=np.ones((2, 1)),
+        fixed_coef_draws=None,
+        fit=SimpleNamespace(inference="inla"),
+        diagnostics={},
+    )
+
+    log_density = _gaussian_predictive_log_density(
+        fit,
+        outcomes_scaled=np.array([1.0]),
+        component_index=0,
+    )
+
+    expected = -0.5 * (np.log(2.0 * np.pi) + 1.0)
+    np.testing.assert_allclose(log_density, expected)
+
+
+def test_gaussian_stacking_uses_continuous_temperature_density(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    n_wells = 12
+    base = _cfg_bayesian(tmp_path / "wells.gpkg", tmp_path / "out")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            label_columns={"component_a": "temperature_c"},
+            observation_models={
+                "component_a": ObservationModelConfig(
+                    family="gaussian", response_scale=50.0
+                )
+            },
+        ),
+        alpha={
+            "component_a": AlphaModeConfig(
+                mode="thermal_layer_exceedance",
+                layer="prior_layer_a",
+                threshold=200.0,
+                uncertainty_column="temperature_sd_c",
+            )
+        },
+        inference=replace(
+            base.inference,
+            predictive_stacking=PredictiveStackingConfig(enabled=True),
+        ),
+    )
+    assembled = SimpleNamespace(
+        component_names=("component_a",),
+        observed_mask=np.ones((n_wells, 1), dtype=bool),
+        prior_probability_well=np.full((n_wells, 1), 0.01),
+        prior_response_mean_well=np.zeros((n_wells, 1)),
+        prior_response_sd_well=np.full((n_wells, 1), 50.0),
+        well_coords=np.column_stack(
+            [np.arange(n_wells), np.zeros(n_wells)]
+        ),
+        y=np.zeros((n_wells, 1)),
+    )
+
+    def fake_predictions(*_args, **_kwargs):
+        return np.full((n_wells, 1), 0.99), np.full((n_wells, 1), -10.0)
+
+    monkeypatch.setattr(
+        "geopfa.prob.gblk_runner._blocked_family_predictions",
+        fake_predictions,
+    )
+
+    selection = _estimate_predictive_stacking(
+        {"gaussian": assembled}, cfg, nc=3, a_wght=None
+    )["component_a"]
+
+    assert selection.weight == pytest.approx(0.0)
+    assert selection.prior_log_score == pytest.approx(
+        0.5 * np.log(2.0 * np.pi)
+    )
+    assert selection.full_log_score == pytest.approx(10.0)
+    assert selection.n_wells == n_wells
 
 
 def test_target_depth_stacking_retains_prior_with_too_few_wells() -> None:
@@ -650,6 +735,7 @@ def test_componentwise_stacking_uses_blocked_out_of_fold_predictions(
             "blocked_out_of_fold"
         )
         assert diagnostics["predictive_stacking_n"] == 30
+        assert diagnostics["predictive_stacking_score"] == "bernoulli_log_score"
         assert 0.0 <= diagnostics["predictive_stacking_weight"] <= 1.0
 
 

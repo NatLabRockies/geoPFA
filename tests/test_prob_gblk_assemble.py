@@ -455,6 +455,37 @@ def test_p_gblk_assemble_retains_prior_event_probabilities_at_grid_and_wells():
     )
 
 
+def test_p_gblk_assemble_retains_prior_response_moments():
+    components = ["comp_a"]
+    rng = np.random.default_rng(181)
+    grid_gdf = _make_grid_gdf(4)
+    pfa = _make_pfa(components, grid_gdf, rng=rng)
+    latent_mean = np.linspace(100.0, 200.0, len(grid_gdf))
+    latent_sd = np.linspace(20.0, 30.0, len(grid_gdf))
+    alpha = {
+        "comp_a": AlphaCResult(
+            grid_offset=np.zeros(len(grid_gdf)),
+            scalar_fallback=0.0,
+            latent_mean=latent_mean,
+            latent_sd=latent_sd,
+            event_threshold=150.0,
+        )
+    }
+    cfg = _make_labels_config(components)
+    wells_gdf = _make_wells_gdf(8, components, rng=rng)
+    loaded = LoadedLabels(gdf=wells_gdf, config=cfg)
+    adapter = PFAGridAdapter(pfa, criteria="geologic", dimensions="2d")
+
+    result = assemble_gblk_inputs(adapter, loaded, alpha)
+
+    np.testing.assert_allclose(
+        result.prior_response_mean_grid[:, 0], latent_mean
+    )
+    np.testing.assert_allclose(result.prior_response_sd_grid[:, 0], latent_sd)
+    assert result.prior_response_mean_well.shape == (8, 1)
+    assert result.prior_response_sd_well.shape == (8, 1)
+
+
 def test_p_gblk_assemble_well_offsets_are_snapped_from_grid():
     rng = np.random.default_rng(3)
     components = ["c1"]

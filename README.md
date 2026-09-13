@@ -80,6 +80,7 @@ probability map.
   blocked out-of-fold logarithmic score to mix each Bayesian update with its
   configured event prior before component combination. Three-dimensional
   workflows can align each component's score with a configured target depth.
+  Gaussian components use continuous predictive log density for this choice.
 - GBLK inference — same-family multivariate Bernoulli-logit or Gaussian-identity
   fits via `latticekrigx.glk` (default), with a conditional plug-in
   co-occurrence surface. The sole Bayesian

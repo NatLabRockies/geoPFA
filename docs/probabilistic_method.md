@@ -293,14 +293,18 @@ remaining options configure the deprecated sequential spatial smoother.
 | `predictive_stacking.validation_depths_m` | `{}` | In a 3-D analysis, optionally map component names to positive-down target depths. Each mapped component selects its stacking weight only from held-out observations at that depth. If fewer than `labels.min_wells_for_fit` distinct wells occur there, that component retains its prior. Unmapped components use all of their held-out observations. |
 
 Predictive stacking uses the spatial split declared in `cross_validation` and
-never scores in-sample predictions. For Gaussian heat, the fit uses continuous
-temperature and its sampled residual precision, while the stacking score uses
-the configured observed threshold event, the quantity passed to component
+never scores in-sample predictions. Bernoulli components use held-out binary
+log score. Gaussian components use the held-out continuous posterior predictive
+log density, including the sampled residual precision, rather than discarding
+information by thresholding the observations. The selected distribution
+mixture induces the same mixture of event probabilities passed to component
 combination. The selected weight and the prior, full, and selected held-out log
 scores are recorded in component diagnostics. A component-specific validation
 depth aligns this model-selection step with a target-depth map while the
 Gaussian fit can still use complete temperature profiles and other components
-retain their appropriate validation support.
+retain their appropriate validation support. Gaussian predictive stacking
+requires the thermal prior to supply an uncertainty raster or column so its
+continuous predictive density is defined.
 Incremental posterior-block storage is not currently available with Gaussian
 components or predictive stacking; those combinations fail during config
 validation instead of silently omitting either operation.

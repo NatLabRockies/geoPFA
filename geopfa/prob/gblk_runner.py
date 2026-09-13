@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import numpy as np
 from numpy.typing import NDArray
-from scipy.special import expit, ndtr
+from scipy.special import expit, logsumexp, ndtr
 
 from geopfa.exceptions import GEOPFAValueError
 from geopfa.prob.alpha import AlphaCResult, build_alpha_c
@@ -64,6 +64,7 @@ from geopfa.prob.pfa_grid import PFAGridAdapter, validate_declared_components
 from geopfa.prob.predictive_stacking import (
     PredictiveStackingResult,
     apply_predictive_stacking,
+    select_predictive_density_stacking_weight,
     select_predictive_stacking_weight,
 )
 from geopfa.prob.runner import ProbabilisticResult
@@ -139,6 +140,55 @@ def _select_component_stacking(
             prior_values,
             full_values,
         ),
+        n_wells=n_wells,
+    )
+    if n_wells >= minimum_wells:
+        return selection
+    return replace(
+        selection,
+        weight=0.0,
+        selected_log_score=selection.prior_log_score,
+        status="prior_retained_insufficient_validation_wells",
+    )
+
+
+def _select_component_density_stacking(
+    *,
+    prior_log_density: np.ndarray,
+    full_log_density: np.ndarray,
+    validation_coordinates: np.ndarray,
+    minimum_wells: int,
+) -> PredictiveStackingResult:
+    """Select a continuous predictive-density mixture with support guards."""
+    prior = np.asarray(prior_log_density, dtype=np.float64)
+    full = np.asarray(full_log_density, dtype=np.float64)
+    coordinates = np.asarray(validation_coordinates, dtype=np.float64)
+    invalid_densities = prior.ndim != 1 or full.shape != prior.shape
+    invalid_coordinates = (
+        coordinates.ndim != _TWO_DIMENSIONS
+        or coordinates.shape[0] != prior.size
+        or coordinates.shape[1] == 0
+        or not np.all(np.isfinite(coordinates))
+    )
+    if invalid_densities or invalid_coordinates:
+        raise ValueError(
+            "predictive densities and validation coordinates must be aligned"
+        )
+    if minimum_wells < 1:
+        raise ValueError("minimum_wells must be positive")
+    n_wells = int(np.unique(coordinates, axis=0).shape[0])
+    if prior.size == 0:
+        return PredictiveStackingResult(
+            weight=0.0,
+            prior_log_score=None,
+            full_log_score=None,
+            selected_log_score=None,
+            n_observations=0,
+            n_wells=0,
+            status="prior_retained_no_validation_wells",
+        )
+    selection = replace(
+        select_predictive_density_stacking_weight(prior, full),
         n_wells=n_wells,
     )
     if n_wells >= minimum_wells:
@@ -881,6 +931,46 @@ def _gaussian_predictive_exceedance_draws(
     )
 
 
+def _gaussian_predictive_log_density(
+    fit_result: Any,
+    *,
+    outcomes_scaled: np.ndarray,
+    component_index: int,
+) -> NDArray[np.float64]:
+    """Evaluate the paired Gaussian posterior predictive draw mixture."""
+    mean_draws = np.asarray(
+        fit_result.response_draws[:, :, component_index], dtype=np.float64
+    )
+    precision_draws = np.asarray(
+        fit_result.likelihood_precision_draws[:, component_index],
+        dtype=np.float64,
+    )
+    outcomes = np.asarray(outcomes_scaled, dtype=np.float64)
+    invalid_means = mean_draws.shape[0] == 0 or not np.all(
+        np.isfinite(mean_draws)
+    )
+    invalid_outcomes = outcomes.shape != (
+        mean_draws.shape[1],
+    ) or not np.all(np.isfinite(outcomes))
+    invalid_precision = (
+        precision_draws.shape != (mean_draws.shape[0],)
+        or not np.all(np.isfinite(precision_draws))
+        or np.any(precision_draws <= 0.0)
+    )
+    if invalid_means or invalid_outcomes or invalid_precision:
+        raise RuntimeError(
+            "Gaussian predictive density requires finite aligned outcomes, "
+            "means, and positive likelihood precisions"
+        )
+    log_density_draws = (
+        0.5 * (np.log(precision_draws)[:, np.newaxis] - np.log(2.0 * np.pi))
+        - 0.5
+        * precision_draws[:, np.newaxis]
+        * (outcomes[np.newaxis, :] - mean_draws) ** 2
+    )
+    return logsumexp(log_density_draws, axis=0) - np.log(mean_draws.shape[0])
+
+
 def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
     assembled: AssembledInputs,
     grid_gdf: gpd.GeoDataFrame,
@@ -1060,9 +1150,14 @@ def _blocked_family_predictions(
     *,
     nc: int,
     a_wght: float | None,
-) -> NDArray[np.float64]:
-    """Return leakage-safe out-of-fold event probabilities for one family."""
+) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]:
+    """Return leakage-safe out-of-fold predictions for one family."""
     predictions = np.full(assembled.y.shape, np.nan, dtype=np.float64)
+    log_density = (
+        np.full(assembled.y.shape, np.nan, dtype=np.float64)
+        if family == "gaussian"
+        else None
+    )
     folds = spatial_block_cv(
         assembled.well_coords,
         n_folds=cfg.cross_validation.n_folds,
@@ -1142,9 +1237,17 @@ def _blocked_family_predictions(
                         threshold_scaled=float(threshold) / scale,
                     ).mean(axis=0)
                 )
+                assert log_density is not None
+                log_density[test_mask, q_idx] = (
+                    _gaussian_predictive_log_density(
+                        fit,
+                        outcomes_scaled=assembled.y[test_mask, q_idx],
+                        component_index=q_idx,
+                    )
+                )
         else:  # pragma: no cover - guarded by observation config
             raise AssertionError(f"unexpected response family {family!r}")
-    return predictions
+    return predictions, log_density
 
 
 def _estimate_predictive_stacking(
@@ -1161,7 +1264,7 @@ def _estimate_predictive_stacking(
             raise RuntimeError(
                 "predictive stacking requires prior probabilities at wells"
             )
-        full_probability = _blocked_family_predictions(
+        full_probability, full_log_density = _blocked_family_predictions(
             assembled, family, cfg, nc=nc, a_wght=a_wght
         )
         for q_idx, name in enumerate(assembled.component_names):
@@ -1178,20 +1281,7 @@ def _estimate_predictive_stacking(
             )
             if family == "bernoulli":
                 outcomes = assembled.y[observed, q_idx]
-            else:
-                scale = float(
-                    cfg.labels.observation_model_for(name).response_scale
-                )
-                outcomes = (
-                    assembled.y[observed, q_idx] * scale
-                    > cfg.alpha[name].threshold
-                ).astype(np.float64)
-            if not np.all(np.isfinite(full_probability[observed, q_idx])):
-                raise RuntimeError(
-                    f"component {name!r} has missing out-of-fold predictions"
-                )
-            results[name] = replace(
-                _select_component_stacking(
+                selection = _select_component_stacking(
                     outcomes=outcomes,
                     prior_probability=assembled.prior_probability_well[
                         observed, q_idx
@@ -1199,7 +1289,53 @@ def _estimate_predictive_stacking(
                     full_probability=full_probability[observed, q_idx],
                     validation_coordinates=assembled.well_coords[observed, :2],
                     minimum_wells=cfg.labels.min_wells_for_fit,
-                ),
+                )
+            else:
+                scale = float(
+                    cfg.labels.observation_model_for(name).response_scale
+                )
+                if (
+                    full_log_density is None
+                    or assembled.prior_response_mean_well is None
+                    or assembled.prior_response_sd_well is None
+                ):
+                    raise RuntimeError(
+                        f"Gaussian component {name!r} lacks predictive-density "
+                        "inputs for stacking"
+                    )
+                prior_mean = (
+                    assembled.prior_response_mean_well[observed, q_idx] / scale
+                )
+                prior_sd = (
+                    assembled.prior_response_sd_well[observed, q_idx] / scale
+                )
+                outcomes = assembled.y[observed, q_idx]
+                if (
+                    not np.all(np.isfinite(prior_mean))
+                    or not np.all(np.isfinite(prior_sd))
+                    or np.any(prior_sd <= 0.0)
+                ):
+                    raise RuntimeError(
+                        f"Gaussian component {name!r} has invalid prior "
+                        "predictive moments"
+                    )
+                prior_log_density = (
+                    -np.log(prior_sd)
+                    - 0.5 * np.log(2.0 * np.pi)
+                    - 0.5 * ((outcomes - prior_mean) / prior_sd) ** 2
+                )
+                selection = _select_component_density_stacking(
+                    prior_log_density=prior_log_density,
+                    full_log_density=full_log_density[observed, q_idx],
+                    validation_coordinates=assembled.well_coords[observed, :2],
+                    minimum_wells=cfg.labels.min_wells_for_fit,
+                )
+            if not np.all(np.isfinite(full_probability[observed, q_idx])):
+                raise RuntimeError(
+                    f"component {name!r} has missing out-of-fold predictions"
+                )
+            results[name] = replace(
+                selection,
                 validation_depth_m=validation_depth,
             )
     return results
@@ -1215,7 +1351,7 @@ def _apply_componentwise_stacking(
 ) -> None:
     """Apply selected component weights before the existing combination."""
     tail = (1.0 - ci_level) / 2.0
-    for assembled in assembled_groups.values():
+    for family, assembled in assembled_groups.items():
         if assembled.prior_probability_grid is None:
             raise RuntimeError(
                 "predictive stacking requires prior probabilities on the grid"
@@ -1246,6 +1382,11 @@ def _apply_componentwise_stacking(
                 "predictive_stacking_n": selection.n_observations,
                 "predictive_stacking_n_wells": selection.n_wells,
                 "predictive_stacking_status": selection.status,
+                "predictive_stacking_score": (
+                    "gaussian_log_predictive_density"
+                    if family == "gaussian"
+                    else "bernoulli_log_score"
+                ),
                 "predictive_stacking_validation": "blocked_out_of_fold",
                 "predictive_stacking_validation_depth_m": (
                     selection.validation_depth_m

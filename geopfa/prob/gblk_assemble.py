@@ -109,6 +109,10 @@ class AssembledInputs:
     prior_probability_grid, prior_probability_well
         Configured event probability before the outcome update, retained on
         the grid and at observation locations for predictive stacking.
+    prior_response_mean_grid, prior_response_mean_well,
+    prior_response_sd_grid, prior_response_sd_well
+        Optional continuous prior predictive moments, retained when the alpha
+        construction supplies both a latent mean and standard deviation.
     """
 
     component_names: tuple[str, ...]
@@ -124,6 +128,10 @@ class AssembledInputs:
     layer_names: dict[str, list[str]] = field(default_factory=dict)
     prior_probability_grid: NDArray[np.float64] | None = None
     prior_probability_well: NDArray[np.float64] | None = None
+    prior_response_mean_grid: NDArray[np.float64] | None = None
+    prior_response_mean_well: NDArray[np.float64] | None = None
+    prior_response_sd_grid: NDArray[np.float64] | None = None
+    prior_response_sd_well: NDArray[np.float64] | None = None
 
     @property
     def n(self) -> int:
@@ -484,12 +492,60 @@ def assemble_gblk_inputs(  # noqa: PLR0914
             ]
         ).astype(np.float64)
     )
+    has_response_moments = [
+        probability_results[component].latent_mean is not None
+        and probability_results[component].latent_sd is not None
+        for component in component_names
+    ]
+    prior_response_mean_grid = None
+    prior_response_sd_grid = None
+    if any(has_response_moments):
+        prior_response_mean_grid = np.column_stack(
+            [
+                _component_values_on_reference(
+                    grid_gdf,
+                    adapter.pr_norm(component),
+                    probability_results[component].latent_mean,
+                    context=f"component {component!r} prior response mean",
+                )
+                if available
+                else np.full(len(grid_gdf), np.nan)
+                for component, available in zip(
+                    component_names, has_response_moments, strict=True
+                )
+            ]
+        ).astype(np.float64)
+        prior_response_sd_grid = np.column_stack(
+            [
+                _component_values_on_reference(
+                    grid_gdf,
+                    adapter.pr_norm(component),
+                    probability_results[component].latent_sd,
+                    context=f"component {component!r} prior response SD",
+                )
+                if available
+                else np.full(len(grid_gdf), np.nan)
+                for component, available in zip(
+                    component_names, has_response_moments, strict=True
+                )
+            ]
+        ).astype(np.float64)
 
     wells_gdf = align_to_grid_crs(loaded_labels.gdf, grid_gdf)
     well_coords = extract_coordinates(wells_gdf)
     well_grid_indices = snap_to_grid_indices(wells_gdf, grid_gdf)
     well_offsets = grid_offsets[well_grid_indices]
     prior_probability_well = prior_probability_grid[well_grid_indices]
+    prior_response_mean_well = (
+        None
+        if prior_response_mean_grid is None
+        else prior_response_mean_grid[well_grid_indices]
+    )
+    prior_response_sd_well = (
+        None
+        if prior_response_sd_grid is None
+        else prior_response_sd_grid[well_grid_indices]
+    )
 
     y, observed_mask, labeled_mask = _build_labels_array(
         wells_gdf,
@@ -522,6 +578,10 @@ def assemble_gblk_inputs(  # noqa: PLR0914
         layer_names=layer_names_map,
         prior_probability_grid=prior_probability_grid,
         prior_probability_well=prior_probability_well,
+        prior_response_mean_grid=prior_response_mean_grid,
+        prior_response_mean_well=prior_response_mean_well,
+        prior_response_sd_grid=prior_response_sd_grid,
+        prior_response_sd_well=prior_response_sd_well,
     )
 
 

@@ -348,6 +348,26 @@ def test_gaussian_component_rejects_incremental_draw_storage() -> None:
         ProbabilisticConfig.from_dict(raw)
 
 
+def test_gaussian_stacking_requires_prior_predictive_uncertainty() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+    raw["alpha"]["heat"] = {
+        "mode": "thermal_layer_exceedance",
+        "layer": "temperature_model",
+        "threshold": 400.0,
+    }
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+        "predictive_stacking": {"enabled": True},
+    }
+
+    with pytest.raises(ValueError, match="predictive stacking.*uncertainty"):
+        ProbabilisticConfig.from_dict(raw)
+
+
 def test_observation_model_rejects_unknown_component() -> None:
     raw = _minimal_config_dict()
     raw["labels"]["observation_models"] = {
@@ -1033,6 +1053,22 @@ def test_validate_requires_alpha_for_every_labeled_component() -> None:
     del raw["alpha"]["reservoir"]
 
     with pytest.raises(ValueError, match="reservoir"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_gaussian_stacking_reports_missing_alpha_as_config_error() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+    del raw["alpha"]["heat"]
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+        "predictive_stacking": {"enabled": True},
+    }
+
+    with pytest.raises(ValueError, match="missing: heat"):
         ProbabilisticConfig.from_dict(raw)
 
 

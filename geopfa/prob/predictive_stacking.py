@@ -68,24 +68,10 @@ def _binary_log_score(outcomes: np.ndarray, probability: np.ndarray) -> float:
     return float(np.mean(losses))
 
 
-def select_predictive_stacking_weight(
-    outcomes: np.ndarray,
-    prior_probability: np.ndarray,
-    full_probability: np.ndarray,
+def _select_weight(
+    objective, *, n_observations: int
 ) -> PredictiveStackingResult:
-    """Minimize held-out binary log score over a prior/update mixture.
-
-    The returned weight is the contribution from the fitted spatial update.
-    Zero retains the configured prior and one retains the full update.
-    """
-    y, prior, full = _validated_binary_inputs(
-        outcomes, prior_probability, full_probability
-    )
-
-    def objective(weight: float) -> float:
-        probability = (1.0 - weight) * prior + weight * full
-        return _binary_log_score(y, probability)
-
+    """Optimize a convex two-distribution mixture under a proper log score."""
     optimum = minimize_scalar(
         objective,
         bounds=(0.0, 1.0),
@@ -111,10 +97,61 @@ def select_predictive_stacking_weight(
         prior_log_score=objective(0.0),
         full_log_score=objective(1.0),
         selected_log_score=selected_score,
-        n_observations=int(y.size),
+        n_observations=n_observations,
         n_wells=None,
         status="estimated",
     )
+
+
+def select_predictive_stacking_weight(
+    outcomes: np.ndarray,
+    prior_probability: np.ndarray,
+    full_probability: np.ndarray,
+) -> PredictiveStackingResult:
+    """Minimize held-out binary log score over a prior/update mixture.
+
+    The returned weight is the contribution from the fitted spatial update.
+    Zero retains the configured prior and one retains the full update.
+    """
+    y, prior, full = _validated_binary_inputs(
+        outcomes, prior_probability, full_probability
+    )
+
+    def objective(weight: float) -> float:
+        probability = (1.0 - weight) * prior + weight * full
+        return _binary_log_score(y, probability)
+
+    return _select_weight(objective, n_observations=int(y.size))
+
+
+def select_predictive_density_stacking_weight(
+    prior_log_density: np.ndarray,
+    full_log_density: np.ndarray,
+) -> PredictiveStackingResult:
+    """Stack two continuous predictive distributions by held-out log score."""
+    prior = np.asarray(prior_log_density, dtype=np.float64)
+    full = np.asarray(full_log_density, dtype=np.float64)
+    if prior.ndim != 1 or full.shape != prior.shape or prior.size == 0:
+        raise ValueError(
+            "prior_log_density and full_log_density must be non-empty "
+            "one-dimensional arrays with identical shapes"
+        )
+    if not np.all(np.isfinite(prior)) or not np.all(np.isfinite(full)):
+        raise ValueError("predictive log densities must be finite")
+
+    def objective(weight: float) -> float:
+        if weight <= 0.0:
+            mixture_log_density = prior
+        elif weight >= 1.0:
+            mixture_log_density = full
+        else:
+            mixture_log_density = np.logaddexp(
+                np.log1p(-weight) + prior,
+                np.log(weight) + full,
+            )
+        return float(-np.mean(mixture_log_density))
+
+    return _select_weight(objective, n_observations=int(prior.size))
 
 
 def apply_predictive_stacking(
@@ -151,5 +188,6 @@ def apply_predictive_stacking(
 __all__ = [
     "PredictiveStackingResult",
     "apply_predictive_stacking",
+    "select_predictive_density_stacking_weight",
     "select_predictive_stacking_weight",
 ]

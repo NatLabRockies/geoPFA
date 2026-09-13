@@ -2298,6 +2298,28 @@ class ProbabilisticConfig:
                 "with a continuous prior mean; offending components: "
                 + ", ".join(sorted(invalid_gaussian_alpha))
             )
+        gaussian_stacking_without_uncertainty = {
+            name
+            for name in gaussian_components - invalid_gaussian_alpha
+            if self.inference.predictive_stacking.enabled
+            and not self.alpha[name].force_prior_predictive
+            and (
+                (
+                    self.alpha[name].mode == "thermal_exceedance"
+                    and self.alpha[name].uncertainty_raster is None
+                )
+                or (
+                    self.alpha[name].mode == "thermal_layer_exceedance"
+                    and self.alpha[name].uncertainty_column is None
+                )
+            )
+        }
+        if gaussian_stacking_without_uncertainty:
+            errors.append(
+                "Gaussian predictive stacking requires prior predictive "
+                "uncertainty; offending components: "
+                + ", ".join(sorted(gaussian_stacking_without_uncertainty))
+            )
         data_informed_components = {
             name
             for name, alpha in self.alpha.items()
