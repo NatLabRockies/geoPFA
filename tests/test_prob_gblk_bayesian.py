@@ -6,6 +6,7 @@ Requires the ``dev-gblk`` pixi environment (``latticekrigx`` +
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -30,6 +31,7 @@ from geopfa.prob.config import (  # noqa: E402
     GBLKBayesianConfig,
     GridConfig,
     InferenceConfig,
+    KleiberProfileConfig,
     LabelsConfig,
     ObservationModelConfig,
     OutputsConfig,
@@ -121,6 +123,13 @@ def test_fitted_and_prior_components_share_one_child_seed_sequence(
                 prior_precisions={"component_b:gradient": 4.0},
             ),
         ),
+        inference=replace(
+            base.inference,
+            gblk_bayesian=replace(
+                base.inference.gblk_bayesian,
+                kleiber_profiles={},
+            ),
+        ),
     )
     captured: dict[str, int] = {}
     delegated_backend = gblk_runner.fit_gblk_bayesian_joint
@@ -197,6 +206,7 @@ def test_streamed_fitted_and_prior_components_share_one_child_seed_sequence(
             gblk_bayesian=replace(
                 base.inference.gblk_bayesian,
                 cluster_effect=False,
+                kleiber_profiles={},
             ),
         ),
         outputs=replace(
@@ -722,7 +732,11 @@ def test_gaussian_stacking_uses_continuous_temperature_density(
     )
 
     def fake_predictions(*_args, **_kwargs):
-        return np.full((n_wells, 1), 0.99), np.full((n_wells, 1), -10.0)
+        return (
+            np.full((n_wells, 1), 0.99),
+            np.full((n_wells, 1), -10.0),
+            np.zeros(n_wells, dtype=bool),
+        )
 
     monkeypatch.setattr(
         "geopfa.prob.gblk_runner._blocked_family_predictions",
@@ -809,17 +823,76 @@ def test_stacking_validation_depth_is_component_specific() -> None:
     np.testing.assert_array_equal(hydraulic, observed)
 
 
-def test_stacking_validation_depth_fails_when_no_observation_matches() -> None:
-    with pytest.raises(
-        GEOPFAValueError,
-        match="component 'heat'.*no observed rows.*4000",
-    ):
-        _stacking_validation_mask(
-            observed_mask=np.array([True, True]),
-            well_depths_m=np.array([2_000.0, 3_000.0]),
-            component_name="heat",
-            validation_depths_m={"heat": 4_000.0},
+@pytest.mark.parametrize("family", ["bernoulli", "gaussian"])
+def test_target_depth_stacking_retains_prior_when_no_rows_match(
+    family: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    n_wells = 4
+    base = _cfg_bayesian(tmp_path / "wells.gpkg", tmp_path / "out")
+    labels = base.labels
+    if family == "gaussian":
+        labels = replace(
+            labels,
+            observation_models={
+                "component_a": ObservationModelConfig(
+                    family="gaussian", response_scale=50.0
+                )
+            },
         )
+    labels = replace(labels, depth_col="depth_m")
+    cfg = replace(
+        base,
+        dimensions="3d",
+        labels=labels,
+        inference=replace(
+            base.inference,
+            predictive_stacking=PredictiveStackingConfig(
+                enabled=True,
+                validation_depths_m={"component_a": 4_000.0},
+            ),
+        ),
+    )
+    assembled = SimpleNamespace(
+        component_names=("component_a",),
+        observed_mask=np.ones((n_wells, 1), dtype=bool),
+        prior_probability_well=np.full((n_wells, 1), 0.25),
+        prior_response_mean_well=np.full((n_wells, 1), 150.0),
+        prior_response_sd_well=np.full((n_wells, 1), 25.0),
+        well_coords=np.column_stack([np.arange(n_wells), np.zeros(n_wells)]),
+        well_ids=np.array([f"well-{index}" for index in range(n_wells)]),
+        well_depths_m=np.array([2_000.0, 3_000.0, 2_000.0, 3_000.0]),
+        y=np.full((n_wells, 1), 3.0),
+    )
+
+    def fake_predictions(*_args, **_kwargs):
+        probability = np.full((n_wells, 1), 0.75)
+        log_density = (
+            np.full((n_wells, 1), -2.0) if family == "gaussian" else None
+        )
+        return probability, log_density, np.zeros(n_wells, dtype=bool)
+
+    monkeypatch.setattr(
+        "geopfa.prob.gblk_runner._blocked_family_predictions",
+        fake_predictions,
+    )
+
+    selection = _estimate_predictive_stacking(
+        {family: assembled}, cfg, nc=3, a_wght=None
+    )["component_a"]
+
+    assert selection.weight == 0.0
+    assert selection.prior_log_score is None
+    assert selection.full_log_score is None
+    assert selection.selected_log_score is None
+    assert selection.n_observations == 0
+    assert selection.n_wells == 0
+    assert selection.status == "prior_retained_no_validation_wells"
+    assert selection.validation_depth_m == 4_000.0
+    assert selection.evidence is not None
+    assert selection.evidence.family == family
+    assert selection.evidence.outcomes.size == 0
 
 
 def test_blocked_predictions_reuse_the_full_model_spatial_domain(
@@ -999,6 +1072,213 @@ def test_blocked_predictions_standardize_against_canonical_grid_support(
         captured_prediction_designs[1][:, 0, 0],
         np.array([0.4, 0.8]),
     )
+
+
+def test_incomplete_buffered_cv_retains_prior_without_fitting_unsupported_fold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = _cfg_bayesian(tmp_path / "wells.gpkg", tmp_path / "out")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            label_columns={"component_a": "heat_label"},
+            min_wells_for_fit=4,
+        ),
+        alpha={"component_a": base.alpha["component_a"]},
+        inference=replace(
+            base.inference,
+            gblk_bayesian=replace(
+                base.inference.gblk_bayesian,
+                kleiber_profiles={},
+            ),
+            predictive_stacking=PredictiveStackingConfig(
+                enabled=True,
+                minimum_training_wells=3,
+            ),
+        ),
+        cross_validation=replace(base.cross_validation, n_folds=2),
+    )
+    assembled = SimpleNamespace(
+        component_names=("component_a",),
+        y=np.array([[0.0], [1.0], [0.0], [1.0]]),
+        observed_mask=np.ones((4, 1), dtype=bool),
+        well_offsets=np.zeros((4, 1)),
+        well_coords=np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]),
+        well_ids=np.array(["a", "b", "c", "d"]),
+        well_depths_m=None,
+        grid_coords=np.array([[0.0, 0.0], [3.0, 0.0]]),
+        evidence={"component_a": np.array([[1.0], [2.0], [3.0], [4.0]])},
+        layer_names={"component_a": ["feature"]},
+        prior_probability_well=np.full((4, 1), 0.4),
+    )
+    folds = (
+        (
+            np.array([False, False, True, True]),
+            np.array([True, True, False, False]),
+        ),
+        (
+            np.array([True, True, False, False]),
+            np.array([False, False, True, True]),
+        ),
+    )
+    monkeypatch.setattr(
+        "geopfa.prob.gblk_runner._grouped_spatial_folds",
+        lambda *_args, **_kwargs: iter(folds),
+    )
+
+    def fail_if_fit(*_args, **_kwargs):
+        raise AssertionError("unsupported buffered fold must not be fitted")
+
+    monkeypatch.setattr(
+        "geopfa.prob.gblk_runner.fit_gblk_bayesian_joint", fail_if_fit
+    )
+
+    selection = _estimate_predictive_stacking(
+        {"bernoulli": assembled}, cfg, nc=3, a_wght=None
+    )["component_a"]
+
+    assert selection.weight == 0.0
+    assert selection.prior_log_score is None
+    assert selection.full_log_score is None
+    assert selection.selected_log_score is None
+    assert selection.n_observations == 4
+    assert selection.n_wells == 4
+    assert selection.status == "prior_retained_incomplete_spatial_cv"
+    assert selection.evidence is not None
+    np.testing.assert_allclose(selection.evidence.prior_probability, 0.4)
+    assert np.all(np.isnan(selection.evidence.full_probability))
+
+
+def test_incomplete_gaussian_cv_preserves_physical_outcomes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = _cfg_bayesian(tmp_path / "wells.gpkg", tmp_path / "out")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            label_columns={"component_a": "temperature_c"},
+            observation_models={
+                "component_a": ObservationModelConfig(
+                    family="gaussian", response_scale=50.0
+                )
+            },
+            min_wells_for_fit=4,
+        ),
+        alpha={"component_a": base.alpha["component_a"]},
+        inference=replace(
+            base.inference,
+            gblk_bayesian=replace(
+                base.inference.gblk_bayesian,
+                kleiber_profiles={},
+            ),
+            predictive_stacking=PredictiveStackingConfig(
+                enabled=True,
+                minimum_training_wells=3,
+            ),
+        ),
+        cross_validation=replace(base.cross_validation, n_folds=2),
+    )
+    scaled_temperature = np.array([2.8, 3.2, 3.6, 4.0])
+    assembled = SimpleNamespace(
+        component_names=("component_a",),
+        y=scaled_temperature[:, None],
+        observed_mask=np.ones((4, 1), dtype=bool),
+        well_offsets=np.zeros((4, 1)),
+        well_coords=np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]),
+        well_ids=np.array(["a", "b", "c", "d"]),
+        well_depths_m=None,
+        grid_coords=np.array([[0.0, 0.0], [3.0, 0.0]]),
+        evidence={"component_a": np.array([[1.0], [2.0], [3.0], [4.0]])},
+        layer_names={"component_a": ["feature"]},
+        prior_probability_well=np.full((4, 1), 0.4),
+        prior_response_mean_well=np.full((4, 1), 170.0),
+        prior_response_sd_well=np.full((4, 1), 20.0),
+    )
+    folds = (
+        (
+            np.array([False, False, True, True]),
+            np.array([True, True, False, False]),
+        ),
+        (
+            np.array([True, True, False, False]),
+            np.array([False, False, True, True]),
+        ),
+    )
+    monkeypatch.setattr(
+        "geopfa.prob.gblk_runner._grouped_spatial_folds",
+        lambda *_args, **_kwargs: iter(folds),
+    )
+
+    def fail_if_fit(*_args, **_kwargs):
+        raise AssertionError("unsupported buffered fold must not be fitted")
+
+    monkeypatch.setattr(
+        "geopfa.prob.gblk_runner.fit_gblk_gaussian_bayesian_joint",
+        fail_if_fit,
+    )
+
+    selection = _estimate_predictive_stacking(
+        {"gaussian": assembled}, cfg, nc=3, a_wght=None
+    )["component_a"]
+
+    assert selection.status == "prior_retained_incomplete_spatial_cv"
+    assert selection.evidence is not None
+    np.testing.assert_allclose(
+        selection.evidence.outcomes,
+        scaled_temperature * 50.0,
+    )
+    assert np.all(np.isfinite(selection.evidence.prior_log_density))
+    assert np.all(np.isnan(selection.evidence.full_log_density))
+
+
+def test_nonfinite_backend_predictions_are_not_mislabeled_as_incomplete_cv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = _cfg_bayesian(tmp_path / "wells.gpkg", tmp_path / "out")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            label_columns={"component_a": "heat_label"},
+        ),
+        alpha={"component_a": base.alpha["component_a"]},
+        inference=replace(
+            base.inference,
+            gblk_bayesian=replace(
+                base.inference.gblk_bayesian,
+                kleiber_profiles={},
+            ),
+        ),
+    )
+    assembled = SimpleNamespace(
+        component_names=("component_a",),
+        y=np.array([[0.0], [1.0], [0.0], [1.0]]),
+        observed_mask=np.ones((4, 1), dtype=bool),
+        prior_probability_well=np.full((4, 1), 0.4),
+        well_coords=np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]),
+        well_ids=np.array(["a", "b", "c", "d"]),
+        well_depths_m=None,
+    )
+    monkeypatch.setattr(
+        "geopfa.prob.gblk_runner._blocked_family_predictions",
+        lambda *_args, **_kwargs: (
+            np.array([[0.5], [np.nan], [0.5], [0.5]]),
+            None,
+            np.zeros(4, dtype=bool),
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError, match="nonfinite out-of-fold predictions"
+    ):
+        _estimate_predictive_stacking(
+            {"bernoulli": assembled}, cfg, nc=3, a_wght=None
+        )
 
 
 def test_bayesian_projection_blocks_equal_one_shot_projection() -> None:
@@ -1185,8 +1465,9 @@ def _cfg_bayesian(wells_path: Path, output_dir: Path) -> ProbabilisticConfig:
                 n_draws=_N_DRAWS,
                 seed=42,
                 ci_level=0.9,
-                kleiber_r0=0.25,
-                kleiber_r1=0.10,
+                kleiber_profiles={
+                    "bernoulli": KleiberProfileConfig(r0=0.25, r1=0.10)
+                },
             ),
         ),
         calibration=CalibrationConfig(method="none"),
@@ -1253,6 +1534,7 @@ def _mismatched_gaussian_prior_case(
             gblk_bayesian=replace(
                 base.inference.gblk_bayesian,
                 cluster_effect=not streamed,
+                kleiber_profiles={},
             ),
         ),
         outputs=replace(
@@ -1410,6 +1692,13 @@ def test_gaussian_heat_stage_feeds_existing_component_combination(
             ),
             "component_b": base.alpha["component_b"],
         },
+        inference=replace(
+            base.inference,
+            gblk_bayesian=replace(
+                base.inference.gblk_bayesian,
+                kleiber_profiles={},
+            ),
+        ),
     )
     captured: dict[str, np.ndarray] = {}
     assembled_grid_coordinates: list[np.ndarray] = []
@@ -1506,6 +1795,104 @@ def test_gaussian_heat_stage_feeds_existing_component_combination(
     )
 
 
+def test_mixed_family_runner_fits_two_bernoulli_and_one_gaussian_component(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=6, n_wells=30, seed=317)
+    components = fixture.pfa["criteria"]["geologic"]["components"]
+    components["temperature"] = deepcopy(components["component_a"])
+    thermal = components["temperature"]["layers"]["prior_layer_a"]["model"]
+    thermal["value_interpolated"] = np.linspace(150.0, 250.0, len(thermal))
+    thermal["temperature_sd_c"] = 25.0
+    fixture.wells["temperature_c"] = np.linspace(140.0, 280.0, 30)
+    wells_path = tmp_path / "wells.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    base = _cfg_bayesian(wells_path, tmp_path / "out")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            label_columns={
+                **base.labels.label_columns,
+                "temperature": "temperature_c",
+            },
+            observation_models={
+                "temperature": ObservationModelConfig(
+                    family="gaussian", response_scale=50.0
+                )
+            },
+        ),
+        alpha={
+            **base.alpha,
+            "temperature": AlphaModeConfig(
+                mode="thermal_layer_exceedance",
+                layer="prior_layer_a",
+                threshold=200.0,
+                uncertainty_column="temperature_sd_c",
+            ),
+        },
+    )
+    captured: dict[str, tuple[str, ...]] = {}
+    delegated_bernoulli = gblk_runner.fit_gblk_bayesian_joint
+
+    def capture_bernoulli(*args, component_names, bayes_config, **kwargs):
+        captured["bernoulli"] = tuple(component_names)
+        assert bayes_config.kleiber_profiles == {
+            "bernoulli": KleiberProfileConfig(r0=0.25, r1=0.10)
+        }
+        return delegated_bernoulli(
+            *args,
+            component_names=component_names,
+            bayes_config=bayes_config,
+            **kwargs,
+        )
+
+    def fake_gaussian(
+        _coords,
+        _responses,
+        grid,
+        *,
+        component_names,
+        bayes_config,
+        **_kwargs,
+    ):
+        captured["gaussian"] = tuple(component_names)
+        assert "gaussian" not in bayes_config.kleiber_profiles
+        draws = np.full((bayes_config.n_draws, len(grid), 1), 4.0)
+        return GBLKGaussianFitResult(
+            component_names=tuple(component_names),
+            response_grid=draws.mean(axis=0),
+            response_interval=np.quantile(draws, [0.05, 0.95], axis=0),
+            response_draws=draws,
+            likelihood_precision_draws=np.ones((bayes_config.n_draws, 1)),
+            fixed_coef_draws=None,
+            fit=SimpleNamespace(inference="inla"),
+            diagnostics={"backend": "gblk_bayesian"},
+        )
+
+    monkeypatch.setattr(
+        "geopfa.prob.gblk_runner.fit_gblk_bayesian_joint",
+        capture_bernoulli,
+    )
+    monkeypatch.setattr(
+        "geopfa.prob.gblk_runner.fit_gblk_gaussian_bayesian_joint",
+        fake_gaussian,
+    )
+
+    result = run_gblk_probabilistic(fixture.pfa, cfg, nc=3)
+
+    assert captured == {
+        "bernoulli": ("component_a", "component_b"),
+        "gaussian": ("temperature",),
+    }
+    assert set(result.components) == {
+        "component_a",
+        "component_b",
+        "temperature",
+    }
+
+
 def test_bayesian_fixed_gaussian_prior_reports_response_distribution(
     tmp_path: Path,
 ) -> None:
@@ -1539,6 +1926,13 @@ def test_bayesian_fixed_gaussian_prior_reports_response_distribution(
             ),
             "component_b": base.alpha["component_b"],
         },
+        inference=replace(
+            base.inference,
+            gblk_bayesian=replace(
+                base.inference.gblk_bayesian,
+                kleiber_profiles={},
+            ),
+        ),
     )
 
     result = run_gblk_probabilistic(fixture.pfa, cfg)
@@ -1822,7 +2216,9 @@ def test_prior_predictive_streaming_run_is_not_labeled_as_posterior(
         inference=replace(
             base.inference,
             gblk_bayesian=replace(
-                base.inference.gblk_bayesian, cluster_effect=False
+                base.inference.gblk_bayesian,
+                cluster_effect=False,
+                kleiber_profiles={},
             ),
         ),
         outputs=replace(
@@ -1881,6 +2277,7 @@ def test_streamed_fixed_gaussian_prior_reports_response_distribution(
             gblk_bayesian=replace(
                 base.inference.gblk_bayesian,
                 cluster_effect=False,
+                kleiber_profiles={},
             ),
         ),
         outputs=replace(
@@ -2259,8 +2656,7 @@ def test_p7_gblk_bayesian_config_roundtrip() -> None:
         spatial_sd_tail_probability=0.1,
         dirichlet_concentration=3.0,
         separate_ranges=True,
-        kleiber_r0=0.25,
-        kleiber_r1=0.10,
+        kleiber_profiles={"bernoulli": KleiberProfileConfig(r0=0.25, r1=0.10)},
         cluster_effect=False,
         validate_inla=False,
     )
@@ -2290,7 +2686,7 @@ def test_p7_gblk_bayesian_requires_bivariate_kleiber_profile() -> None:
     rng = np.random.default_rng(13)
     coords = rng.uniform(size=(12, 2))
     labels = rng.binomial(1, 0.5, size=(12, 2)).astype(float)
-    with pytest.raises(ValueError, match="kleiber_r0.*kleiber_r1"):
+    with pytest.raises(ValueError, match="kleiber_profiles.bernoulli"):
         fit_gblk_bayesian_joint(
             coords,
             labels,
@@ -2514,8 +2910,9 @@ def test_p7_public_bayesian_fitter_is_the_canonical_array_api(
             n_draws=6,
             seed=19,
             ci_level=0.8,
-            kleiber_r0=0.25,
-            kleiber_r1=0.10,
+            kleiber_profiles={
+                "bernoulli": KleiberProfileConfig(r0=0.25, r1=0.10)
+            },
             cluster_effect=False,
         ),
         nc=3,

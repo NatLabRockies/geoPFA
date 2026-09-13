@@ -282,8 +282,9 @@ posterior-mean probability surfaces plus credible-interval bands
       "spatial_sd_u": 1.0,
       "spatial_sd_tail_probability": 0.05,
       "dirichlet_concentration": 1.5,
-      "kleiber_r0": 0.25,
-      "kleiber_r1": 0.10
+      "kleiber_profiles": {
+        "bernoulli": {"r0": 0.25, "r1": 0.10}
+      }
     }
   }
 }
@@ -292,7 +293,11 @@ posterior-mean probability surfaces plus credible-interval bands
 Or programmatically:
 
 ```python
-from geopfa.prob import GBLKBayesianConfig, InferenceConfig
+from geopfa.prob import (
+    GBLKBayesianConfig,
+    InferenceConfig,
+    KleiberProfileConfig,
+)
 
 bayesian_inference = InferenceConfig(
     backend="gblk",
@@ -305,8 +310,9 @@ bayesian_inference = InferenceConfig(
         spatial_sd_u=1.0,
         spatial_sd_tail_probability=0.05,
         dirichlet_concentration=1.5,
-        kleiber_r0=0.25,
-        kleiber_r1=0.10,
+        kleiber_profiles={
+            "bernoulli": KleiberProfileConfig(r0=0.25, r1=0.10)
+        },
     ),
 )
 ```
@@ -314,9 +320,10 @@ bayesian_inference = InferenceConfig(
 Use `bayesian_inference` as the `inference` field when constructing the
 complete `ProbabilisticConfig`.
 
-`kleiber_r0` and `kleiber_r1` are required for two-component fits and must be
-frozen profile estimates, not tuning values. They are omitted for a univariate
-fit. The Paige model supports 2-D `LKRectangle` and 3-D `LKBox` geometry and
+Each two-component likelihood family requires its own entry in
+`kleiber_profiles`; `r0` and `r1` must be frozen profile estimates, not tuning
+values. A univariate family must omit the entry, and no family may contain more
+than two fitted components. The Paige model supports 2-D `LKRectangle` and 3-D `LKBox` geometry and
 consumes geoPFA's component-specific Gaussian fixed-coefficient priors through
 the public joint interface. The authenticated pyINLA 0.1.8/INLA runtime has
 passed the end-to-end projector and paired-draw preflight. Runtime and output

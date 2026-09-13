@@ -109,7 +109,11 @@ def test_posterior_draw_output_config_roundtrips() -> None:
     raw = _minimal_config_dict()
     raw["inference"] = {
         "backend": "gblk",
-        "gblk_bayesian": {"enabled": True, "cluster_effect": False},
+        "gblk_bayesian": {
+            "enabled": True,
+            "cluster_effect": False,
+            "kleiber_profiles": {"bernoulli": {"r0": 0.25, "r1": 0.10}},
+        },
     }
     raw["outputs"] = {
         "posterior_draw_blocks": True,
@@ -648,7 +652,10 @@ def test_predictive_stacking_config_roundtrips() -> None:
     raw = _minimal_config_dict()
     raw["inference"] = {
         "backend": "gblk",
-        "gblk_bayesian": {"enabled": True},
+        "gblk_bayesian": {
+            "enabled": True,
+            "kleiber_profiles": {"bernoulli": {"r0": 0.25, "r1": 0.10}},
+        },
         "predictive_stacking": {"enabled": True},
     }
 
@@ -666,7 +673,10 @@ def test_predictive_stacking_minimum_training_wells_roundtrips() -> None:
     raw = _minimal_config_dict()
     raw["inference"] = {
         "backend": "gblk",
-        "gblk_bayesian": {"enabled": True},
+        "gblk_bayesian": {
+            "enabled": True,
+            "kleiber_profiles": {"bernoulli": {"r0": 0.25, "r1": 0.10}},
+        },
         "predictive_stacking": {
             "enabled": True,
             "minimum_training_wells": 3,
@@ -706,7 +716,10 @@ def test_predictive_stacking_target_depth_roundtrips() -> None:
     raw["labels"]["depth_col"] = "depth_m"
     raw["inference"] = {
         "backend": "gblk",
-        "gblk_bayesian": {"enabled": True},
+        "gblk_bayesian": {
+            "enabled": True,
+            "kleiber_profiles": {"bernoulli": {"r0": 0.25, "r1": 0.10}},
+        },
         "predictive_stacking": {
             "enabled": True,
             "validation_depths_m": {"heat": 3_000.0},
@@ -960,10 +973,10 @@ def test_full_config_roundtrips_via_to_dict() -> None:
         },
         "alpha": {
             "heat": {
-                "mode": "thermal_exceedance",
-                "thermal_raster": "thermal.tif",
+                "mode": "thermal_layer_exceedance",
+                "layer": "temperature_model",
                 "threshold": 200.0,
-                "uncertainty_raster": "thermal_sd.tif",
+                "uncertainty_column": "temperature_sd_c",
                 "p_min": 0.1,
                 "p_max": 0.9,
                 "scalar_fallback_pr0": 0.3,
@@ -1039,7 +1052,7 @@ def test_full_config_roundtrips_via_to_dict() -> None:
     assert out["spatial_field"]["n_levels"] == 3
     assert out["spatial_field"]["lattice_centers_per_dimension"] == 4
     assert out["spatial_field"]["coordinate_scaling"] == "physical_isotropic"
-    assert out["alpha"]["heat"]["mode"] == "thermal_exceedance"
+    assert out["alpha"]["heat"]["mode"] == "thermal_layer_exceedance"
     assert (
         out["evidence"]["regularization"]["per_feature_weights"]["layer_a"]
         == 2.0
@@ -1144,6 +1157,24 @@ def test_3d_config_uses_dimension_appropriate_default_outputs() -> None:
     cfg = ProbabilisticConfig.from_dict(raw)
 
     assert cfg.outputs.format == ("vtk", "csv")
+
+
+def test_3d_config_rejects_2d_thermal_raster_prior() -> None:
+    raw = _minimal_config_dict()
+    raw["dimensions"] = "3d"
+    raw["alpha"]["heat"] = {
+        "mode": "thermal_exceedance",
+        "thermal_raster": "temperature.tif",
+        "threshold": 350.0,
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "thermal_exceedance.*samples only x/y.*thermal_layer_exceedance"
+        ),
+    ):
+        ProbabilisticConfig.from_dict(raw)
 
 
 @pytest.mark.parametrize(

@@ -106,6 +106,32 @@ def _unique_well_count(well_ids: np.ndarray, mask: np.ndarray) -> int:
     return int(np.unique(identifiers[selected]).size)
 
 
+def _fold_has_required_training_support(
+    assembled: AssembledInputs,
+    train_mask: NDArray[np.bool_],
+    *,
+    minimum_wells: int,
+) -> bool:
+    """Return whether every family component can be fitted in one CV fold."""
+    selected = np.asarray(train_mask, dtype=bool)
+    if selected.shape != (len(assembled.well_ids),):
+        raise ValueError("training mask must align with assembled well rows")
+    for q_idx, name in enumerate(assembled.component_names):
+        observed = selected & assembled.observed_mask[:, q_idx]
+        if _unique_well_count(assembled.well_ids, observed) < minimum_wells:
+            return False
+        evidence = np.asarray(assembled.evidence[name], dtype=np.float64)
+        if evidence.shape[0] != selected.size:
+            raise ValueError(
+                f"component {name!r} evidence must align with assembled well rows"
+            )
+        for feature_index in range(evidence.shape[1]):
+            finite = observed & np.isfinite(evidence[:, feature_index])
+            if _unique_well_count(assembled.well_ids, finite) < minimum_wells:
+                return False
+    return True
+
+
 def _grouped_spatial_folds(  # noqa: PLR0913
     coordinates: np.ndarray,
     well_ids: np.ndarray,
@@ -346,11 +372,6 @@ def _stacking_validation_mask(
         rtol=0.0,
         atol=1e-6,
     )
-    if not selected.any():
-        raise GEOPFAValueError(
-            f"component {component_name!r} has no observed rows at requested "
-            f"validation depth {validation_depth:g} m"
-        )
     return selected
 
 
@@ -1752,9 +1773,14 @@ def _blocked_family_predictions(
     *,
     nc: int,
     a_wght: float | None,
-) -> tuple[NDArray[np.float64], NDArray[np.float64] | None]:
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64] | None,
+    NDArray[np.bool_],
+]:
     """Return leakage-safe out-of-fold predictions for one family."""
     predictions = np.full(assembled.y.shape, np.nan, dtype=np.float64)
+    unsupported_rows = np.zeros(assembled.y.shape[0], dtype=bool)
     log_density = (
         np.full(assembled.y.shape, np.nan, dtype=np.float64)
         if family == "gaussian"
@@ -1785,6 +1811,13 @@ def _blocked_family_predictions(
     for (train_mask, test_mask), fold_seed in zip(
         folds, fold_seeds, strict=True
     ):
+        if not _fold_has_required_training_support(
+            assembled,
+            train_mask,
+            minimum_wells=_stacking_training_minimum(cfg),
+        ):
+            unsupported_rows[test_mask] = True
+            continue
         fold_cfg = replace(
             cfg.inference.gblk_bayesian,
             seed=fold_seed,
@@ -1864,7 +1897,92 @@ def _blocked_family_predictions(
                 )
         else:  # pragma: no cover - guarded by observation config
             raise AssertionError(f"unexpected response family {family!r}")
-    return predictions, log_density
+    return predictions, log_density, unsupported_rows
+
+
+def _incomplete_spatial_cv_selection(  # noqa: PLR0913
+    assembled: AssembledInputs,
+    *,
+    family: str,
+    component_index: int,
+    observed: NDArray[np.bool_],
+    full_probability: NDArray[np.float64],
+    full_log_density: NDArray[np.float64] | None,
+    cfg: ProbabilisticConfig,
+) -> PredictiveStackingResult:
+    """Retain the prior when a buffered fold cannot support the family fit."""
+    if assembled.prior_probability_well is None:
+        raise RuntimeError("predictive stacking requires prior probabilities")
+    name = assembled.component_names[component_index]
+    outcomes = assembled.y[observed, component_index]
+    evidence_kwargs: dict[str, Any]
+    if family == "bernoulli":
+        evidence_outcomes = outcomes.copy()
+        evidence_kwargs = {
+            "prior_probability": assembled.prior_probability_well[
+                observed, component_index
+            ].copy(),
+            "full_probability": full_probability[
+                observed, component_index
+            ].copy(),
+        }
+    elif family == "gaussian":
+        if (
+            full_log_density is None
+            or assembled.prior_response_mean_well is None
+            or assembled.prior_response_sd_well is None
+        ):
+            raise RuntimeError(
+                f"Gaussian component {name!r} lacks predictive-density "
+                "inputs for stacking"
+            )
+        scale = float(cfg.labels.observation_model_for(name).response_scale)
+        prior_mean = (
+            assembled.prior_response_mean_well[observed, component_index]
+            / scale
+        )
+        prior_sd = (
+            assembled.prior_response_sd_well[observed, component_index] / scale
+        )
+        if (
+            not np.all(np.isfinite(prior_mean))
+            or not np.all(np.isfinite(prior_sd))
+            or np.any(prior_sd <= 0.0)
+        ):
+            raise RuntimeError(
+                f"Gaussian component {name!r} has invalid prior predictive moments"
+            )
+        prior_log_density = (
+            -np.log(prior_sd)
+            - 0.5 * np.log(2.0 * np.pi)
+            - 0.5 * ((outcomes - prior_mean) / prior_sd) ** 2
+            - np.log(scale)
+        )
+        evidence_outcomes = outcomes.copy() * scale
+        evidence_kwargs = {
+            "prior_log_density": prior_log_density,
+            "full_log_density": full_log_density[
+                observed, component_index
+            ].copy(),
+        }
+    else:  # pragma: no cover - guarded by observation config
+        raise AssertionError(f"unexpected response family {family!r}")
+    return PredictiveStackingResult(
+        weight=0.0,
+        prior_log_score=None,
+        full_log_score=None,
+        selected_log_score=None,
+        n_observations=int(outcomes.size),
+        n_wells=_unique_well_count(assembled.well_ids, observed),
+        status="prior_retained_incomplete_spatial_cv",
+        evidence=PredictiveStackingEvidence(
+            family=family,
+            well_ids=assembled.well_ids[observed].copy(),
+            validation_coordinates=assembled.well_coords[observed, :2].copy(),
+            outcomes=evidence_outcomes,
+            **evidence_kwargs,
+        ),
+    )
 
 
 def _estimate_predictive_stacking(
@@ -1881,7 +1999,11 @@ def _estimate_predictive_stacking(
             raise RuntimeError(
                 "predictive stacking requires prior probabilities at wells"
             )
-        full_probability, full_log_density = _blocked_family_predictions(
+        (
+            full_probability,
+            full_log_density,
+            unsupported_rows,
+        ) = _blocked_family_predictions(
             assembled, family, cfg, nc=nc, a_wght=a_wght
         )
         for q_idx, name in enumerate(assembled.component_names):
@@ -1896,6 +2018,34 @@ def _estimate_predictive_stacking(
                     cfg.inference.predictive_stacking.validation_depths_m
                 ),
             )
+            incomplete_cv = bool(np.any(unsupported_rows & observed))
+            if incomplete_cv:
+                selection = _incomplete_spatial_cv_selection(
+                    assembled,
+                    family=family,
+                    component_index=q_idx,
+                    observed=observed,
+                    full_probability=full_probability,
+                    full_log_density=full_log_density,
+                    cfg=cfg,
+                )
+                results[name] = replace(
+                    selection,
+                    validation_depth_m=validation_depth,
+                )
+                continue
+            if not np.all(np.isfinite(full_probability[observed, q_idx])):
+                raise RuntimeError(
+                    f"component {name!r} has nonfinite out-of-fold predictions"
+                )
+            if (
+                family == "gaussian"
+                and full_log_density is not None
+                and not np.all(np.isfinite(full_log_density[observed, q_idx]))
+            ):
+                raise RuntimeError(
+                    f"component {name!r} has nonfinite out-of-fold log densities"
+                )
             if family == "bernoulli":
                 outcomes = assembled.y[observed, q_idx]
                 selection = _select_component_stacking(
@@ -1950,10 +2100,6 @@ def _estimate_predictive_stacking(
                     validation_coordinates=assembled.well_coords[observed, :2],
                     validation_well_ids=assembled.well_ids[observed],
                     minimum_wells=cfg.labels.min_wells_for_fit,
-                )
-            if not np.all(np.isfinite(full_probability[observed, q_idx])):
-                raise RuntimeError(
-                    f"component {name!r} has missing out-of-fold predictions"
                 )
             results[name] = replace(
                 selection,

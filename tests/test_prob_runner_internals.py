@@ -28,6 +28,7 @@ from geopfa.prob.config import (
     GBLKBayesianConfig,
     GridConfig,
     InferenceConfig,
+    KleiberProfileConfig,
     LabelsConfig,
     ObservationModelConfig,
     OutputsConfig,
@@ -560,6 +561,9 @@ def test_gblk_scenario_stays_in_memory_when_outputs_are_disabled(
                 n_draws=2,
                 cluster_effect=False,
                 validate_inla=False,
+                kleiber_profiles={
+                    "bernoulli": KleiberProfileConfig(r0=0.25, r1=0.10)
+                },
             ),
         ),
         spatial_field=SpatialFieldConfig(

@@ -23,8 +23,10 @@ from geopfa.prob.config import (  # noqa: E402
     CombinationConfig,
     CrossValidationConfig,
     EvidenceConfig,
+    GBLKBayesianConfig,
     GridConfig,
     InferenceConfig,
+    KleiberProfileConfig,
     LabelsConfig,
     OutputsConfig,
     ProbabilisticConfig,
@@ -450,8 +452,6 @@ def test_p_gblk_cv_respects_spatial_field_disabled(
 def test_p_gblk_cv_rejects_bayesian_config_until_bayesian_cv_exists(
     tmp_path: Path,
 ) -> None:
-    from geopfa.prob.config import GBLKBayesianConfig
-
     fixture = make_synthetic_pfa(grid_n=8, n_wells=40, seed=22)
     wells_path = tmp_path / "wells.gpkg"
     fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
@@ -461,7 +461,13 @@ def test_p_gblk_cv_rejects_bayesian_config_until_bayesian_cv_exists(
         spatial_field=replace(cfg.spatial_field, enabled=True),
         inference=replace(
             cfg.inference,
-            gblk_bayesian=GBLKBayesianConfig(enabled=True, n_draws=10),
+            gblk_bayesian=GBLKBayesianConfig(
+                enabled=True,
+                n_draws=10,
+                kleiber_profiles={
+                    "bernoulli": KleiberProfileConfig(r0=0.25, r1=0.10)
+                },
+            ),
         ),
     )
 

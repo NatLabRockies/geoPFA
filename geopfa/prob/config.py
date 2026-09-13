@@ -1449,6 +1449,52 @@ class SiteSelectionConfig:
 
 
 @dataclass(frozen=True)
+class KleiberProfileConfig:
+    """Frozen bivariate correlation profile for one likelihood family."""
+
+    r0: float
+    r1: float
+
+    def __post_init__(self) -> None:
+        """Validate direct programmatic construction."""
+        r0 = _require_finite_real_value(
+            self.r0, context="KleiberProfileConfig.r0"
+        )
+        r1 = _require_finite_real_value(
+            self.r1, context="KleiberProfileConfig.r1"
+        )
+        if not -1.0 < r0 < 1.0:
+            raise GEOPFAValueError(
+                "KleiberProfileConfig.r0 must be in (-1, 1)"
+            )
+        if r1 < 0.0:
+            raise GEOPFAValueError("KleiberProfileConfig.r1 must be >= 0")
+        object.__setattr__(self, "r0", r0)
+        object.__setattr__(self, "r1", r1)
+
+    @classmethod
+    def from_dict(
+        cls, raw: Mapping[str, Any], *, family: str
+    ) -> KleiberProfileConfig:
+        """Build one required family profile from parsed JSON."""
+        context = f"inference.gblk_bayesian.kleiber_profiles.{family}"
+        _reject_unknown_keys(raw, {"r0", "r1"}, context=context)
+        missing = {"r0", "r1"} - set(raw)
+        if missing:
+            raise GEOPFAValueError(
+                f"{context} requires " + " and ".join(sorted(missing))
+            )
+        return cls(
+            r0=_require_finite_real_value(raw["r0"], context=f"{context}.r0"),
+            r1=_require_finite_real_value(raw["r1"], context=f"{context}.r1"),
+        )
+
+    def to_dict(self) -> dict[str, float]:
+        """Return a plain-dict representation."""
+        return {"r0": self.r0, "r1": self.r1}
+
+
+@dataclass(frozen=True)
 class GBLKBayesianConfig:
     """Configuration for geoPFA's sole Bayesian inference path.
 
@@ -1458,8 +1504,8 @@ class GBLKBayesianConfig:
 
     Training alpha offsets enter the likelihood and prediction alpha offsets
     enter every posterior draw. The Paige prior parameters and, for a
-    bivariate fit, the published Kleiber profile parameters must be frozen as
-    part of a science-run specification.
+    bivariate likelihood family, a separate published Kleiber profile must be
+    frozen as part of a science-run specification.
     """
 
     enabled: bool = False
@@ -1471,10 +1517,26 @@ class GBLKBayesianConfig:
     spatial_sd_tail_probability: float = 0.05
     dirichlet_concentration: float = 1.5
     separate_ranges: bool = False
-    kleiber_r0: float | None = None
-    kleiber_r1: float | None = None
+    kleiber_profiles: Mapping[str, KleiberProfileConfig] = field(
+        default_factory=dict
+    )
     cluster_effect: bool = True
     validate_inla: bool = True
+
+    def __post_init__(self) -> None:
+        """Require typed profiles keyed by a supported likelihood family."""
+        for family, profile in self.kleiber_profiles.items():
+            if family not in ALLOWED_OBSERVATION_FAMILIES:
+                allowed = ", ".join(ALLOWED_OBSERVATION_FAMILIES)
+                raise GEOPFAValueError(
+                    "inference.gblk_bayesian.kleiber_profiles keys must be "
+                    f"one of: {allowed}"
+                )
+            if not isinstance(profile, KleiberProfileConfig):
+                raise GEOPFAValueError(
+                    "inference.gblk_bayesian.kleiber_profiles values must be "
+                    "KleiberProfileConfig instances"
+                )
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any] | None) -> GBLKBayesianConfig:
@@ -1493,13 +1555,31 @@ class GBLKBayesianConfig:
                 "spatial_sd_tail_probability",
                 "dirichlet_concentration",
                 "separate_ranges",
-                "kleiber_r0",
-                "kleiber_r1",
+                "kleiber_profiles",
                 "cluster_effect",
                 "validate_inla",
             },
             context="inference.gblk_bayesian",
         )
+        profiles_raw = raw.get("kleiber_profiles", {})
+        if not isinstance(profiles_raw, Mapping):
+            raise GEOPFAValueError(
+                "inference.gblk_bayesian.kleiber_profiles must be a mapping"
+            )
+        profiles: dict[str, KleiberProfileConfig] = {}
+        for family, profile_raw in profiles_raw.items():
+            if not isinstance(family, str):
+                raise GEOPFAValueError(
+                    "inference.gblk_bayesian.kleiber_profiles keys must be strings"
+                )
+            if not isinstance(profile_raw, Mapping):
+                raise GEOPFAValueError(
+                    "inference.gblk_bayesian.kleiber_profiles."
+                    f"{family} must be a mapping"
+                )
+            profiles[family] = KleiberProfileConfig.from_dict(
+                profile_raw, family=family
+            )
         return cls(
             enabled=_require_json_bool(
                 raw, "enabled", False, context="inference.gblk_bayesian"
@@ -1543,16 +1623,7 @@ class GBLKBayesianConfig:
                 False,
                 context="inference.gblk_bayesian",
             ),
-            kleiber_r0=_require_optional_json_real(
-                raw,
-                "kleiber_r0",
-                context="inference.gblk_bayesian",
-            ),
-            kleiber_r1=_require_optional_json_real(
-                raw,
-                "kleiber_r1",
-                context="inference.gblk_bayesian",
-            ),
+            kleiber_profiles=profiles,
             cluster_effect=_require_json_bool(
                 raw,
                 "cluster_effect",
@@ -1579,8 +1650,10 @@ class GBLKBayesianConfig:
             "spatial_sd_tail_probability": self.spatial_sd_tail_probability,
             "dirichlet_concentration": self.dirichlet_concentration,
             "separate_ranges": self.separate_ranges,
-            "kleiber_r0": self.kleiber_r0,
-            "kleiber_r1": self.kleiber_r1,
+            "kleiber_profiles": {
+                family: profile.to_dict()
+                for family, profile in self.kleiber_profiles.items()
+            },
             "cluster_effect": self.cluster_effect,
             "validate_inla": self.validate_inla,
         }
@@ -2490,6 +2563,20 @@ class ProbabilisticConfig:
                 "GeoTIFF, CSV, or Parquet for 2-D analyses"
             )
 
+        raster_thermal_components = {
+            name
+            for name, alpha in self.alpha.items()
+            if alpha.mode == "thermal_exceedance"
+        }
+        if self.dimensions == "3d" and raster_thermal_components:
+            errors.append(
+                "alpha.mode='thermal_exceedance' samples only x/y from a "
+                "2-D raster and cannot define a 3-D thermal prior; use "
+                "alpha.mode='thermal_layer_exceedance' with a 3-D PFA layer "
+                "for component(s): "
+                + ", ".join(sorted(raster_thermal_components))
+            )
+
         label_components = set(self.labels.label_columns)
         alpha_components = set(self.alpha)
         observation_model_components = set(self.labels.observation_models)
@@ -2554,6 +2641,11 @@ class ProbabilisticConfig:
             & alpha_components
             if not self.alpha[name].force_prior_predictive
         }
+        fitted_bernoulli_components = (
+            data_informed_components
+            & label_components
+            & alpha_components - gaussian_components
+        )
         prior_only_gaussian_components = {
             name
             for name in gaussian_components & alpha_components
@@ -2846,23 +2938,32 @@ class ProbabilisticConfig:
                 "inference.gblk_bayesian.spatial_sd_tail_probability "
                 "must be in (0, 1)"
             )
-        if (bayes.kleiber_r0 is None) != (bayes.kleiber_r1 is None):
-            errors.append(
-                "inference.gblk_bayesian.kleiber_r0 and kleiber_r1 must be "
-                "supplied together"
-            )
-        if bayes.kleiber_r0 is not None and bayes.kleiber_r1 is not None:
-            if not math.isfinite(bayes.kleiber_r0) or not (
-                -1.0 < bayes.kleiber_r0 < 1.0
-            ):
-                errors.append(
-                    "inference.gblk_bayesian.kleiber_r0 must be finite and in "
-                    "(-1, 1)"
-                )
-            if not math.isfinite(bayes.kleiber_r1) or bayes.kleiber_r1 < 0.0:
-                errors.append(
-                    "inference.gblk_bayesian.kleiber_r1 must be finite and >= 0"
-                )
+        if bayes.enabled:
+            fitted_by_family = {
+                "bernoulli": fitted_bernoulli_components,
+                "gaussian": fitted_gaussian_components,
+            }
+            for family, component_names in fitted_by_family.items():
+                count = len(component_names)
+                profile_configured = family in bayes.kleiber_profiles
+                if count > 2:  # noqa: PLR2004
+                    errors.append(
+                        "Bayesian GBLK supports at most two fitted "
+                        f"{family} components; got {count}: "
+                        + ", ".join(sorted(component_names))
+                    )
+                if count == 2 and not profile_configured:  # noqa: PLR2004
+                    errors.append(
+                        f"bivariate {family} Bayesian GBLK requires "
+                        "inference.gblk_bayesian.kleiber_profiles."
+                        f"{family}"
+                    )
+                if count != 2 and profile_configured:  # noqa: PLR2004
+                    errors.append(
+                        "inference.gblk_bayesian.kleiber_profiles."
+                        f"{family} is valid only for exactly two fitted "
+                        f"{family} components; got {count}"
+                    )
         if self.spatial_field.n_levels < 1:
             errors.append(
                 f"spatial_field.n_levels must be >= 1 "
@@ -2989,6 +3090,7 @@ __all__ = [
     "GBLKBayesianConfig",
     "GridConfig",
     "InferenceConfig",
+    "KleiberProfileConfig",
     "LabelsConfig",
     "ObservationModelConfig",
     "OutputsConfig",

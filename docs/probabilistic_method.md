@@ -268,7 +268,7 @@ envelope. This analysis does not alter or wrap the LatticeKrigX likelihood.
 | --- | --- | --- |
 | `scalar` | `scalar_fallback_pr0` | Uniform $\alpha = \text{logit}(p_0)$. |
 | `layer_logit` | `layer` | Min-max rescale a named layer to $[p_{\min}, p_{\max}]$ and apply `logit`. Layer is auto-excluded from regression. |
-| `thermal_exceedance` | `thermal_raster`, `threshold` (`uncertainty_raster` required for a Gaussian prior-only component) | Step function or $\Phi$-integration of `P(T > T*)`. Clipped then `logit`. |
+| `thermal_exceedance` | `thermal_raster`, `threshold` (`uncertainty_raster` required for a Gaussian prior-only component) | For 2-D runs, compute a step function or $\Phi$-integration of `P(T > T*)` from a raster. Clipped then `logit`. |
 | `thermal_layer_exceedance` | `layer`, `threshold` (`uncertainty_column` required for a Gaussian prior-only component) | Compute `P(T > T*)` from temperature mean/SD columns already carried by a PFA layer. |
 | `multi_layer` | `layers` | Sum of `layer_logit` offsets in logit space; all named layers auto-excluded. |
 
@@ -325,7 +325,7 @@ unsupported sparse-GP tuning vocabulary.
 | `gblk_bayesian.spatial_sd_u` | `1.0` | Paige spatial standard-deviation threshold. |
 | `gblk_bayesian.spatial_sd_tail_probability` | `0.05` | Prior probability above `spatial_sd_u`. |
 | `gblk_bayesian.dirichlet_concentration` | `1.5` | Symmetric Paige level-weight concentration. |
-| `gblk_bayesian.kleiber_r0`, `kleiber_r1` | `null` | Required frozen profile parameters for a bivariate fit. |
+| `gblk_bayesian.kleiber_profiles` | `{}` | Frozen `r0`/`r1` profile keyed by likelihood family (`bernoulli` or `gaussian`). Each bivariate family requires its own profile; a univariate family must omit one. Bayesian GBLK supports at most two fitted components per family. |
 | `predictive_stacking.enabled` | `false` | Select a component-specific mixture of the configured event prior and full Bayesian update by buffered or blocked out-of-fold logarithmic score. Zero retains the prior and one retains the full update. |
 | `predictive_stacking.validation_depths_m` | `{}` | In a 3-D analysis, optionally map component names to positive-down target depths. Each mapped component selects its stacking weight only from held-out observations at that depth. If fewer than `labels.min_wells_for_fit` distinct wells occur there, that component retains its prior. Unmapped components use all of their held-out observations. |
 | `predictive_stacking.minimum_training_wells` | `null` | Optional positive minimum for each fold's training support. `null` uses `labels.min_wells_for_fit` unchanged. |
@@ -342,7 +342,11 @@ depth aligns this model-selection step with a target-depth map while the
 Gaussian fit can still use complete temperature profiles and other components
 retain their appropriate validation support. Gaussian predictive stacking
 requires the thermal prior to supply an uncertainty raster or column so its
-continuous predictive density is defined.
+continuous predictive density is defined. If spatial blocking or buffering
+leaves any fold below the declared training-well support, geoPFA does not score
+an incomplete out-of-fold prediction set. It retains the affected family
+prior, records `prior_retained_incomplete_spatial_cv`, and preserves the
+missing predictions in the stacking evidence.
 Incremental posterior-block storage is not currently available with fitted
 Gaussian components or predictive stacking. Fixed Gaussian prior-only
 components are supported because their response distribution is configured
@@ -476,7 +480,7 @@ Every helper accepts a `PlotStyle` dataclass for theme overrides (cmaps, point c
 
 ## 3D usage
 
-Set `dimensions: "3d"` in the config. The runner expects the PFA dict to carry 3D `Point(x, y, z)` geometries on every `pr_norm` and layer `model`. For CSV labels, declare either Cartesian `labels.z_col`, positive-down `labels.depth_col`, or both. With depth alone the loader constructs `z = -depth`; with both, Cartesian Z defines model geometry and the separate depth column supports scientific target-depth validation. All other knobs work the same way.
+Set `dimensions: "3d"` in the config. The runner expects the PFA dict to carry 3D `Point(x, y, z)` geometries on every `pr_norm` and layer `model`. For CSV labels, declare either Cartesian `labels.z_col`, positive-down `labels.depth_col`, or both. With depth alone the loader constructs `z = -depth`; with both, Cartesian Z defines model geometry and the separate depth column supports scientific target-depth validation. A 3-D thermal prior must use `alpha.mode="thermal_layer_exceedance"` with a processed 3-D PFA layer. The raster-backed `thermal_exceedance` mode samples only x and y, so config validation rejects it for 3-D runs rather than repeating one 2-D prior through every depth.
 
 The GBLK backend fits a genuine 3-D LKBox field using `(x, y, z)` point
 geometries in both prediction and labelled-well inputs. For numerical

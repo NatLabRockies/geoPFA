@@ -176,6 +176,35 @@ def build_paige_prior(config: GBLKBayesianConfig) -> Any:
     )
 
 
+def _resolve_kleiber_profile(
+    config: GBLKBayesianConfig,
+    *,
+    response_family: str,
+    n_components: int,
+) -> tuple[float | None, float | None]:
+    """Resolve the bivariate profile for exactly one likelihood family."""
+    profile = config.kleiber_profiles.get(response_family)
+    if n_components == _MAX_PAIGE_COMPONENTS:
+        if profile is None:
+            raise ValueError(
+                f"bivariate {response_family} Paige/INLA requires frozen "
+                "inference.gblk_bayesian.kleiber_profiles."
+                f"{response_family} parameters"
+            )
+        return profile.r0, profile.r1
+    if n_components == 1:
+        if profile is not None:
+            raise ValueError(
+                "inference.gblk_bayesian.kleiber_profiles."
+                f"{response_family} must be omitted for a univariate fit"
+            )
+        return None, None
+    raise ValueError(
+        "the canonical LatticeKrigX Paige/INLA model supports one or two "
+        f"components; got {n_components}"
+    )
+
+
 def build_lkinfo(  # noqa: PLR0913
     coords_spatial: NDArray[np.float64],
     *,
@@ -534,18 +563,11 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         )
     if not np.all(np.isfinite(coords)) or not np.all(np.isfinite(grid)):
         raise ValueError("training and prediction coordinates must be finite")
-    if n_components not in {1, 2}:
-        raise ValueError(
-            "the canonical LatticeKrigX Paige/INLA model supports one or two "
-            f"components; got {n_components}"
-        )
-    if n_components == _MAX_PAIGE_COMPONENTS and (
-        bayes_config.kleiber_r0 is None or bayes_config.kleiber_r1 is None
-    ):
-        raise ValueError(
-            "bivariate Paige/INLA requires frozen kleiber_r0 and kleiber_r1 "
-            "profile parameters"
-        )
+    kleiber_r0, kleiber_r1 = _resolve_kleiber_profile(
+        bayes_config,
+        response_family=response_family,
+        n_components=n_components,
+    )
     spatial_dimension = int(coords.shape[1])
     stability_baseline = 2.0 * spatial_dimension
     if a_wght <= stability_baseline:
@@ -672,8 +694,8 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         inference="inla",
         prior=build_paige_prior(bayes_config),
         separate_ranges=bayes_config.separate_ranges,
-        r_0=bayes_config.kleiber_r0,
-        r_1=bayes_config.kleiber_r1,
+        r_0=kleiber_r0,
+        r_1=kleiber_r1,
         n_draw=bayes_config.n_draws,
         seed=bayes_config.seed,
         validate=bayes_config.validate_inla,
@@ -810,8 +832,9 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
             "dirichlet_concentration": bayes_config.dirichlet_concentration,
         },
         "kleiber_profile": {
-            "r_0": bayes_config.kleiber_r0,
-            "r_1": bayes_config.kleiber_r1,
+            "family": response_family,
+            "r_0": kleiber_r0,
+            "r_1": kleiber_r1,
         },
         "cluster_effect": (
             bayes_config.cluster_effect

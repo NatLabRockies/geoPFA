@@ -26,6 +26,7 @@ from geopfa.prob.config import (  # noqa: E402
     GridConfig,
     GBLKBayesianConfig,
     InferenceConfig,
+    KleiberProfileConfig,
     LabelsConfig,
     ObservationModelConfig,
     OutputsConfig,
@@ -237,6 +238,9 @@ def test_gblk_metric_distance_controls_require_projected_metre_crs(
                 n_draws=4,
                 cluster_effect=False,
                 validate_inla=False,
+                kleiber_profiles={
+                    "bernoulli": KleiberProfileConfig(r0=0.25, r1=0.10)
+                },
             ),
             predictive_stacking=PredictiveStackingConfig(
                 enabled=distance_contract == "predictive_stacking"

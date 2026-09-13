@@ -24,6 +24,7 @@ from geopfa.prob.config import (
     GBLKBayesianConfig,
     GridConfig,
     InferenceConfig,
+    KleiberProfileConfig,
     LabelsConfig,
     OutputsConfig,
     ProbabilisticConfig,
@@ -885,6 +886,9 @@ def test_gblk_streamed_scenario_resumes_one_exact_run(  # noqa: PLR0915
                 n_draws=2,
                 cluster_effect=False,
                 validate_inla=False,
+                kleiber_profiles={
+                    "bernoulli": KleiberProfileConfig(r0=0.25, r1=0.10)
+                },
             ),
         ),
         spatial_field=SpatialFieldConfig(enabled=True),
@@ -1056,6 +1060,9 @@ def test_gblk_streamed_baseline_finalizes_after_interruption(
                 n_draws=1,
                 cluster_effect=False,
                 validate_inla=False,
+                kleiber_profiles={
+                    "bernoulli": KleiberProfileConfig(r0=0.25, r1=0.10)
+                },
             ),
         ),
         spatial_field=SpatialFieldConfig(enabled=True),
