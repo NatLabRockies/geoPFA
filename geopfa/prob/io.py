@@ -864,7 +864,7 @@ class PosteriorDrawBlockWriter:
     def _record_file(self, path: Path) -> dict[str, Any]:
         root = self.final_dir if self._complete else self.work_dir
         return {
-            "path": str(path.relative_to(root)),
+            "path": path.relative_to(root).as_posix(),
             "size_bytes": path.stat().st_size,
             "sha256": _file_sha256(path),
         }
@@ -2403,7 +2403,7 @@ def write_manifest(
     output_dir.mkdir(parents=True, exist_ok=True)
     files: list[dict[str, Any]] = [
         {
-            "path": str(path.relative_to(output_dir)),
+            "path": path.relative_to(output_dir).as_posix(),
             "size_bytes": path.stat().st_size,
             "sha256": _file_sha256(path),
         }
