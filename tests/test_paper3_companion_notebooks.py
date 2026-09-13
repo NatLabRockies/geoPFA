@@ -169,7 +169,7 @@ def test_study_targets_and_validation_scope_are_explicit() -> None:
     assert "'threshold': 400.0" in newberry
     assert "'dimensions': '3d'" in newberry
     assert "'force_prior_predictive': True" in newberry
-    assert "No population calibration claim" in newberry
+    assert "population calibration claim" in newberry
 
     conventional = sources["nevada_conventional_150c_3km"]
     assert "150.0" in conventional
@@ -180,13 +180,26 @@ def test_study_targets_and_validation_scope_are_explicit() -> None:
         "run_gblk_calibration_cv, run_probabilistic"
     ) in conventional
     assert "metric_distributions" in conventional
-    assert "Replicate-level" in conventional
+    assert "Held-out spatial-fold" in conventional
+    assert "Replicate-level" not in conventional
+    assert "validate discrimination" not in conventional
+    assert "comparison_support_n" in conventional
+    assert "shared finite support" in conventional
 
     superhot = sources["nevada_superhot_350c_7km"]
     assert "'threshold': 350.0" in superhot
     assert "7KM" in superhot
     assert "'force_prior_predictive': True" in superhot
     assert "No target-matched labels exist" in superhot
+    assert "6 km is the shallowest released 1-km depth slice" in superhot
+    assert "7 km is the declared screening depth" in superhot
+    assert "shallowest released model depth" not in superhot
+    assert "nonzero 350 C mean exceedance" not in superhot
+
+    assert "provenance-bound predictive SD" in newberry
+    assert "held-out residual assessment" in newberry
+    assert "published thermal mean/SD field" not in newberry
+    assert "well-level temperature validation" not in newberry
 
 
 def test_prior_only_notebooks_do_not_require_unused_label_sources() -> None:
