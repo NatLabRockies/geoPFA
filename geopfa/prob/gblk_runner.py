@@ -1691,12 +1691,27 @@ def _assemble_likelihood_groups(
                     float(cfg.alpha[name].threshold)
                     for name in assembled.component_names
                 )
+                try:
+                    probability_bounds = tuple(
+                        (
+                            float(fit_alphas[name].provenance["p_min"]),
+                            float(fit_alphas[name].provenance["p_max"]),
+                        )
+                        for name in assembled.component_names
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        "Gaussian predictive stacking requires configured "
+                        "probability clipping bounds"
+                    ) from exc
                 prior_probability_grid = np.column_stack(
                     [
                         _gaussian_prior_exceedance_probability(
                             mean=assembled.prior_response_mean_grid[:, q_idx],
                             sd=assembled.prior_response_sd_grid[:, q_idx],
                             threshold=threshold,
+                            p_min=probability_bounds[q_idx][0],
+                            p_max=probability_bounds[q_idx][1],
                         )
                         for q_idx, threshold in enumerate(thresholds)
                     ]
@@ -1707,6 +1722,8 @@ def _assemble_likelihood_groups(
                             mean=assembled.prior_response_mean_well[:, q_idx],
                             sd=assembled.prior_response_sd_well[:, q_idx],
                             threshold=threshold,
+                            p_min=probability_bounds[q_idx][0],
+                            p_max=probability_bounds[q_idx][1],
                         )
                         for q_idx, threshold in enumerate(thresholds)
                     ]

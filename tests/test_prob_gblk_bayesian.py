@@ -7,7 +7,7 @@ Requires the ``dev-gblk`` pixi environment (``latticekrigx`` +
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -53,6 +53,7 @@ from geopfa.prob.gblk_backend import (  # noqa: E402
 from geopfa.prob.gblk_runner import (  # noqa: E402
     _GaussianPredictiveResponseState,
     _apply_componentwise_stacking,
+    _assemble_likelihood_groups,
     _blocked_family_predictions,
     _estimate_predictive_stacking,
     _gaussian_prior_exceedance_probability,
@@ -388,6 +389,93 @@ def test_gaussian_prior_event_probability_uses_continuous_distribution() -> (
     np.testing.assert_allclose(probability, ndtr(np.array([-5.0, 2.5])))
     assert probability[0] < 0.01
     assert probability[1] > 0.99
+
+
+def test_gaussian_stacking_uses_configured_prior_probability_bounds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @dataclass(frozen=True)
+    class FakeAssembled:
+        component_names: tuple[str, ...]
+        prior_response_mean_grid: np.ndarray
+        prior_response_sd_grid: np.ndarray
+        prior_response_mean_well: np.ndarray
+        prior_response_sd_well: np.ndarray
+        prior_probability_grid: np.ndarray | None
+        prior_probability_well: np.ndarray | None
+        y: np.ndarray
+
+    base = _cfg_bayesian(tmp_path / "unused.gpkg", tmp_path / "out")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            label_columns={"component_a": "temperature_c"},
+            observation_models={
+                "component_a": ObservationModelConfig(
+                    family="gaussian", response_scale=50.0
+                )
+            },
+        ),
+        alpha={
+            "component_a": AlphaModeConfig(
+                mode="thermal_layer_exceedance",
+                layer="thermal_prior",
+                threshold=0.0,
+                uncertainty_column="temperature_sd_c",
+                p_min=0.2,
+                p_max=0.8,
+            )
+        },
+        inference=replace(
+            base.inference,
+            predictive_stacking=PredictiveStackingConfig(enabled=True),
+        ),
+    )
+    fit_alphas = {
+        "component_a": gblk_runner.AlphaCResult(
+            grid_offset=np.zeros(2),
+            scalar_fallback=0.0,
+            provenance={"p_min": 0.2, "p_max": 0.8},
+            latent_mean=np.array([-1_000.0, 1_000.0]),
+            latent_sd=np.ones(2),
+            event_threshold=0.0,
+        )
+    }
+    assembled = FakeAssembled(
+        component_names=("component_a",),
+        prior_response_mean_grid=np.array([[-1_000.0], [1_000.0]]),
+        prior_response_sd_grid=np.ones((2, 1)),
+        prior_response_mean_well=np.array([[-1_000.0], [1_000.0]]),
+        prior_response_sd_well=np.ones((2, 1)),
+        prior_probability_grid=None,
+        prior_probability_well=None,
+        y=np.array([[0.0], [1.0]]),
+    )
+    monkeypatch.setattr(
+        gblk_runner,
+        "assemble_gblk_inputs",
+        lambda *_args, **_kwargs: assembled,
+    )
+    labels = gblk_runner.LoadedLabels(
+        gdf=gpd.GeoDataFrame({"geometry": []}, crs="EPSG:32611"),
+        config=cfg.labels,
+    )
+
+    result = _assemble_likelihood_groups(
+        None,
+        labels,
+        fit_alphas,
+        cfg,
+        reference_grid=gpd.GeoDataFrame({"geometry": []}, crs="EPSG:32611"),
+    )["gaussian"]
+
+    np.testing.assert_array_equal(
+        result.prior_probability_grid[:, 0], [0.2, 0.8]
+    )
+    np.testing.assert_array_equal(
+        result.prior_probability_well[:, 0], [0.2, 0.8]
+    )
 
 
 def test_gaussian_predictive_density_averages_paired_draws() -> None:
