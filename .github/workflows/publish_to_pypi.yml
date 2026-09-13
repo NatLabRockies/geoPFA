@@ -25,6 +25,10 @@ jobs:
         fetch-depth: 0
         fetch-tags: true
 
+    - uses: ./.github/actions/configure-latticekrigx
+      with:
+        deploy-key: ${{ secrets.LATTICEKRIGX_DEPLOY_KEY }}
+
     - uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
       with:
         pixi-version: 'latest'

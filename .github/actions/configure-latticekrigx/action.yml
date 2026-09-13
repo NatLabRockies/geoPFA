@@ -1,0 +1,28 @@
+name: Configure LatticeKrigX access
+description: Configure read-only Git access to the private LatticeKrigX dependency.
+
+inputs:
+  deploy-key:
+    description: Read-only deploy key registered with the LatticeKrigX repository.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Configure dependency key
+      shell: bash
+      env:
+        LATTICEKRIGX_DEPLOY_KEY: ${{ inputs.deploy-key }}
+      run: |
+        key_dir="${RUNNER_TEMP}/latticekrigx-ssh"
+        mkdir -p "${key_dir}"
+        chmod 700 "${key_dir}"
+        printf '%s\n' "${LATTICEKRIGX_DEPLOY_KEY}" > "${key_dir}/id_ed25519"
+        chmod 600 "${key_dir}/id_ed25519"
+        ssh-keyscan -H github.com > "${key_dir}/known_hosts"
+        {
+          echo "GIT_SSH_COMMAND=ssh -i ${key_dir}/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=${key_dir}/known_hosts"
+          echo "GIT_CONFIG_COUNT=1"
+          echo "GIT_CONFIG_KEY_0=url.git@github.com:.insteadOf"
+          echo "GIT_CONFIG_VALUE_0=https://github.com/"
+        } >> "${GITHUB_ENV}"
