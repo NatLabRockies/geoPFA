@@ -75,6 +75,14 @@ _TWO_DIMENSIONS = 2
 _THREE_DIMENSIONS = 3
 
 
+def _spawn_child_seeds(seed: int, count: int) -> tuple[int, ...]:
+    """Derive deterministic seeds accepted by pyINLA and legacy NumPy APIs."""
+    children = np.random.SeedSequence(seed).spawn(count)
+    return tuple(
+        int(child.generate_state(1, dtype=np.uint32)[0]) for child in children
+    )
+
+
 def _validate_gblk_config(cfg: ProbabilisticConfig) -> None:
     """Require a valid config that explicitly selects the GBLK backend."""
     cfg.validate_raise()
@@ -964,15 +972,16 @@ def _blocked_family_predictions(
         buffer_distance=cfg.cross_validation.buffer_km * 1000.0,
         dims=(0, 1),
     )
-    seed_sequences = np.random.SeedSequence(
-        cfg.inference.gblk_bayesian.seed
-    ).spawn(cfg.cross_validation.n_folds)
-    for (train_mask, test_mask), seed_sequence in zip(
-        folds, seed_sequences, strict=True
+    fold_seeds = _spawn_child_seeds(
+        cfg.inference.gblk_bayesian.seed,
+        cfg.cross_validation.n_folds,
+    )
+    for (train_mask, test_mask), fold_seed in zip(
+        folds, fold_seeds, strict=True
     ):
         fold_cfg = replace(
             cfg.inference.gblk_bayesian,
-            seed=int(seed_sequence.generate_state(1, dtype=np.uint64)[0]),
+            seed=fold_seed,
         )
         evidence_design = _prepare_joint_evidence_arrays(
             component_names=assembled.component_names,
@@ -1287,21 +1296,14 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
             evidence_diagnostics = evidence_design.diagnostics
 
         prior_states = {}
-        seed_sequences = np.random.SeedSequence(bayes_cfg.seed).spawn(
-            len(prior_names)
-        )
-        for name, seed_sequence in zip(
-            prior_names, seed_sequences, strict=True
-        ):
+        prior_seeds = _spawn_child_seeds(bayes_cfg.seed, len(prior_names))
+        for name, component_seed in zip(prior_names, prior_seeds, strict=True):
             prior_grid = adapter.pr_norm(name)
             if not prior_grid.geometry.equals(grid_gdf.geometry):
                 raise GEOPFAValueError(
                     f"component {name!r} prior grid does not match the Bayesian prediction grid"
                 )
             if cfg.alpha[name].use_evidence_prior:
-                component_seed = int(
-                    seed_sequence.generate_state(1, dtype=np.uint64)[0]
-                )
                 prior_states[name] = _prior_predictive_evidence_state(
                     adapter, name, alphas[name], cfg, seed=component_seed
                 )
@@ -1689,13 +1691,14 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             fit_families, cfg.inference.gblk_bayesian
         )
         if len(fit_families) > 1:
-            family_seeds = np.random.SeedSequence(
-                cfg.inference.gblk_bayesian.seed
-            ).spawn(len(fit_families))
+            family_seeds = _spawn_child_seeds(
+                cfg.inference.gblk_bayesian.seed,
+                len(fit_families),
+            )
             family_configs = {
                 family: replace(
                     cfg.inference.gblk_bayesian,
-                    seed=int(seed.generate_state(1, dtype=np.uint64)[0]),
+                    seed=seed,
                 )
                 for family, seed in zip(
                     fit_families, family_seeds, strict=True
@@ -1749,13 +1752,12 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             components.update(gaussian_components)
             component_draws.update(gaussian_draws)
         prior_names = sorted(prior_only_names)
-        seed_sequences = np.random.SeedSequence(
-            cfg.inference.gblk_bayesian.seed
-        ).spawn(len(prior_names))
+        prior_seeds = _spawn_child_seeds(
+            cfg.inference.gblk_bayesian.seed,
+            len(prior_names),
+        )
         tail = (1.0 - cfg.inference.gblk_bayesian.ci_level) / 2.0
-        for name, seed_sequence in zip(
-            prior_names, seed_sequences, strict=True
-        ):
+        for name, component_seed in zip(prior_names, prior_seeds, strict=True):
             prior_grid = adapter.pr_norm(name)
             if not prior_grid.geometry.equals(grid_gdf.geometry):
                 raise GEOPFAValueError(
@@ -1763,9 +1765,6 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                     "Bayesian prediction grid"
                 )
             if cfg.alpha[name].use_evidence_prior:
-                component_seed = int(
-                    seed_sequence.generate_state(1, dtype=np.uint64)[0]
-                )
                 prior_draws = _prior_predictive_evidence_draws(
                     adapter,
                     name,

@@ -48,7 +48,10 @@ from geopfa.prob.gblk_backend import (  # noqa: E402
     fit_gblk_gaussian_bayesian_joint,
     project_gblk_bayesian_draw_block,
 )
-from geopfa.prob.gblk_runner import run_gblk_probabilistic  # noqa: E402
+from geopfa.prob.gblk_runner import (  # noqa: E402
+    _spawn_child_seeds,
+    run_gblk_probabilistic,
+)
 from geopfa.prob.predictive_stacking import (  # noqa: E402
     PredictiveStackingResult,
 )
@@ -64,6 +67,15 @@ _NC_SMALL = 3
 _OUTER_SMALL = 100
 _IRLS_SMALL = 50
 _N_DRAWS = 8
+
+
+def test_spawned_bayesian_seeds_fit_legacy_numpy_seed_domain() -> None:
+    seeds = _spawn_child_seeds(73_000, 100)
+
+    assert seeds == _spawn_child_seeds(73_000, 100)
+    assert len(set(seeds)) == 100
+    assert min(seeds) >= 0
+    assert max(seeds) <= np.iinfo(np.uint32).max
 
 
 def test_bayesian_projection_blocks_equal_one_shot_projection() -> None:
