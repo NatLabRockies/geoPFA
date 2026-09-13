@@ -48,7 +48,7 @@ def _fixed_width_blocks(coords: np.ndarray, block_width: float) -> np.ndarray:
     return block_ids
 
 
-def spatial_block_cv(  # noqa: PLR0912, PLR0913, PLR0915
+def spatial_block_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     coords: np.ndarray,
     *,
     n_folds: int = 5,
@@ -179,6 +179,10 @@ def spatial_block_cv(  # noqa: PLR0912, PLR0913, PLR0915
     if not np.isfinite(buffer_value) or buffer_value < 0.0:
         raise ValueError("buffer_distance must be non-negative and finite")
 
+    blocking_coords = coords[:, list(dims)]
+    if block_type == "grid" and blocking_coords.shape[1] != 2:  # noqa: PLR2004
+        raise ValueError("grid block_type currently requires exactly two dims")
+
     # Auto-estimate block size from variogram when residuals are available.
     effective_grid_size = grid_size
     if (
@@ -188,25 +192,15 @@ def spatial_block_cv(  # noqa: PLR0912, PLR0913, PLR0915
     ):
         from .variogram import recommend_block_size_km  # noqa: PLC0415
 
-        rec_km = recommend_block_size_km(coords[:, :2], np.asarray(residuals))
-        span_km = (
-            float(
-                np.sqrt(
-                    (coords[:, 0].max() - coords[:, 0].min()) ** 2
-                    + (coords[:, 1].max() - coords[:, 1].min()) ** 2
-                )
-            )
-            / 1000.0
+        rec_km = recommend_block_size_km(
+            blocking_coords, np.asarray(residuals)
         )
+        coordinate_span = np.ptp(blocking_coords, axis=0)
+        span_km = float(np.linalg.norm(coordinate_span)) / 1000.0
         if span_km > 0:
             effective_grid_size = max(2, int(np.ceil(span_km / rec_km)))
 
-    blocking_coords = coords[:, list(dims)]
     if block_type == "grid":
-        if blocking_coords.shape[1] != 2:  # noqa: PLR2004
-            raise ValueError(
-                "grid block_type currently requires exactly two dims"
-            )
         if block_size_km is not None:
             blocks = _fixed_width_blocks(
                 blocking_coords, float(block_size_km) * 1000.0

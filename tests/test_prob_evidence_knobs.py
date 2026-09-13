@@ -70,6 +70,18 @@ def test_declared_evidence_column_is_required() -> None:
         )
 
 
+def test_component_features_follow_the_component_grid_order() -> None:
+    comp = copy.deepcopy(_component_a())
+    original, names = _flatten_component_features(comp)
+    for layer in comp["layers"].values():
+        layer["model"] = layer["model"].iloc[::-1].reset_index(drop=True)
+
+    reordered, reordered_names = _flatten_component_features(comp)
+
+    assert reordered_names == names
+    np.testing.assert_allclose(reordered, original)
+
+
 # ---------------------------------------------------------------------------
 # C.4 coordinate_blacklist
 # ---------------------------------------------------------------------------

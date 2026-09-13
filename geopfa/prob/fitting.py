@@ -25,10 +25,12 @@ from scipy.optimize import minimize
 from scipy.special import expit
 
 from .labels import _coerce_binary_labels
+from .pfa_grid import component_grid
 from .pu import fit_nnpu_logistic
 from .spatial import fit_spatial_field_gp
 from .spatial_alignment import (
     extract_coordinates,
+    grid_values_on_reference,
     sample_layer_at_points,
     snap_to_grid_indices,
 )
@@ -114,6 +116,12 @@ def _flatten_component_features(
       columns). Controlled by ``coordinate_blacklist``.
     """
     excluded_layer_names = excluded_layer_names or set()
+    reference_grid = component_grid(component_data)
+    if reference_grid is None:
+        raise ValueError(
+            "component has no usable grid: pr_norm is absent and no layer "
+            "model GeoDataFrame is available"
+        )
     non_evidence_columns: set[str] = set(
         coordinate_blacklist
         if coordinate_blacklist is not None
@@ -146,7 +154,12 @@ def _flatten_component_features(
         if evidence_col in non_evidence_columns:
             continue
 
-        values = model[evidence_col].to_numpy(dtype=float)
+        values = grid_values_on_reference(
+            reference_grid,
+            model,
+            evidence_col,
+            context=f"evidence layer {layer_name!r}",
+        )
 
         # Skip sparse binary layers; they should be handled via spatial term, not predictors
         if _is_sparse_binary(values, threshold=sparse_binary_threshold):
@@ -379,7 +392,7 @@ def fit_component_probability(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     Parameters
     ----------
     component_data : dict
-        Component config with layers and ``pr_norm`` surface.
+        Component config with layers and a component or layer-model grid.
     prior_probability : float
         Scalar ``P(component | no wells)``, used if no prior layer.
     include_spatial : bool, optional
@@ -401,7 +414,7 @@ def fit_component_probability(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     prior_p_max : float, optional
         Maximum probability bound for the spatial-prior rescale.
     alpha_offset : numpy.ndarray, optional
-        Pre-built per-cell prior offset array (length ``len(pr_norm)``).
+        Pre-built per-cell prior offset array (length ``len(component_grid)``).
         When supplied, takes precedence over ``prior_layer_name`` and
         ``prior_probability``. The runner uses this hook to plumb the
         output of :func:`geopfa.prob.alpha.build_alpha_c` through any
@@ -450,27 +463,20 @@ def fit_component_probability(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     if use_spatial_prior:
         excluded_set.add(prior_layer_name)
 
-    # Build raw grid features. Scaling is learned later from training wells;
-    # prediction-grid statistics must not influence a fitted model or CV fold.
-    grid_gdf = component_data["pr_norm"].copy()
-    X_grid_raw, feature_names = _flatten_component_features(
-        component_data,
-        included_layer_names=(
-            set(included_layer_names)
-            if included_layer_names is not None
-            else None
-        ),
-        excluded_layer_names=excluded_set,
-        sparse_binary_threshold=sparse_binary_threshold,
-        coordinate_blacklist=coordinate_blacklist,
-    )
+    resolved_grid = component_grid(component_data)
+    if resolved_grid is None:
+        raise ValueError(
+            "component has no usable grid: pr_norm is absent and no layer "
+            "model GeoDataFrame is available"
+        )
+    grid_gdf = resolved_grid.copy()
 
     # Compute grid-level prior offset.
     if use_alpha_offset:
         if len(alpha_offset) != len(grid_gdf):
             msg = (
                 f"alpha_offset length {len(alpha_offset)} does not match "
-                f"pr_norm grid length {len(grid_gdf)}"
+                f"component grid length {len(grid_gdf)}"
             )
             raise ValueError(msg)
         offset_grid = np.asarray(alpha_offset, dtype=float)
@@ -504,9 +510,6 @@ def fit_component_probability(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     else:
         offset_grid = np.full(len(grid_gdf), scalar_offset_value)
 
-    feature_names_out = list(feature_names)
-    spatial_u: np.ndarray | None = None
-
     # Prior-predictive opt-in: short-circuit before any well overlay.
     if force_prior_predictive:
         probabilities = expit(offset_grid)
@@ -514,10 +517,27 @@ def fit_component_probability(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         return ComponentProbability(
             probability=grid_gdf,
             model=None,
-            feature_names=tuple(feature_names_out),
+            feature_names=(),
             spatial_field=None,
             diagnostics={"inference_role": "prior_predictive"},
         )
+
+    # Build raw grid features only for data-informed fits. Scaling is learned
+    # later from training wells; prediction-grid statistics must not influence
+    # a fitted model or CV fold.
+    X_grid_raw, feature_names = _flatten_component_features(
+        component_data,
+        included_layer_names=(
+            set(included_layer_names)
+            if included_layer_names is not None
+            else None
+        ),
+        excluded_layer_names=excluded_set,
+        sparse_binary_threshold=sparse_binary_threshold,
+        coordinate_blacklist=coordinate_blacklist,
+    )
+    feature_names_out = list(feature_names)
+    spatial_u: np.ndarray | None = None
 
     if labeled_wells is None or label_column is None:
         raise ValueError(

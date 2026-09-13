@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from dataclasses import replace
 from pathlib import Path
 
 import geopandas as gpd
@@ -170,3 +171,26 @@ def test_prior_predictive_marked_in_result(tmp_path: Path) -> None:
             result.components[name].diagnostics["inference_role"]
             == "prior_predictive"
         )
+
+
+def test_all_prior_sequential_run_does_not_load_labels(tmp_path: Path) -> None:
+    fixture = make_synthetic_pfa(grid_n=6, n_wells=10, seed=4)
+    base = _base_cfg(tmp_path / "absent.gpkg", tmp_path / "out")
+    cfg = replace(
+        base,
+        labels=replace(base.labels, source=None, id_col=None),
+        alpha={
+            name: replace(alpha, force_prior_predictive=True)
+            for name, alpha in base.alpha.items()
+        },
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = run_probabilistic(fixture.pfa, cfg)
+
+    assert set(result.components) == {"component_a", "component_b"}
+    assert all(
+        component.diagnostics["inference_role"] == "prior_predictive"
+        for component in result.components.values()
+    )

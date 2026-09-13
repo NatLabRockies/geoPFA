@@ -435,6 +435,36 @@ def test_site_selection_requires_complete_labels_contract() -> None:
         ProbabilisticConfig.from_dict(raw)
 
 
+def test_site_selection_requires_a_bernoulli_component() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["label_columns"] = {"heat": "temperature_c"}
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+    raw["alpha"] = {
+        "heat": {
+            "mode": "thermal_layer_exceedance",
+            "layer": "temperature_model",
+            "threshold": 350.0,
+            "uncertainty_column": "temperature_sd_c",
+        }
+    }
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+    }
+    raw["site_selection"] = {
+        "mode": "joint_binary",
+        "candidate_source": "candidates.csv",
+        "id_col": "candidate_id",
+        "outcome_feature_columns": ["temperature"],
+        "selection_feature_columns": ["road_distance"],
+    }
+
+    with pytest.raises(ValueError, match="site_selection.*Bernoulli"):
+        ProbabilisticConfig.from_dict(raw)
+
+
 @pytest.mark.parametrize(
     "mode", ["thermal_exceedance", "thermal_layer_exceedance"]
 )

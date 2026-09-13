@@ -72,20 +72,6 @@ def _fit_kwargs_for(
     )
 
 
-def _component_well_overlay(
-    component_data: dict,
-    wells: gpd.GeoDataFrame,
-    label_column: str,
-) -> gpd.GeoDataFrame:
-    """Sample wells at their nearest grid cell; return ordered alignment."""
-    grid_gdf = component_data["pr_norm"]
-    base = wells.to_crs(grid_gdf.crs) if grid_gdf.crs is not None else wells
-    indices = snap_to_grid_indices(base, grid_gdf)
-    sampled = base[[label_column, "geometry"]].copy()
-    sampled["grid_index"] = indices
-    return sampled.reset_index(drop=True)
-
-
 def _evaluate_at_wells(
     surface: gpd.GeoDataFrame,
     wells: gpd.GeoDataFrame,
@@ -141,7 +127,7 @@ def component_oof_predictions(  # noqa: PLR0914
         )
     labels = load_labels(config.labels)
     comp_data = adapter.component_data(component)
-    grid_gdf = comp_data["pr_norm"]
+    grid_gdf = adapter.pr_norm(component)
     grid_crs = grid_gdf.crs
     if (
         config.cross_validation.buffer_km > 0.0
@@ -163,7 +149,7 @@ def component_oof_predictions(  # noqa: PLR0914
     coords = extract_coordinates(wells)
     kwargs_base = _fit_kwargs_for(config, component)
     alpha_result = build_alpha_c(
-        comp_data, config.alpha[component], grid_gdf=comp_data["pr_norm"]
+        comp_data, config.alpha[component], grid_gdf=grid_gdf
     )
     extra_excluded = set(alpha_result.excluded_layer_names) | set(
         kwargs_base.get("excluded_layer_names", ())

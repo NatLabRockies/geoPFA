@@ -414,19 +414,28 @@ class GeospatialDataWriters:
         """
         from pathlib import Path as _Path  # noqa: PLC0415
 
+        allowed_formats = {"csv", "shp", "both"}
+        if fmt not in allowed_formats:
+            raise ValueError(
+                f"fmt must be one of {sorted(allowed_formats)}; got {fmt!r}"
+            )
+
         output_dir = _Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         def _write(gdf, stem):
-            if target_crs is not None:
-                gdf = gdf.to_crs(target_crs)
+            effective_crs = target_crs if target_crs is not None else gdf.crs
             if fmt in {"csv", "both"}:
                 GeospatialDataWriters.write_csv(
-                    gdf, str(output_dir / f"{stem}.csv"), target_crs=target_crs
+                    gdf,
+                    str(output_dir / f"{stem}.csv"),
+                    target_crs=effective_crs,
                 )
             if fmt in {"shp", "both"}:
                 GeospatialDataWriters.write_shapefile(
-                    gdf, str(output_dir / f"{stem}.shp"), target_crs=target_crs
+                    gdf,
+                    str(output_dir / f"{stem}.shp"),
+                    target_crs=effective_crs,
                 )
 
         for comp_name, comp in result.components.items():

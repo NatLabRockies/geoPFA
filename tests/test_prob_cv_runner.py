@@ -143,6 +143,31 @@ def test_component_oof_rejects_label_column_not_declared_for_component(
         )
 
 
+def test_component_oof_accepts_layer_grid_without_pr_norm(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=8, n_wells=30, seed=3)
+    for component in fixture.pfa["criteria"]["geologic"][
+        "components"
+    ].values():
+        component.pop("pr_norm")
+    wells_path = tmp_path / "wells.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    cfg = _2d_cfg(wells_path, tmp_path / "out")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = component_oof_predictions(
+            fixture.pfa,
+            cfg,
+            component="component_a",
+            label_column="heat_label",
+        )
+
+    assert len(result["p"]) == len(result["y"])
+    assert len(result["p"]) > 0
+
+
 def test_component_oof_honors_configured_fixed_block_size(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

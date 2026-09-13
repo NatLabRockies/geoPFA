@@ -177,6 +177,18 @@ def test_prior_predictive_does_not_claim_a_spatial_fit() -> None:
     assert result.diagnostics["inference_role"] == "prior_predictive"
 
 
+def test_prior_predictive_does_not_require_evidence_features() -> None:
+    result = fit_component_probability(
+        _toy_component(),
+        prior_probability=0.4,
+        included_layer_names=(),
+        force_prior_predictive=True,
+    )
+
+    assert result.feature_names == ()
+    np.testing.assert_allclose(result.probability["probability"], 0.4)
+
+
 # ---------------------------------------------------------------------------
 # Combine helper
 # ---------------------------------------------------------------------------

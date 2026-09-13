@@ -50,7 +50,7 @@ from .io import (
     write_manifest,
     write_probability_outputs,
 )
-from .labels import LoadedLabels, available_components, load_labels
+from .labels import LoadedLabels, load_labels
 from .pfa_grid import PFAGridAdapter, validate_declared_components
 from .predictive_stacking import PredictiveStackingResult
 
@@ -123,6 +123,7 @@ def _run_site_selection(config: ProbabilisticConfig) -> dict[str, Any]:
             outcome_column=outcome_column,
         )
         for component, outcome_column in config.labels.label_columns.items()
+        if config.labels.observation_model_for(component).family == "bernoulli"
     }
 
 
@@ -130,19 +131,12 @@ def _fit_component(
     adapter: PFAGridAdapter,
     component: str,
     cfg: ProbabilisticConfig,
-    labels: LoadedLabels,
+    labels: LoadedLabels | None,
     alpha_result: AlphaCResult,
 ) -> ComponentProbability | None:
     """Fit one component, routing to the configured inference backend."""
-    if component not in cfg.labels.label_columns:
-        warnings.warn(
-            f"component {component!r} has no entry in labels.label_columns; "
-            "skipping (configure a label column to include it in the run)",
-            UserWarning,
-            stacklevel=3,
-        )
-        return None
-    if component not in cfg.alpha:
+    alpha_config = cfg.alpha.get(component)
+    if alpha_config is None:
         warnings.warn(
             f"component {component!r} has no entry in alpha; "
             "skipping (configure an alpha mode to include it in the run)",
@@ -150,13 +144,28 @@ def _fit_component(
             stacklevel=3,
         )
         return None
+    if (
+        not alpha_config.force_prior_predictive
+        and component not in cfg.labels.label_columns
+    ):
+        warnings.warn(
+            f"component {component!r} has no entry in labels.label_columns; "
+            "skipping (configure a label column to include it in the run)",
+            UserWarning,
+            stacklevel=3,
+        )
+        return None
+    if not alpha_config.force_prior_predictive and labels is None:
+        raise RuntimeError(
+            "data-informed sequential fit reached dispatch without loaded labels"
+        )
 
     component_data = adapter.component_data(component)
 
     # The componentwise path is the explicit sequential estimator. Bayesian
     # inference is available only through the joint GBLK runner.
     kwargs = build_fit_kwargs(
-        alpha_config=cfg.alpha[component],
+        alpha_config=alpha_config,
         evidence_config=cfg.evidence,
         spatial_field_config=cfg.spatial_field,
         pu_mode=cfg.labels.pu_mode,
@@ -172,8 +181,8 @@ def _fit_component(
 
     return fit_component_probability(
         component_data,
-        labeled_wells=labels.gdf,
-        label_column=cfg.labels.label_columns[component],
+        labeled_wells=labels.gdf if labels is not None else None,
+        label_column=cfg.labels.label_columns.get(component),
         **kwargs,
     )
 
@@ -718,7 +727,13 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
             stacklevel=2,
         )
 
-    labels = load_labels(config.labels)
+    sequential_configs = [config, *(cfg for _, cfg in scenario_configs)]
+    requires_labels = any(
+        not alpha.force_prior_predictive
+        for sequential_config in sequential_configs
+        for alpha in sequential_config.alpha.values()
+    )
+    labels = load_labels(config.labels) if requires_labels else None
 
     # Build alpha_c per component first so we can write provenance even if
     # the regression fit fails for some components.
@@ -726,14 +741,6 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
 
     components: dict[str, ComponentProbability] = {}
     for name in adapter.components():
-        if name not in available_components(config.labels):
-            warnings.warn(
-                f"component {name!r} has no entry in labels.label_columns; "
-                "skipping (configure a label column to include it in the run)",
-                UserWarning,
-                stacklevel=2,
-            )
-            continue
         if name not in alphas:
             continue
         fitted = _fit_component(adapter, name, config, labels, alphas[name])
@@ -754,8 +761,6 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
         }
         scenario_components: dict[str, ComponentProbability] = {}
         for name in adapter.components():
-            if name not in available_components(sub_cfg.labels):
-                continue
             if name not in scenario_alphas:
                 continue
             fitted = _fit_component(

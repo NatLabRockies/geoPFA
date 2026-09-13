@@ -129,6 +129,49 @@ def test_spatial_block_cv_grid_size_controls_block_count() -> None:
     assert len(folds_large) == 8
 
 
+def test_automatic_block_size_uses_selected_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coordinates = np.column_stack(
+        [
+            np.linspace(0.0, 10_000.0, 20),
+            np.linspace(0.0, 10.0, 20),
+            np.linspace(10.0, 20.0, 20),
+        ]
+    )
+    captured: dict[str, np.ndarray | int] = {}
+
+    def recommend(selected: np.ndarray, residuals: np.ndarray) -> float:
+        captured["selected"] = selected.copy()
+        assert residuals.shape == (20,)
+        return 1.0
+
+    def fixed_blocks(selected: np.ndarray, grid_size: int) -> np.ndarray:
+        captured["blocking"] = selected.copy()
+        captured["grid_size"] = grid_size
+        return np.arange(len(selected)) % 4
+
+    monkeypatch.setattr(
+        "geopfa.prob.variogram.recommend_block_size_km", recommend
+    )
+    monkeypatch.setattr(cv_module, "_grid_blocks", fixed_blocks)
+
+    folds = list(
+        spatial_block_cv(
+            coordinates,
+            residuals=np.linspace(-1.0, 1.0, 20),
+            n_folds=4,
+            block_type="grid",
+            dims=(1, 2),
+        )
+    )
+
+    assert len(folds) == 4
+    np.testing.assert_array_equal(captured["selected"], coordinates[:, [1, 2]])
+    np.testing.assert_array_equal(captured["blocking"], coordinates[:, [1, 2]])
+    assert captured["grid_size"] == 2
+
+
 @pytest.mark.parametrize(
     ("kwargs", "message"),
     [

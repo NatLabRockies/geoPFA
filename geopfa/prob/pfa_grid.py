@@ -57,7 +57,7 @@ def layer_data_column(layer_data: dict[str, Any]) -> str:
     return layer_data.get("model_data_col", "value_interpolated")
 
 
-def _component_grid(comp: dict[str, Any]) -> gpd.GeoDataFrame | None:
+def component_grid(comp: dict[str, Any]) -> gpd.GeoDataFrame | None:
     """Return the spatial grid GDF for a component.
 
     Prefers ``pr_norm`` (populated after VoterVeto) but falls back to the
@@ -146,7 +146,7 @@ def extract_grid_extent(
     ys: list[float] = []
     zs: list[float] = []
     for comp_name, comp in iter_components(pfa, criteria=criteria):
-        grid = _component_grid(comp)
+        grid = component_grid(comp)
         if grid is None or len(grid) == 0:
             continue
         _validate_component_grid_dimensions(
@@ -185,7 +185,7 @@ def validate_pfa_for_probabilistic(
     combination pathway, but ``run_probabilistic`` is an independent pathway
     that derives its spatial grid from layer ``model`` GeoDataFrames directly.
     When ``pr_norm`` is present it is used; when absent the first layer model
-    is used as the grid (see ``_component_grid``).
+    is used as the grid (see ``component_grid``).
     """
     if criteria not in pfa.get("criteria", {}):
         raise KeyError(
@@ -224,7 +224,7 @@ def validate_pfa_for_probabilistic(
                     f"criteria/{criteria}/components/{comp_name}/layers/"
                     f"{layer_name}/model must be a GeoDataFrame",
                 )
-        grid = _component_grid(comp_data)
+        grid = component_grid(comp_data)
         if grid is None:
             raise ValueError(
                 f"criteria/{criteria}/components/{comp_name} has no non-empty "
@@ -291,7 +291,7 @@ class PFAGridAdapter:
         prerequisite of ``run_probabilistic``; both are independent pathways.
         """
         comp = self.component_data(component)
-        grid = _component_grid(comp)
+        grid = component_grid(comp)
         if grid is None:
             raise ValueError(
                 f"Component '{component}' has no usable grid: "
@@ -337,6 +337,7 @@ def validate_declared_components(
 
 __all__ = [
     "PFAGridAdapter",
+    "component_grid",
     "component_layers",
     "component_names",
     "extract_grid_extent",

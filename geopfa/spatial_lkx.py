@@ -314,6 +314,11 @@ def _fit_backend(
     kwargs: dict[str, Any],
 ) -> tuple[Any, str]:
     """Dispatch to fixed / lambda-MLE / joint MLE fit and return (fit, kind)."""
+    lambda_bounds = (
+        cfg.lambda_bounds
+        if cfg.lambda_bounds is not None
+        else (_LAMBDA_BOUND_LO, _LAMBDA_BOUND_HI_FRAC)
+    )
     if cfg.find_a_wght:
         lkinfo = lk_setup(
             X,
@@ -331,6 +336,7 @@ def _fit_backend(
             Y,
             lkinfo,
             per_level=cfg.a_wght_per_level,
+            lambda_bounds=lambda_bounds,
         )
         return result["optimal_fit"], "lambda+a_wght"
 
@@ -345,6 +351,7 @@ def _fit_backend(
         a_wght=cfg.a_wght,
         m=cfg.m,
         find_lambda=find_lambda,
+        lambda_bounds=lambda_bounds,
         **kwargs,
     )
     return fit, ("lambda" if find_lambda else "fixed")

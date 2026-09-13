@@ -260,7 +260,9 @@ and whether each candidate was sampled, marginalizing the unobserved outcomes
 at unsampled candidates. Because the outcome effect on selection is not
 identified from the observed sites alone, callers must freeze one or more
 `outcome_selection_log_odds` values and report the resulting sensitivity
-envelope. This analysis does not alter or wrap the LatticeKrigX likelihood.
+envelope. Only Bernoulli components enter this binary analysis; Gaussian heat
+observations remain in the continuous outcome model. This analysis does not
+alter or wrap the LatticeKrigX likelihood.
 
 ### `alpha[component]`
 

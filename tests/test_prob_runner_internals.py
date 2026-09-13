@@ -34,6 +34,7 @@ from geopfa.prob.config import (
     OutputsConfig,
     ProbabilisticConfig,
     ScenarioConfig,
+    SiteSelectionConfig,
     SpatialFieldConfig,
 )
 from geopfa.prob.fitting import ComponentProbability
@@ -44,6 +45,7 @@ from geopfa.prob.runner import (
     _apply_scenario,  # noqa: PLC2701
     _combine_components,  # noqa: PLC2701
     _fit_component,  # noqa: PLC2701
+    _run_site_selection,  # noqa: PLC2701
     _write_configured_probability_outputs,  # noqa: PLC2701
     run_probabilistic,
 )
@@ -106,6 +108,46 @@ def _make_cfg(  # noqa: PLR0913
             format=formats,
         ),
     )
+
+
+def test_site_selection_runs_only_for_bernoulli_components(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _make_cfg(tmp_path / "wells.gpkg", tmp_path / "out")
+    cfg = replace(
+        cfg,
+        labels=replace(
+            cfg.labels,
+            observation_models={
+                "component_a": ObservationModelConfig(
+                    family="gaussian", response_scale=50.0
+                )
+            },
+        ),
+        site_selection=SiteSelectionConfig(
+            mode="joint_binary",
+            candidate_source="candidates.csv",
+            id_col="candidate_id",
+            outcome_feature_columns=("temperature",),
+            selection_feature_columns=("road_distance",),
+        ),
+    )
+    received: list[str] = []
+
+    def fake_analysis(_config, *, outcome_column):
+        received.append(outcome_column)
+        return {"outcome_column": outcome_column}
+
+    monkeypatch.setattr(
+        "geopfa.prob.site_selection.run_site_selection_analysis",
+        fake_analysis,
+    )
+
+    result = _run_site_selection(cfg)
+
+    assert received == ["reservoir_label"]
+    assert set(result) == {"component_b"}
 
 
 def _save_wells(tmp_path: Path) -> Path:

@@ -21,6 +21,7 @@ import geopandas as gpd
 from .alpha import build_alpha_c
 from .config import AlphaModeConfig, EvidenceConfig, SpatialFieldConfig
 from .fitting import ComponentProbability, fit_component_probability
+from .pfa_grid import component_grid
 
 
 def build_fit_kwargs(  # noqa: PLR0913
@@ -122,10 +123,16 @@ def fit_component_from_config(  # noqa: PLR0913
         evidence_config=evidence_config,
         spatial_field_config=spatial_field_config,
     )
+    grid_gdf = component_grid(component_data)
+    if grid_gdf is None:
+        raise ValueError(
+            "component has no usable grid: pr_norm is absent and no layer "
+            "model GeoDataFrame is available"
+        )
     alpha_result = build_alpha_c(
         component_data,
         alpha_config,
-        grid_gdf=component_data["pr_norm"],
+        grid_gdf=grid_gdf,
     )
     excluded = set(kwargs["excluded_layer_names"])
     excluded.update(alpha_result.excluded_layer_names)

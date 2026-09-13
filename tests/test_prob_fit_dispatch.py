@@ -191,6 +191,28 @@ def test_fit_component_from_config_passes_labeled_wells() -> None:
     )
 
 
+def test_fit_component_from_config_accepts_layer_grid_without_pr_norm() -> (
+    None
+):
+    fixture = make_synthetic_pfa(grid_n=8, n_wells=30, seed=2)
+    comp_data = fixture.pfa["criteria"]["geologic"]["components"][
+        "component_b"
+    ].copy()
+    comp_data.pop("pr_norm")
+
+    result = fit_component_from_config(
+        comp_data,
+        alpha_config=AlphaModeConfig(mode="scalar", scalar_fallback_pr0=0.5),
+        evidence_config=EvidenceConfig(),
+        spatial_field_config=SpatialFieldConfig(enabled=False),
+        labeled_wells=fixture.wells,
+        label_column="reservoir_label",
+    )
+
+    assert len(result.probability) == 64
+    assert np.all(np.isfinite(result.probability["probability"]))
+
+
 def test_fit_component_from_config_honors_multi_layer_alpha() -> None:
     fixture = make_synthetic_pfa(grid_n=8, n_wells=30, seed=8)
     comp_data = fixture.pfa["criteria"]["geologic"]["components"][

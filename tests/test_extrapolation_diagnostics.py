@@ -282,6 +282,72 @@ def test_fit_lkx_stores_lambda_bounds_in_constraint_info():
     assert ci["lambda_bounds"] == pytest.approx((1e-4, 0.5), rel=1e-6)
 
 
+def test_fit_lkx_forwards_lambda_bounds_to_optimizer(monkeypatch):
+    from geopfa import spatial_lkx as module
+
+    received: dict[str, object] = {}
+
+    def fake_lattice_krig(*args, **kwargs):
+        del args
+        received.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(module, "lattice_krig", fake_lattice_krig)
+    cfg = LkxConfig(
+        nlevel=3,
+        NC=4,
+        lambda_=0.01,
+        lambda_bounds=(1e-4, 0.5),
+        find_lambda=True,
+    )
+
+    _, kind = module._fit_backend(  # noqa: SLF001
+        np.zeros((4, 2)),
+        np.arange(4, dtype=float),
+        "LKRectangle",
+        cfg,
+        {},
+    )
+
+    assert kind == "lambda"
+    assert received["lambda_bounds"] == (1e-4, 0.5)
+
+
+def test_fit_lkx_forwards_lambda_bounds_to_joint_optimizer(monkeypatch):
+    from geopfa import spatial_lkx as module
+
+    received: dict[str, object] = {}
+
+    def fake_joint(*args, **kwargs):
+        del args
+        received.update(kwargs)
+        return {"optimal_fit": object()}
+
+    def fake_setup(*args, **kwargs):
+        del args, kwargs
+        return object()
+
+    monkeypatch.setattr(module, "lk_setup", fake_setup)
+    monkeypatch.setattr(module, "joint_mle_optim", fake_joint)
+    cfg = LkxConfig(
+        nlevel=3,
+        NC=4,
+        lambda_bounds=(1e-4, 0.5),
+        find_a_wght=True,
+    )
+
+    _, kind = module._fit_backend(  # noqa: SLF001
+        np.zeros((4, 2)),
+        np.arange(4, dtype=float),
+        "LKRectangle",
+        cfg,
+        {},
+    )
+
+    assert kind == "lambda+a_wght"
+    assert received["lambda_bounds"] == (1e-4, 0.5)
+
+
 def test_fit_lkx_stores_a_wght_fit_when_find_a_wght():
     rng = np.random.default_rng(77)
     X = rng.uniform(-1.0, 1.0, size=(40, 2))

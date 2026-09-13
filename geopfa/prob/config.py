@@ -2608,6 +2608,20 @@ class ProbabilisticConfig:
                 "site_selection requires labels.source, labels.id_col, and "
                 "non-empty labels.label_columns"
             )
+        bernoulli_label_components = {
+            name
+            for name in label_components
+            if self.labels.observation_model_for(name).family == "bernoulli"
+        }
+        if (
+            self.site_selection.mode != "off"
+            and labels_contract_complete
+            and not bernoulli_label_components
+        ):
+            errors.append(
+                "site_selection requires at least one Bernoulli component; "
+                "continuous Gaussian outcomes are not binary selection events"
+            )
         unknown_observation_models = observation_model_components - (
             label_components | alpha_components
         )
