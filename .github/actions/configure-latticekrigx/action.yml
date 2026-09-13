@@ -14,7 +14,8 @@ runs:
       env:
         LATTICEKRIGX_DEPLOY_KEY: ${{ inputs.deploy-key }}
       run: |
-        key_dir="${RUNNER_TEMP}/latticekrigx-ssh"
+        runner_temp_posix="$(cd "${RUNNER_TEMP}" && pwd -P)"
+        key_dir="${runner_temp_posix}/latticekrigx-ssh"
         mkdir -p "${key_dir}"
         chmod 700 "${key_dir}"
         printf '%s\n' "${LATTICEKRIGX_DEPLOY_KEY}" > "${key_dir}/id_ed25519"
