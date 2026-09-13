@@ -931,6 +931,31 @@ def _gaussian_predictive_exceedance_draws(
     )
 
 
+def _gaussian_prior_exceedance_probability(
+    *, mean: np.ndarray, sd: np.ndarray, threshold: float
+) -> NDArray[np.float64]:
+    """Evaluate one Gaussian prior's threshold-exceedance probability."""
+    mean_values = np.asarray(mean, dtype=np.float64)
+    sd_values = np.asarray(sd, dtype=np.float64)
+    invalid_arrays = (
+        mean_values.shape != sd_values.shape
+        or not np.all(np.isfinite(mean_values))
+        or not np.all(np.isfinite(sd_values))
+        or np.any(sd_values <= 0.0)
+    )
+    if invalid_arrays or not np.isfinite(threshold):
+        raise RuntimeError(
+            "Gaussian prior probability requires finite aligned means, "
+            "positive standard deviations, and a finite threshold"
+        )
+    probability = ndtr((mean_values - float(threshold)) / sd_values)
+    return np.clip(
+        probability,
+        _OPEN_PROBABILITY_EPSILON,
+        1.0 - _OPEN_PROBABILITY_EPSILON,
+    )
+
+
 def _gaussian_predictive_log_density(
     fit_result: Any,
     *,
@@ -1131,6 +1156,46 @@ def _assemble_likelihood_groups(
             },
         )
         if family == "gaussian":
+            if cfg.inference.predictive_stacking.enabled:
+                if (
+                    assembled.prior_response_mean_grid is None
+                    or assembled.prior_response_sd_grid is None
+                    or assembled.prior_response_mean_well is None
+                    or assembled.prior_response_sd_well is None
+                ):
+                    raise RuntimeError(
+                        "Gaussian predictive stacking requires prior "
+                        "response moments"
+                    )
+                thresholds = tuple(
+                    float(cfg.alpha[name].threshold)
+                    for name in assembled.component_names
+                )
+                prior_probability_grid = np.column_stack(
+                    [
+                        _gaussian_prior_exceedance_probability(
+                            mean=assembled.prior_response_mean_grid[:, q_idx],
+                            sd=assembled.prior_response_sd_grid[:, q_idx],
+                            threshold=threshold,
+                        )
+                        for q_idx, threshold in enumerate(thresholds)
+                    ]
+                )
+                prior_probability_well = np.column_stack(
+                    [
+                        _gaussian_prior_exceedance_probability(
+                            mean=assembled.prior_response_mean_well[:, q_idx],
+                            sd=assembled.prior_response_sd_well[:, q_idx],
+                            threshold=threshold,
+                        )
+                        for q_idx, threshold in enumerate(thresholds)
+                    ]
+                )
+                assembled = replace(
+                    assembled,
+                    prior_probability_grid=prior_probability_grid,
+                    prior_probability_well=prior_probability_well,
+                )
             scales = np.asarray(
                 [
                     cfg.labels.observation_model_for(name).response_scale

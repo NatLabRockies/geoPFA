@@ -50,6 +50,7 @@ from geopfa.prob.gblk_backend import (  # noqa: E402
 )
 from geopfa.prob.gblk_runner import (  # noqa: E402
     _estimate_predictive_stacking,
+    _gaussian_prior_exceedance_probability,
     _gaussian_predictive_exceedance_draws,
     _gaussian_predictive_log_density,
     _select_component_stacking,
@@ -115,6 +116,18 @@ def test_gaussian_event_draws_remain_open_probabilities() -> None:
     )
 
     assert np.all((probability > 0.0) & (probability < 1.0))
+
+
+def test_gaussian_prior_event_probability_uses_continuous_distribution() -> None:
+    probability = _gaussian_prior_exceedance_probability(
+        mean=np.array([0.0, 10.0]),
+        sd=np.array([1.0, 2.0]),
+        threshold=5.0,
+    )
+
+    np.testing.assert_allclose(probability, ndtr(np.array([-5.0, 2.5])))
+    assert probability[0] < 0.01
+    assert probability[1] > 0.99
 
 
 def test_gaussian_predictive_density_averages_paired_draws() -> None:
