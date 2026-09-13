@@ -2595,6 +2595,10 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
         state_metadata = dict(persisted.metadata)
         if not np.array_equal(state_arrays["prior_logit"], prior_logit):
             raise ValueError("persisted prior logits differ from this run")
+        # The writer retains the prior logits after fingerprint validation.
+        # Keep that retained array independent of the disk mappings that must
+        # be closed before an incomplete namespace can be renamed on Windows.
+        state_arrays["prior_logit"] = prior_logit
         fitted_state, prior_states, evidence_diagnostics = (
             _restore_streaming_posterior_states(persisted, assembled)
         )
@@ -2785,7 +2789,26 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
             evidence_logit=evidence_logit,
             spatial_logit=spatial_logit,
         )
+    resumed_incomplete_state = persisted is not None and not persisted.complete
+    if resumed_incomplete_state:
+        persisted.close()
     summary = writer.finalize(ci_level=bayes_cfg.ci_level)
+    if resumed_incomplete_state:
+        persisted = load_posterior_draw_state(
+            cfg.output_dir,
+            grid_gdf,
+            expected_config_hash=config_hash,
+            expected_analysis_input_sha256=analysis_input_sha256,
+            expected_implementation_sha256=implementation_sha256,
+            expected_scope=scope,
+        )
+        if persisted is None or not persisted.complete:
+            raise RuntimeError(
+                "finalized posterior state could not be reopened"
+            )
+        fitted_state, prior_states, evidence_diagnostics = (
+            _restore_streaming_posterior_states(persisted, assembled)
+        )
 
     components: dict[str, ComponentProbability] = {}
     for name in ordered_names:

@@ -21,6 +21,7 @@ import shutil
 import subprocess  # noqa: S404 -- fixed Git commands capture source provenance
 import tempfile
 from collections.abc import Mapping
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from numbers import Integral
@@ -571,6 +572,20 @@ class PersistedPosteriorDrawState:
     complete: bool
     index_path: Path | None
 
+    def close(self) -> None:
+        """Release file mappings owned by this reopened state."""
+        for array in self.arrays.values():
+            _close_memmap(array)
+
+
+def _close_memmap(array: np.ndarray | None) -> None:
+    """Close the OS mapping behind one NumPy memmap, when present."""
+    if array is None:
+        return
+    mapping = getattr(array, "_mmap", None)
+    if mapping is not None and not mapping.closed:
+        mapping.close()
+
 
 def _atomic_json_write(path: Path, payload: Mapping[str, Any]) -> None:
     """Write strict JSON through an adjacent temporary file."""
@@ -1016,6 +1031,7 @@ class PosteriorDrawBlockWriter:
         )
         os.close(descriptor)
         temporary_path = Path(temporary_name)
+        draws: np.memmap | None = None
         try:
             draws = np.memmap(
                 temporary_path,
@@ -1041,7 +1057,7 @@ class PosteriorDrawBlockWriter:
             tail = (1.0 - ci_level) / 2.0
             for start in range(0, self.n_cells, _SUMMARY_CELL_CHUNK_SIZE):
                 stop = min(start + _SUMMARY_CELL_CHUNK_SIZE, self.n_cells)
-                chunk = np.asarray(draws[:, start:stop, :])
+                chunk = np.array(draws[:, start:stop, :], copy=True)
                 component_mean[start:stop] = chunk[:, :, :q].mean(axis=0)
                 combined_mean[start:stop] = chunk[:, :, q].mean(axis=0)
                 interval = np.quantile(chunk, [tail, 1.0 - tail], axis=0)
@@ -1055,6 +1071,7 @@ class PosteriorDrawBlockWriter:
                 index_path=root / "index.json",
             )
         finally:
+            _close_memmap(draws)
             if temporary_path.exists():
                 temporary_path.unlink()
 
@@ -1112,7 +1129,7 @@ class PosteriorDrawBlockWriter:
         return self._summarize(self.final_dir, ci_level)
 
 
-def load_posterior_draw_state(  # noqa: PLR0913, PLR0914
+def load_posterior_draw_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     output_dir: Path,
     grid_gdf: gpd.GeoDataFrame,
     *,
@@ -1186,33 +1203,40 @@ def load_posterior_draw_state(  # noqa: PLR0913, PLR0914
         mmap_mode="r",
         allow_pickle=False,
     )
-    if (
-        tuple(payload["coordinate_columns"]) != coordinate_columns
-        or payload["crs"] != crs
-        or not np.array_equal(persisted_coordinates, coordinates)
-    ):
-        raise ValueError(
-            "persisted posterior coordinates differ from this run"
+    try:
+        if (
+            tuple(payload["coordinate_columns"]) != coordinate_columns
+            or payload["crs"] != crs
+            or not np.array_equal(persisted_coordinates, coordinates)
+        ):
+            raise ValueError(
+                "persisted posterior coordinates differ from this run"
+            )
+    finally:
+        _close_memmap(persisted_coordinates)
+    arrays: dict[str, np.ndarray] = {}
+    with ExitStack() as mappings:
+        for record in state_records:
+            array = np.load(
+                root / record["path"], mmap_mode="r", allow_pickle=False
+            )
+            arrays[record["name"]] = array
+            mappings.callback(_close_memmap, array)
+        ranges = tuple(
+            (int(record["draw_start"]), int(record["draw_stop"]))
+            for record in payload["blocks"]
         )
-    arrays = {
-        record["name"]: np.load(
-            root / record["path"], mmap_mode="r", allow_pickle=False
+        restored = PersistedPosteriorDrawState(
+            arrays=arrays,
+            metadata=state_metadata,
+            component_names=tuple(payload["component_names"]),
+            completed_draw_ranges=ranges,
+            state_fingerprint=state_fingerprint,
+            complete=complete,
+            index_path=returned_index,
         )
-        for record in state_records
-    }
-    ranges = tuple(
-        (int(record["draw_start"]), int(record["draw_stop"]))
-        for record in payload["blocks"]
-    )
-    return PersistedPosteriorDrawState(
-        arrays=arrays,
-        metadata=state_metadata,
-        component_names=tuple(payload["component_names"]),
-        completed_draw_ranges=ranges,
-        state_fingerprint=state_fingerprint,
-        complete=complete,
-        index_path=returned_index,
-    )
+        mappings.pop_all()
+        return restored
 
 
 def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
@@ -1256,21 +1280,29 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
     coordinates = np.load(
         root / index["coordinates"]["path"], mmap_mode="r", allow_pickle=False
     )
-    if coordinates.shape != (n_cells, len(index["coordinate_columns"])):
-        raise ValueError("posterior coordinate payload shape is inconsistent")
-    if not np.isfinite(coordinates).all():
-        raise ValueError("posterior coordinates contain nonfinite values")
+    try:
+        if coordinates.shape != (n_cells, len(index["coordinate_columns"])):
+            raise ValueError(
+                "posterior coordinate payload shape is inconsistent"
+            )
+        if not np.isfinite(coordinates).all():
+            raise ValueError("posterior coordinates contain nonfinite values")
+    finally:
+        _close_memmap(coordinates)
     for record in index["state"]["arrays"]:
         state_array = np.load(
             root / record["path"], mmap_mode="r", allow_pickle=False
         )
-        if (
-            state_array.dtype.kind not in "iuf"
-            or not np.isfinite(state_array).all()
-        ):
-            raise ValueError(
-                f"posterior state array is invalid: {record['path']}"
-            )
+        try:
+            if (
+                state_array.dtype.kind not in "iuf"
+                or not np.isfinite(state_array).all()
+            ):
+                raise ValueError(
+                    f"posterior state array is invalid: {record['path']}"
+                )
+        finally:
+            _close_memmap(state_array)
 
     expected_start = 0
     for record in index["blocks"]:

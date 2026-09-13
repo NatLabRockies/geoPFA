@@ -1293,6 +1293,69 @@ def test_load_posterior_draw_state_reopens_incomplete_exact_state(
             expected_scope="baseline",
         )
 
+    restored.close()
+    assert all(
+        array._mmap.closed  # type: ignore[attr-defined]  # noqa: SLF001
+        for array in restored.arrays.values()
+    )
+
+
+def test_posterior_summary_closes_memmap_before_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grid = gpd.GeoDataFrame(
+        geometry=gpd.points_from_xy([0.0], [1.0]), crs="EPSG:32610"
+    )
+    writer = PosteriorDrawBlockWriter(
+        grid,
+        tmp_path,
+        component_names=("heat",),
+        n_draws=1,
+        block_size=1,
+        seed=3,
+        combination_rule="product",
+        scope="baseline",
+        state_arrays={"prior_logit": np.zeros((1, 1))},
+        state_metadata=_posterior_metadata(("heat",), model="test"),
+    )
+    writer.write_block(
+        0,
+        component_probability=np.full((1, 1, 1), 0.5),
+        prior_logit=np.zeros((1, 1)),
+        evidence_logit=np.zeros((1, 1, 1)),
+        spatial_logit=np.zeros((1, 1, 1)),
+    )
+    real_memmap = np.memmap
+    mappings: list[np.memmap] = []
+
+    def tracked_memmap(*args, **kwargs):
+        array = real_memmap(*args, **kwargs)
+        mappings.append(array)
+        return array
+
+    real_unlink = Path.unlink
+
+    def reject_open_mapping(path: Path, *args, **kwargs):
+        if path.name.startswith(".posterior-summary-") and any(
+            not array._mmap.closed  # type: ignore[attr-defined]  # noqa: SLF001
+            for array in mappings
+        ):
+            raise PermissionError("cannot unlink an open Windows mapping")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr("geopfa.prob.io.np.memmap", tracked_memmap)
+    monkeypatch.setattr(Path, "unlink", reject_open_mapping)
+
+    summary = writer.finalize(ci_level=0.9)
+
+    assert summary.index_path.is_file()
+    assert mappings
+    assert all(
+        array._mmap.closed  # type: ignore[attr-defined]  # noqa: SLF001
+        for array in mappings
+    )
+
 
 # ---------------------------------------------------------------------------
 # End-to-end via run_probabilistic

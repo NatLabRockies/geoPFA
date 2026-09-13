@@ -21,7 +21,9 @@ def _example_paths() -> list[Path]:
 def test_pixi_latticekrigx_source_is_checkout_independent_and_immutable() -> (
     None
 ):
-    manifest = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    manifest = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
     source = manifest["tool"]["pixi"]["pypi-dependencies"]["latticekrigx"]
 
     assert "path" not in source
@@ -30,7 +32,9 @@ def test_pixi_latticekrigx_source_is_checkout_independent_and_immutable() -> (
 
 
 def test_python_support_matches_required_latticekrigx_runtime() -> None:
-    manifest = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    manifest = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
     project = manifest["project"]
 
     assert project["requires-python"] == ">=3.11,<3.13"
@@ -41,13 +45,15 @@ def test_python_support_matches_required_latticekrigx_runtime() -> None:
 
 
 def test_local_gate_checks_ruff_formatting_like_ci() -> None:
-    gate = (REPO_ROOT / "test_repo.sh").read_text()
+    gate = (REPO_ROOT / "test_repo.sh").read_text(encoding="utf-8")
 
     assert "ruff format --check geopfa tests" in gate
 
 
 def test_generated_version_module_is_excluded_from_formatting() -> None:
-    manifest = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+    manifest = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
     excluded = manifest["tool"]["ruff"]["format"]["exclude"]
 
     assert "geopfa/_version.py" in excluded
@@ -88,7 +94,9 @@ def test_tracked_example_notebooks_are_output_free() -> None:
         and path.suffix == ".ipynb"
     ]
     for relative_path in notebooks:
-        notebook = json.loads((REPO_ROOT / relative_path).read_text())
+        notebook = json.loads(
+            (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        )
         for cell_index, cell in enumerate(notebook.get("cells", [])):
             if cell.get("cell_type") != "code":
                 continue

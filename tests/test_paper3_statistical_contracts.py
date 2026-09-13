@@ -801,9 +801,11 @@ def test_gblk_runner_delegates_to_one_canonical_bayesian_fitter() -> None:
 
 def test_current_user_docs_describe_nnpu_and_one_bayesian_path() -> None:
     root = Path(__file__).resolve().parents[1]
-    method = (root / "docs/probabilistic_method.md").read_text()
-    migration = (root / "docs/migration_guide.md").read_text()
-    readme = (root / "README.md").read_text()
+    method = (root / "docs/probabilistic_method.md").read_text(
+        encoding="utf-8"
+    )
+    migration = (root / "docs/migration_guide.md").read_text(encoding="utf-8")
+    readme = (root / "README.md").read_text(encoding="utf-8")
 
     assert '`pu_mode` | `"off"`' in method
     assert "non-negative PU" in method

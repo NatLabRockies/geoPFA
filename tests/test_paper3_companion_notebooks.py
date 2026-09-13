@@ -236,8 +236,10 @@ def test_nevada_maps_use_real_coordinates_on_checked_raster_support() -> None:
 
 
 def test_user_docs_match_config_and_provenance_entry_points() -> None:
-    method = (REPO_ROOT / "docs" / "probabilistic_method.md").read_text()
-    readme = (REPO_ROOT / "README.md").read_text()
+    method = (REPO_ROOT / "docs" / "probabilistic_method.md").read_text(
+        encoding="utf-8"
+    )
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 
     assert '"validation_depths_m": {"heat": 3000.0}' not in method
     assert "run_probabilistic_pfa(pfa)" not in method
@@ -263,7 +265,9 @@ def test_user_docs_match_config_and_provenance_entry_points() -> None:
 
 
 def test_migration_guide_python_examples_parse() -> None:
-    guide = (REPO_ROOT / "docs" / "migration_guide.md").read_text()
+    guide = (REPO_ROOT / "docs" / "migration_guide.md").read_text(
+        encoding="utf-8"
+    )
     blocks = guide.split("```python\n")[1:]
     assert blocks
     for index, block in enumerate(blocks):
