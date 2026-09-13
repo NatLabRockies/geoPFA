@@ -60,6 +60,9 @@ class AlphaCResult:
     scalar_fallback: float
     excluded_layer_names: set[str] = field(default_factory=set)
     provenance: dict[str, Any] = field(default_factory=dict)
+    latent_mean: np.ndarray | None = None
+    latent_sd: np.ndarray | None = None
+    event_threshold: float | None = None
 
 
 def _logit(p: np.ndarray | float) -> np.ndarray | float:
@@ -127,7 +130,7 @@ def _thermal_exceedance(  # noqa: PLR0913
     threshold: float,
     p_min: float,
     p_max: float,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     if not raster_path.exists():
         raise FileNotFoundError(f"thermal raster not found: {raster_path}")
 
@@ -185,7 +188,11 @@ def _thermal_exceedance(  # noqa: PLR0913
     else:
         probability = (values > threshold).astype(float)
     p_grid = np.clip(probability, p_min, p_max)
-    return np.log(p_grid / (1.0 - p_grid))
+    return (
+        np.log(p_grid / (1.0 - p_grid)),
+        values,
+        (sigma if uncertainty_path is not None else None),
+    )
 
 
 def _thermal_layer_exceedance(  # noqa: PLR0913
@@ -197,7 +204,7 @@ def _thermal_layer_exceedance(  # noqa: PLR0913
     threshold: float,
     p_min: float,
     p_max: float,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Build a thermal exceedance offset from an aligned 2-D/3-D layer."""
     layer = component_data["layers"][layer_name]
     model = layer.get("model")
@@ -238,7 +245,11 @@ def _thermal_layer_exceedance(  # noqa: PLR0913
             )
         probability = norm.sf((threshold - mean) / sigma)
     clipped = np.clip(probability, p_min, p_max)
-    return np.log(clipped / (1.0 - clipped))
+    return (
+        np.log(clipped / (1.0 - clipped)),
+        mean,
+        (sigma if uncertainty_column is not None else None),
+    )
 
 
 def build_alpha_c(
@@ -339,7 +350,7 @@ def build_alpha_c(
         )
 
     if cfg.mode == "thermal_exceedance":
-        offset = _thermal_exceedance(
+        offset, latent_mean, latent_sd = _thermal_exceedance(
             Path(cfg.thermal_raster),
             Path(cfg.uncertainty_raster) if cfg.uncertainty_raster else None,
             grid_gdf,
@@ -361,6 +372,9 @@ def build_alpha_c(
             grid_offset=offset,
             scalar_fallback=scalar_fallback,
             provenance=provenance,
+            latent_mean=latent_mean,
+            latent_sd=latent_sd,
+            event_threshold=float(cfg.threshold),
         )
 
     if cfg.mode == "thermal_layer_exceedance":
@@ -370,7 +384,7 @@ def build_alpha_c(
                 f"thermal alpha layer {cfg.layer!r} is not present on "
                 f"component; available layers: {available}"
             )
-        offset = _thermal_layer_exceedance(
+        offset, latent_mean, latent_sd = _thermal_layer_exceedance(
             component_data,
             grid_gdf,
             layer_name=cfg.layer,
@@ -392,6 +406,9 @@ def build_alpha_c(
             scalar_fallback=scalar_fallback,
             excluded_layer_names={cfg.layer},
             provenance=provenance,
+            latent_mean=latent_mean,
+            latent_sd=latent_sd,
+            event_threshold=float(cfg.threshold),
         )
 
     msg = f"unknown alpha mode {cfg.mode!r}"

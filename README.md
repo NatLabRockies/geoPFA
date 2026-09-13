@@ -44,8 +44,11 @@ of results.
 ## Probabilistic method (`geopfa.prob`)
 
 geoPFA includes an experimental probabilistic PFA workflow in `geopfa.prob`.
-The default GBLK backend combines physics-informed logit offsets, penalized
-evidence effects, and a joint multivariate LatticeKrig spatial field. It emits
+The default GBLK backend combines physics-informed priors, penalized evidence
+effects, and LatticeKrig spatial fields. It supports Bernoulli component
+outcomes and continuous Gaussian heat observations, which are converted to a
+declared posterior predictive temperature-exceedance event using paired
+mean-field and residual-precision draws before component combination. It emits
 raw per-component probability surfaces and a conditional plug-in co-occurrence
 surface. Calibration must be evaluated explicitly against held-out labels; the
 software does not imply that a map is calibrated merely because it is a
@@ -73,9 +76,12 @@ probability map.
 - Block-CV diagnostics — spatially blocked Brier score, Brier skill score,
   and reliability summaries. Post-hoc calibration is currently available on
   the sequential backend; GBLK reports raw out-of-fold diagnostics explicitly.
-- Joint GBLK inference — joint multivariate Bernoulli-logit empirical-Bayes fit
-  via `latticekrigx.glk` (default), estimating cross-component precision Omega
-  and producing a conditional plug-in co-occurrence surface. The sole Bayesian
+- Adaptive component updates — optional predictive stacking uses buffered or
+  blocked out-of-fold logarithmic score to mix each Bayesian update with its
+  configured event prior before component combination.
+- GBLK inference — same-family multivariate Bernoulli-logit or Gaussian-identity
+  fits via `latticekrigx.glk` (default), with a conditional plug-in
+  co-occurrence surface. The sole Bayesian
   dispatch selects LatticeKrigX's public Paige/INLA model, including real 2-D or
   3-D geometry and declared fixed-coefficient priors. The runtime contract and
   validation requirements are documented in `docs/probabilistic_method.md`.

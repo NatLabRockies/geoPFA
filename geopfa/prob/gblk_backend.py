@@ -24,10 +24,10 @@ environment (``pixi run -e gblk``), which provides ``latticekrigx`` and
 
 Notes
 -----
-Offsets are on the linear-predictor (logit) scale:
-``eta_q = o_q + X_q beta_q + Phi c_q``. Pass geoPFA ``alpha_c`` logit offsets
-as ``o_q`` and evidence arrays through the fixed-effect arguments so ``beta_q``
-and ``c_q`` share one likelihood.
+Offsets are on the response family's linear-predictor scale:
+``eta_q = o_q + X_q beta_q + Phi c_q``. Bernoulli offsets are logits;
+Gaussian offsets are scaled response means. Evidence arrays enter through the
+fixed-effect arguments so ``beta_q`` and ``c_q`` share one likelihood.
 """
 
 from __future__ import annotations
@@ -50,11 +50,13 @@ __all__ = [
     "GBLKBayesianFitResult",
     "GBLKBayesianPosteriorState",
     "GBLKFitResult",
+    "GBLKGaussianFitResult",
     "build_lkinfo",
     "build_lkinfo_2d",
     "build_paige_prior",
     "fit_gblk_bayesian_joint",
     "fit_gblk_bayesian_posterior_state",
+    "fit_gblk_gaussian_bayesian_joint",
     "fit_gblk_joint",
     "project_gblk_bayesian_draw_block",
     "scale_spatial_coordinates",
@@ -119,6 +121,20 @@ class GBLKBayesianFitResult:
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class GBLKGaussianFitResult:
+    """Posterior Gaussian mean and likelihood-precision draws."""
+
+    component_names: tuple[str, ...]
+    response_grid: NDArray[np.float64]
+    response_interval: NDArray[np.float64]
+    response_draws: NDArray[np.float64]
+    likelihood_precision_draws: NDArray[np.float64]
+    fixed_coef_draws: NDArray[np.float64] | None
+    fit: JointResult
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class GBLKBayesianPosteriorState:
     """Immutable coefficient draws and prediction inputs for block projection."""
@@ -132,7 +148,8 @@ class GBLKBayesianPosteriorState:
     lkinfo: Any
     fit: JointResult
     diagnostics: dict[str, Any]
-    projected_probability_draws: NDArray[np.float64] | None = None
+    response_family: str = "bernoulli"
+    projected_mean_draws: NDArray[np.float64] | None = None
 
 
 @dataclass(frozen=True)
@@ -390,6 +407,7 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
     nlevel: int = 1,
     a_wght: float = 4.5,
     coordinate_scaling: str = "axis_range",
+    response_family: str = "bernoulli",
 ) -> GBLKBayesianPosteriorState:
     """Fit geoPFA's canonical Bayesian GBLK model without a full draw cube.
 
@@ -407,15 +425,23 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
     import scipy.sparse as sp  # noqa: PLC0415
 
     from latticekrigx.basis.assembly import compute_basis  # noqa: PLC0415
-    from latticekrigx.glk.families import Bernoulli  # noqa: PLC0415
+    from latticekrigx.glk.families import Bernoulli, Gaussian  # noqa: PLC0415
     from latticekrigx.glk.joint import fit_joint  # noqa: PLC0415
-    from latticekrigx.glk.links import LogitLink  # noqa: PLC0415
+    from latticekrigx.glk.links import IdentityLink, LogitLink  # noqa: PLC0415
     from latticekrigx.model.config import lk_setup  # noqa: PLC0415
 
     coords = np.asarray(coords_spatial, dtype=np.float64)
     y = np.asarray(labels, dtype=np.float64)
     grid = np.asarray(grid_spatial, dtype=np.float64)
     names = tuple(component_names)
+    if response_family == "bernoulli":
+        family = Bernoulli()
+        link = LogitLink()
+    elif response_family == "gaussian":
+        family = Gaussian()
+        link = IdentityLink()
+    else:
+        raise ValueError("response_family must be 'bernoulli' or 'gaussian'")
     if y.ndim != 2:  # noqa: PLR2004
         raise ValueError(f"labels must be 2-D (n, Q); got {y.shape}")
     n, n_components = y.shape
@@ -560,8 +586,8 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         labeled_mask=labeled_mask,
         observed_mask=observed,
         offsets=train_offsets,
-        family=Bernoulli(),
-        link=LogitLink(),
+        family=family,
+        link=link,
         coefficient_prior=coefficient_prior,
         inference="inla",
         prior=build_paige_prior(bayes_config),
@@ -571,7 +597,11 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         n_draw=bayes_config.n_draws,
         seed=bayes_config.seed,
         validate=bayes_config.validate_inla,
-        cluster_effect=bayes_config.cluster_effect,
+        cluster_effect=(
+            bayes_config.cluster_effect
+            if response_family == "bernoulli"
+            else False
+        ),
         **fit_kwargs,
     )
     fixed_draws_raw = fit.extra.get("fixed_draws")
@@ -623,9 +653,9 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
             raise RuntimeError(
                 "canonical Bayesian posterior returned nonfinite fixed-effect draws"
             )
-    projected_probability_draws = None
+    projected_mean_draws = None
     if bayes_config.cluster_effect:
-        projected_probability_draws = np.asarray(
+        projected_mean_draws = np.asarray(
             fit.extra.get("mean_draws"), dtype=np.float64
         )
         expected_prediction_shape = (
@@ -633,15 +663,18 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
             grid.shape[0],
             n_components,
         )
-        if projected_probability_draws.shape != expected_prediction_shape:
+        if projected_mean_draws.shape != expected_prediction_shape:
             raise RuntimeError(
                 "canonical Bayesian posterior returned an unexpected draw shape "
-                f"{projected_probability_draws.shape}; expected "
+                f"{projected_mean_draws.shape}; expected "
                 f"{expected_prediction_shape}"
             )
-        if not np.all(np.isfinite(projected_probability_draws)) or np.any(
-            (projected_probability_draws < 0.0)
-            | (projected_probability_draws > 1.0)
+        if not np.all(np.isfinite(projected_mean_draws)):
+            raise RuntimeError(
+                "canonical Bayesian posterior returned nonfinite mean draws"
+            )
+        if response_family == "bernoulli" and np.any(
+            (projected_mean_draws < 0.0) | (projected_mean_draws > 1.0)
         ):
             raise RuntimeError(
                 "canonical Bayesian posterior returned invalid probability draws"
@@ -652,6 +685,7 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
 
     diagnostics = {
         "backend": "gblk_bayesian",
+        "response_family": response_family,
         "estimator": "paige_inla",
         "posterior_scope": (
             "joint_fixed_effect_and_spatial_posterior"
@@ -697,7 +731,11 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
             "r_0": bayes_config.kleiber_r0,
             "r_1": bayes_config.kleiber_r1,
         },
-        "cluster_effect": bayes_config.cluster_effect,
+        "cluster_effect": (
+            bayes_config.cluster_effect
+            if response_family == "bernoulli"
+            else False
+        ),
         "inla_validation_outputs_requested": bayes_config.validate_inla,
     }
     return GBLKBayesianPosteriorState(
@@ -710,16 +748,22 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         lkinfo=lkinfo,
         fit=fit,
         diagnostics=diagnostics,
-        projected_probability_draws=projected_probability_draws,
+        response_family=response_family,
+        projected_mean_draws=projected_mean_draws,
     )
 
 
-def project_gblk_bayesian_draw_block(
+def _project_gblk_bayesian_mean_block(
     state: GBLKBayesianPosteriorState,
     draw_start: int,
     draw_stop: int,
-) -> GBLKBayesianDrawBlock:
-    """Project one posterior draw block with prior/evidence/spatial logits."""
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+]:
+    """Project posterior means and linear-predictor contributions."""
     from latticekrigx.basis.assembly import compute_basis  # noqa: PLC0415
     from scipy.special import expit  # noqa: PLC0415
 
@@ -730,28 +774,27 @@ def project_gblk_bayesian_draw_block(
         )
     block_draws = draw_stop - draw_start
     n_grid = state.grid_model.shape[0]
-    prior_logit = state.grid_offsets.copy()
-    evidence_logit = np.zeros(
-        (block_draws, n_grid, n_components), dtype=np.float64
-    )
-    spatial_logit = np.zeros_like(evidence_logit)
+    prior = state.grid_offsets.copy()
+    evidence = np.zeros((block_draws, n_grid, n_components), dtype=np.float64)
+    spatial = np.zeros_like(evidence)
 
-    if state.projected_probability_draws is not None:
-        probability = state.projected_probability_draws[
-            draw_start:draw_stop
-        ].copy()
-        eta = np.log(np.clip(probability, 1e-15, 1.0)) - np.log(
-            np.clip(1.0 - probability, 1e-15, 1.0)
-        )
-        spatial_logit = eta - prior_logit[np.newaxis, :, :]
+    if state.projected_mean_draws is not None:
+        mean = state.projected_mean_draws[draw_start:draw_stop].copy()
+        if state.response_family == "bernoulli":
+            eta = np.log(np.clip(mean, 1e-15, 1.0)) - np.log(
+                np.clip(1.0 - mean, 1e-15, 1.0)
+            )
+        else:
+            eta = mean
+        spatial = eta - prior[np.newaxis, :, :]
         if state.fixed_design_grid is not None:
-            evidence_logit = np.einsum(
+            evidence = np.einsum(
                 "nqp,dpq->dnq",
                 state.fixed_design_grid,
                 state.fixed_coef_draws[draw_start:draw_stop],
                 optimize=True,
             )
-            spatial_logit -= evidence_logit
+            spatial -= evidence
     else:
         coefficient_columns = (
             state.coefficient_draws[draw_start:draw_stop]
@@ -770,19 +813,38 @@ def project_gblk_bayesian_draw_block(
             latent = np.asarray(
                 basis_chunk @ coefficient_columns, dtype=np.float64
             )
-            spatial_logit[:, cell_start:cell_stop, :] = latent.reshape(
+            spatial[:, cell_start:cell_stop, :] = latent.reshape(
                 cell_stop - cell_start, block_draws, n_components
             ).transpose(1, 0, 2)
             if state.fixed_design_grid is not None:
-                evidence_logit[:, cell_start:cell_stop, :] = np.einsum(
+                evidence[:, cell_start:cell_stop, :] = np.einsum(
                     "nqp,dpq->dnq",
                     state.fixed_design_grid[cell_start:cell_stop],
                     state.fixed_coef_draws[draw_start:draw_stop],
                     optimize=True,
                 )
-        probability = expit(
-            prior_logit[np.newaxis, :, :] + evidence_logit + spatial_logit
+        eta = prior[np.newaxis, :, :] + evidence + spatial
+        mean = expit(eta) if state.response_family == "bernoulli" else eta
+    if not np.all(np.isfinite(mean)):
+        raise RuntimeError(
+            "Bayesian block projection produced nonfinite means"
         )
+    return mean, prior, evidence, spatial
+
+
+def project_gblk_bayesian_draw_block(
+    state: GBLKBayesianPosteriorState,
+    draw_start: int,
+    draw_stop: int,
+) -> GBLKBayesianDrawBlock:
+    """Project one posterior draw block with prior/evidence/spatial logits."""
+    if state.response_family != "bernoulli":
+        raise ValueError(
+            "probability draw projection requires a Bernoulli posterior state"
+        )
+    probability, prior_logit, evidence_logit, spatial_logit = (
+        _project_gblk_bayesian_mean_block(state, draw_start, draw_stop)
+    )
     if not np.all(np.isfinite(probability)) or np.any(
         (probability < 0.0) | (probability > 1.0)
     ):
@@ -796,6 +858,81 @@ def project_gblk_bayesian_draw_block(
         prior_logit=prior_logit,
         evidence_logit=evidence_logit,
         spatial_logit=spatial_logit,
+    )
+
+
+def fit_gblk_gaussian_bayesian_joint(  # noqa: PLR0913
+    coords_spatial: NDArray[np.float64],
+    responses: NDArray[np.float64],
+    grid_spatial: NDArray[np.float64],
+    *,
+    component_names: tuple[str, ...] | list[str],
+    bayes_config: GBLKBayesianConfig,
+    labeled_mask: NDArray[np.bool_] | None = None,
+    observed_mask: NDArray[np.bool_] | None = None,
+    offsets: NDArray[np.float64] | None = None,
+    grid_offsets: NDArray[np.float64] | None = None,
+    fixed_effects: NDArray[np.float64] | None = None,
+    fixed_effects_grid: NDArray[np.float64] | None = None,
+    fixed_precision: NDArray[np.float64] | None = None,
+    fixed_prior_mean: NDArray[np.float64] | None = None,
+    nc: int = 6,
+    nlevel: int = 1,
+    a_wght: float = 4.5,
+    coordinate_scaling: str = "axis_range",
+) -> GBLKGaussianFitResult:
+    """Fit a Gaussian identity-link GBLK and materialize latent means."""
+    state = fit_gblk_bayesian_posterior_state(
+        coords_spatial,
+        responses,
+        grid_spatial,
+        component_names=component_names,
+        bayes_config=bayes_config,
+        labeled_mask=labeled_mask,
+        observed_mask=observed_mask,
+        offsets=offsets,
+        grid_offsets=grid_offsets,
+        fixed_effects=fixed_effects,
+        fixed_effects_grid=fixed_effects_grid,
+        fixed_precision=fixed_precision,
+        fixed_prior_mean=fixed_prior_mean,
+        nc=nc,
+        nlevel=nlevel,
+        a_wght=a_wght,
+        coordinate_scaling=coordinate_scaling,
+        response_family="gaussian",
+    )
+    response_draws, _, _, _ = _project_gblk_bayesian_mean_block(
+        state, 0, bayes_config.n_draws
+    )
+    likelihood_precision_draws = np.asarray(
+        state.fit.extra.get("likelihood_precision_draws"),
+        dtype=np.float64,
+    )
+    expected_precision_shape = (
+        bayes_config.n_draws,
+        len(state.component_names),
+    )
+    if (
+        likelihood_precision_draws.shape != expected_precision_shape
+        or not np.all(np.isfinite(likelihood_precision_draws))
+        or np.any(likelihood_precision_draws <= 0.0)
+    ):
+        raise RuntimeError(
+            "LatticeKrigX returned invalid Gaussian likelihood precision draws"
+        )
+    tail = (1.0 - bayes_config.ci_level) / 2.0
+    return GBLKGaussianFitResult(
+        component_names=state.component_names,
+        response_grid=response_draws.mean(axis=0),
+        response_interval=np.quantile(
+            response_draws, [tail, 1.0 - tail], axis=0
+        ),
+        response_draws=response_draws,
+        likelihood_precision_draws=likelihood_precision_draws,
+        fixed_coef_draws=state.fixed_coef_draws,
+        fit=state.fit,
+        diagnostics=state.diagnostics,
     )
 
 

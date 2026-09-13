@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import Point
 
-from geopfa.prob.config import LabelsConfig
+from geopfa.prob.config import LabelsConfig, ObservationModelConfig
 from geopfa.prob.labels import (
     LoadedLabels,
     _maybe_reproject,
@@ -260,6 +260,57 @@ def test_load_labels_rejects_fractional_binary_label(tmp_path: Path) -> None:
         layer="wells",
     )
     with pytest.raises(ValueError, match="binary 0/1"):
+        load_labels(cfg)
+
+
+def test_load_labels_preserves_continuous_gaussian_response(
+    tmp_path: Path,
+) -> None:
+    wells = _make_wells_gdf()
+    wells["temperature_c"] = [145.0, 182.5, np.nan, 230.0, 275.5, 310.0]
+    gpkg_path = tmp_path / "wells.gpkg"
+    wells.to_file(gpkg_path, layer="wells", driver="GPKG")
+    cfg = LabelsConfig(
+        source=str(gpkg_path),
+        id_col="well_id",
+        label_columns={"heat": "temperature_c"},
+        observation_models={
+            "heat": ObservationModelConfig(
+                family="gaussian", response_scale=50.0
+            )
+        },
+        layer="wells",
+    )
+
+    loaded = load_labels(cfg)
+    subset = component_labels(loaded, "heat")
+
+    np.testing.assert_allclose(
+        subset["temperature_c"].to_numpy(),
+        [145.0, 182.5, 230.0, 275.5, 310.0],
+    )
+
+
+def test_load_labels_rejects_nonfinite_gaussian_response(
+    tmp_path: Path,
+) -> None:
+    wells = _make_wells_gdf()
+    wells["temperature_c"] = [145.0, np.inf, 175.0, 230.0, 275.5, 310.0]
+    gpkg_path = tmp_path / "wells.gpkg"
+    wells.to_file(gpkg_path, layer="wells", driver="GPKG")
+    cfg = LabelsConfig(
+        source=str(gpkg_path),
+        id_col="well_id",
+        label_columns={"heat": "temperature_c"},
+        observation_models={
+            "heat": ObservationModelConfig(
+                family="gaussian", response_scale=50.0
+            )
+        },
+        layer="wells",
+    )
+
+    with pytest.raises(ValueError, match="non-finite"):
         load_labels(cfg)
 
 

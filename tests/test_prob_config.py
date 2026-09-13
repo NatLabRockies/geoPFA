@@ -17,8 +17,10 @@ from geopfa.prob.config import (
     GridConfig,
     InferenceConfig,
     LabelsConfig,
+    ObservationModelConfig,
     OutputsConfig,
     ProbabilisticConfig,
+    PredictiveStackingConfig,
     RegularizationConfig,
     ScenarioConfig,
     SpatialFieldConfig,
@@ -169,6 +171,135 @@ def test_thermal_layer_exceedance_config_roundtrips() -> None:
     assert heat.mode == "thermal_layer_exceedance"
     assert heat.uncertainty_column == "temperature_sd_c"
     assert cfg.to_dict()["alpha"]["heat"]["threshold"] == 400.0
+
+
+def test_gaussian_component_observation_model_roundtrips() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+    raw["alpha"]["heat"] = {
+        "mode": "thermal_layer_exceedance",
+        "layer": "temperature_model",
+        "threshold": 400.0,
+        "uncertainty_column": "temperature_sd_c",
+    }
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.labels.observation_model_for("heat") == ObservationModelConfig(
+        family="gaussian", response_scale=50.0
+    )
+    assert cfg.labels.observation_model_for("reservoir").family == "bernoulli"
+    assert (
+        cfg.to_dict()["labels"]["observation_models"]
+        == raw["labels"]["observation_models"]
+    )
+
+
+def test_gaussian_component_requires_explicit_response_scale() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {"heat": {"family": "gaussian"}}
+
+    with pytest.raises(ValueError, match="response_scale"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_predictive_stacking_config_roundtrips() -> None:
+    raw = _minimal_config_dict()
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+        "predictive_stacking": {"enabled": True},
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.inference.predictive_stacking == PredictiveStackingConfig(
+        enabled=True
+    )
+    assert cfg.to_dict()["inference"]["predictive_stacking"] == {
+        "enabled": True
+    }
+
+
+def test_predictive_stacking_requires_bayesian_gblk() -> None:
+    raw = _minimal_config_dict()
+    raw["inference"] = {"predictive_stacking": {"enabled": True}}
+
+    with pytest.raises(ValueError, match="predictive_stacking.*Bayesian GBLK"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_predictive_stacking_rejects_incremental_draw_storage() -> None:
+    raw = _minimal_config_dict()
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True, "cluster_effect": False},
+        "predictive_stacking": {"enabled": True},
+    }
+    raw["outputs"] = {"posterior_draw_blocks": True}
+
+    with pytest.raises(ValueError, match="posterior_draw_blocks=false"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_gaussian_component_requires_bayesian_thermal_gblk() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+
+    with pytest.raises(ValueError, match="Gaussian.*Bayesian GBLK"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_gaussian_component_requires_thermal_prior_mean() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+    }
+
+    with pytest.raises(ValueError, match="thermal.*alpha"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_gaussian_component_rejects_incremental_draw_storage() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+    raw["alpha"]["heat"] = {
+        "mode": "thermal_layer_exceedance",
+        "layer": "temperature_model",
+        "threshold": 400.0,
+    }
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True, "cluster_effect": False},
+    }
+    raw["outputs"] = {"posterior_draw_blocks": True}
+
+    with pytest.raises(ValueError, match="Gaussian.*posterior_draw_blocks"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_observation_model_rejects_unknown_component() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {
+        "ghost": {"family": "gaussian", "response_scale": 50.0}
+    }
+
+    with pytest.raises(ValueError, match="ghost"):
+        ProbabilisticConfig.from_dict(raw)
 
 
 def test_explicit_gaussian_evidence_priors_roundtrip_without_layer_weights() -> (

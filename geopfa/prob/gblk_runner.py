@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any
 import geopandas as gpd
 import numpy as np
 from numpy.typing import NDArray
-from scipy.special import expit
+from scipy.special import expit, ndtr
 
 from geopfa.exceptions import GEOPFAValueError
 from geopfa.prob.alpha import AlphaCResult, build_alpha_c
@@ -50,6 +50,7 @@ from geopfa.prob.gblk_assemble import (
 from geopfa.prob.gblk_backend import (
     fit_gblk_bayesian_joint,
     fit_gblk_bayesian_posterior_state,
+    fit_gblk_gaussian_bayesian_joint,
     fit_gblk_joint,
     project_gblk_bayesian_draw_block,
 )
@@ -60,6 +61,11 @@ from geopfa.prob.io import (
 )
 from geopfa.prob.labels import LoadedLabels, load_labels
 from geopfa.prob.pfa_grid import PFAGridAdapter, validate_declared_components
+from geopfa.prob.predictive_stacking import (
+    PredictiveStackingResult,
+    apply_predictive_stacking,
+    select_predictive_stacking_weight,
+)
 from geopfa.prob.runner import ProbabilisticResult
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -453,6 +459,20 @@ def _prepare_joint_evidence_arrays(  # noqa: PLR0913, PLR0914
     widths = [len(layer_names[name]) for name in component_names]
     max_width = max(widths, default=0)
     diagnostics: dict[str, dict[str, Any]] = {}
+    for q_idx, name in enumerate(component_names):
+        observed = observed_train[:, q_idx]
+        if observed.sum() < cfg.labels.min_wells_for_fit:
+            raise GEOPFAValueError(
+                f"component {name!r} has fewer than "
+                f"{cfg.labels.min_wells_for_fit} observed labels"
+            )
+        if (
+            not cfg.inference.gblk_bayesian.enabled
+            and np.unique(y_train[observed, q_idx]).size < 2  # noqa: PLR2004
+        ):
+            raise GEOPFAValueError(
+                f"component {name!r} has only one observed outcome class"
+            )
     if max_width == 0:
         for name in component_names:
             diagnostics[name] = {
@@ -487,18 +507,6 @@ def _prepare_joint_evidence_arrays(  # noqa: PLR0913, PLR0914
                 f"component {name!r} prediction evidence shape is inconsistent"
             )
         observed = observed_train[:, q_idx]
-        if observed.sum() < cfg.labels.min_wells_for_fit:
-            raise GEOPFAValueError(
-                f"component {name!r} has fewer than "
-                f"{cfg.labels.min_wells_for_fit} observed labels"
-            )
-        if (
-            not cfg.inference.gblk_bayesian.enabled
-            and np.unique(y_train[observed, q_idx]).size < 2  # noqa: PLR2004
-        ):
-            raise GEOPFAValueError(
-                f"component {name!r} has only one observed outcome class"
-            )
         if width == 0:
             diagnostics[name] = {
                 "evidence_stage": "offset_only_no_evidence",
@@ -728,6 +736,394 @@ def _run_gblk_bayesian(  # noqa: PLR0913
     )
 
     return components, combined, component_draws
+
+
+def _gaussian_predictive_exceedance_draws(
+    fit_result: Any,
+    *,
+    component_index: int,
+    threshold_scaled: float,
+) -> NDArray[np.float64]:
+    """Return matched posterior predictive exceedance probabilities."""
+    mean_draws = np.asarray(
+        fit_result.response_draws[:, :, component_index], dtype=np.float64
+    )
+    precision_draws = np.asarray(
+        fit_result.likelihood_precision_draws[:, component_index],
+        dtype=np.float64,
+    )
+    if (
+        precision_draws.shape != (mean_draws.shape[0],)
+        or not np.all(np.isfinite(precision_draws))
+        or np.any(precision_draws <= 0.0)
+    ):
+        raise RuntimeError(
+            "Gaussian prediction requires one positive likelihood-precision "
+            "draw per latent-mean draw"
+        )
+    probabilities = ndtr(
+        (mean_draws - threshold_scaled)
+        * np.sqrt(precision_draws)[:, np.newaxis]
+    )
+    if not np.all(np.isfinite(probabilities)):
+        raise RuntimeError(
+            "Gaussian predictive exceedance produced nonfinite probabilities"
+        )
+    return probabilities
+
+
+def _run_gblk_gaussian_bayesian(  # noqa: PLR0913
+    assembled: AssembledInputs,
+    grid_gdf: gpd.GeoDataFrame,
+    alphas: Mapping[str, AlphaCResult],
+    cfg: ProbabilisticConfig,
+    bayes_cfg: GBLKBayesianConfig,
+    *,
+    evidence_design: JointEvidenceDesign,
+    nc: int,
+    nlevel: int,
+    a_wght: float,
+    coordinate_scaling: str,
+) -> tuple[
+    dict[str, ComponentProbability],
+    dict[str, NDArray[np.float64]],
+]:
+    """Fit continuous components and convert draws to event probabilities."""
+    fit_result = fit_gblk_gaussian_bayesian_joint(
+        assembled.well_coords,
+        assembled.y,
+        assembled.grid_coords,
+        component_names=assembled.component_names,
+        bayes_config=bayes_cfg,
+        observed_mask=assembled.observed_mask,
+        offsets=assembled.well_offsets,
+        grid_offsets=assembled.grid_offsets,
+        fixed_effects=evidence_design.train,
+        fixed_effects_grid=evidence_design.prediction,
+        fixed_precision=evidence_design.precision,
+        fixed_prior_mean=evidence_design.prior_mean,
+        nc=nc,
+        nlevel=nlevel,
+        a_wght=a_wght,
+        coordinate_scaling=coordinate_scaling,
+    )
+    tail = (1.0 - bayes_cfg.ci_level) / 2.0
+    components: dict[str, ComponentProbability] = {}
+    component_draws: dict[str, NDArray[np.float64]] = {}
+    for q_idx, name in enumerate(assembled.component_names):
+        observation = cfg.labels.observation_model_for(name)
+        scale = float(observation.response_scale)
+        alpha = alphas[name]
+        if alpha.event_threshold is None:
+            raise RuntimeError(
+                f"Gaussian component {name!r} has no event threshold"
+            )
+        response_draws = fit_result.response_draws[:, :, q_idx] * scale
+        event_draws = _gaussian_predictive_exceedance_draws(
+            fit_result,
+            component_index=q_idx,
+            threshold_scaled=float(alpha.event_threshold) / scale,
+        )
+        probability_interval = np.quantile(
+            event_draws, [tail, 1.0 - tail], axis=0
+        )
+        response_interval = np.quantile(
+            response_draws, [tail, 1.0 - tail], axis=0
+        )
+        probability = (
+            grid_gdf[["geometry"]]
+            .copy()
+            .assign(
+                probability=event_draws.mean(axis=0),
+                probability_lo=probability_interval[0],
+                probability_hi=probability_interval[1],
+                response_mean=response_draws.mean(axis=0),
+                response_lo=response_interval[0],
+                response_hi=response_interval[1],
+            )
+        )
+        diagnostics = {
+            **fit_result.diagnostics,
+            **evidence_design.diagnostics[name],
+            "observation_family": "gaussian",
+            "response_scale": scale,
+            "event_threshold": float(alpha.event_threshold),
+            "event_probability_estimand": (
+                "posterior_predictive_response_exceedance"
+            ),
+            "likelihood_sd_mean": float(
+                np.mean(
+                    scale
+                    / np.sqrt(fit_result.likelihood_precision_draws[:, q_idx])
+                )
+            ),
+        }
+        width = len(assembled.layer_names.get(name, []))
+        if fit_result.fixed_coef_draws is not None and width:
+            coefficient_draws = (
+                fit_result.fixed_coef_draws[:, :width, q_idx] * scale
+            )
+            diagnostics["evidence_beta"] = coefficient_draws.mean(
+                axis=0
+            ).tolist()
+            diagnostics["evidence_beta_interval"] = np.quantile(
+                coefficient_draws, [tail, 1.0 - tail], axis=0
+            ).tolist()
+        components[name] = ComponentProbability(
+            probability=probability,
+            model=fit_result.fit,
+            feature_names=tuple(assembled.layer_names.get(name, [])),
+            diagnostics=diagnostics,
+        )
+        component_draws[name] = event_draws
+    return components, component_draws
+
+
+def _assemble_likelihood_groups(
+    adapter: PFAGridAdapter,
+    loaded_labels: LoadedLabels,
+    fit_alphas: Mapping[str, AlphaCResult],
+    cfg: ProbabilisticConfig,
+) -> dict[str, AssembledInputs]:
+    """Assemble separate same-family fits for one mixed-response workflow."""
+    grouped_names: dict[str, list[str]] = {}
+    for name in fit_alphas:
+        family = cfg.labels.observation_model_for(name).family
+        grouped_names.setdefault(family, []).append(name)
+
+    assembled_groups: dict[str, AssembledInputs] = {}
+    for family, names in grouped_names.items():
+        group_labels = replace(
+            loaded_labels.config,
+            label_columns={
+                name: loaded_labels.config.label_columns[name]
+                for name in names
+            },
+            observation_models={
+                name: loaded_labels.config.observation_models[name]
+                for name in names
+                if name in loaded_labels.config.observation_models
+            },
+        )
+        group_alphas = {name: fit_alphas[name] for name in names}
+        if family == "gaussian":
+            group_alphas = {}
+            for name in names:
+                alpha = fit_alphas[name]
+                if alpha.latent_mean is None:
+                    raise GEOPFAValueError(
+                        f"Gaussian component {name!r} requires a continuous "
+                        "thermal prior mean"
+                    )
+                scale = float(
+                    cfg.labels.observation_model_for(name).response_scale
+                )
+                group_alphas[name] = replace(
+                    alpha,
+                    grid_offset=np.asarray(alpha.latent_mean) / scale,
+                )
+        assembled = assemble_gblk_inputs(
+            adapter,
+            LoadedLabels(gdf=loaded_labels.gdf, config=group_labels),
+            group_alphas,
+            evidence_config=cfg.evidence,
+            prior_probability_results={
+                name: fit_alphas[name] for name in names
+            },
+        )
+        if family == "gaussian":
+            scales = np.asarray(
+                [
+                    cfg.labels.observation_model_for(name).response_scale
+                    for name in assembled.component_names
+                ],
+                dtype=np.float64,
+            )
+            assembled = replace(assembled, y=assembled.y / scales)
+        assembled_groups[family] = assembled
+    return assembled_groups
+
+
+def _blocked_family_predictions(
+    assembled: AssembledInputs,
+    family: str,
+    cfg: ProbabilisticConfig,
+    *,
+    nc: int,
+    a_wght: float | None,
+) -> NDArray[np.float64]:
+    """Return leakage-safe out-of-fold event probabilities for one family."""
+    predictions = np.full(assembled.y.shape, np.nan, dtype=np.float64)
+    folds = spatial_block_cv(
+        assembled.well_coords,
+        n_folds=cfg.cross_validation.n_folds,
+        block_type=cfg.cross_validation.block_type,
+        grid_size=cfg.cross_validation.grid_size,
+        seed=cfg.inference.gblk_bayesian.seed,
+        block_size_km=cfg.cross_validation.block_size_km,
+        buffer_distance=cfg.cross_validation.buffer_km * 1000.0,
+        dims=(0, 1),
+    )
+    seed_sequences = np.random.SeedSequence(
+        cfg.inference.gblk_bayesian.seed
+    ).spawn(cfg.cross_validation.n_folds)
+    for (train_mask, test_mask), seed_sequence in zip(
+        folds, seed_sequences, strict=True
+    ):
+        fold_cfg = replace(
+            cfg.inference.gblk_bayesian,
+            seed=int(seed_sequence.generate_state(1, dtype=np.uint64)[0]),
+        )
+        evidence_design = _prepare_joint_evidence_arrays(
+            component_names=assembled.component_names,
+            train_evidence={
+                name: assembled.evidence[name][train_mask]
+                for name in assembled.component_names
+            },
+            prediction_evidence={
+                name: assembled.evidence[name][test_mask]
+                for name in assembled.component_names
+            },
+            layer_names=assembled.layer_names,
+            y_train=assembled.y[train_mask],
+            observed_train=assembled.observed_mask[train_mask],
+            cfg=cfg,
+        )
+        common = {
+            "component_names": assembled.component_names,
+            "bayes_config": fold_cfg,
+            "observed_mask": assembled.observed_mask[train_mask],
+            "offsets": assembled.well_offsets[train_mask],
+            "grid_offsets": assembled.well_offsets[test_mask],
+            "fixed_effects": evidence_design.train,
+            "fixed_effects_grid": evidence_design.prediction,
+            "fixed_precision": evidence_design.precision,
+            "fixed_prior_mean": evidence_design.prior_mean,
+            "nc": nc,
+            "nlevel": cfg.spatial_field.n_levels,
+            "a_wght": _resolve_a_wght(assembled.well_coords.shape[1], a_wght),
+            "coordinate_scaling": cfg.spatial_field.coordinate_scaling,
+        }
+        if family == "bernoulli":
+            fit = fit_gblk_bayesian_joint(
+                assembled.well_coords[train_mask],
+                assembled.y[train_mask],
+                assembled.well_coords[test_mask],
+                **common,
+            )
+            predictions[test_mask] = fit.p_q_draws.mean(axis=0)
+        elif family == "gaussian":
+            fit = fit_gblk_gaussian_bayesian_joint(
+                assembled.well_coords[train_mask],
+                assembled.y[train_mask],
+                assembled.well_coords[test_mask],
+                **common,
+            )
+            for q_idx, name in enumerate(assembled.component_names):
+                scale = float(
+                    cfg.labels.observation_model_for(name).response_scale
+                )
+                threshold = cfg.alpha[name].threshold
+                predictions[test_mask, q_idx] = (
+                    _gaussian_predictive_exceedance_draws(
+                        fit,
+                        component_index=q_idx,
+                        threshold_scaled=float(threshold) / scale,
+                    ).mean(axis=0)
+                )
+        else:  # pragma: no cover - guarded by observation config
+            raise AssertionError(f"unexpected response family {family!r}")
+    return predictions
+
+
+def _estimate_predictive_stacking(
+    assembled_groups: Mapping[str, AssembledInputs],
+    cfg: ProbabilisticConfig,
+    *,
+    nc: int,
+    a_wght: float | None,
+) -> dict[str, PredictiveStackingResult]:
+    """Select one prior/update mixture weight per fitted component."""
+    results: dict[str, PredictiveStackingResult] = {}
+    for family, assembled in assembled_groups.items():
+        if assembled.prior_probability_well is None:
+            raise RuntimeError(
+                "predictive stacking requires prior probabilities at wells"
+            )
+        full_probability = _blocked_family_predictions(
+            assembled, family, cfg, nc=nc, a_wght=a_wght
+        )
+        for q_idx, name in enumerate(assembled.component_names):
+            observed = assembled.observed_mask[:, q_idx]
+            if family == "bernoulli":
+                outcomes = assembled.y[observed, q_idx]
+            else:
+                scale = float(
+                    cfg.labels.observation_model_for(name).response_scale
+                )
+                outcomes = (
+                    assembled.y[observed, q_idx] * scale
+                    > cfg.alpha[name].threshold
+                ).astype(np.float64)
+            if not np.all(np.isfinite(full_probability[observed, q_idx])):
+                raise RuntimeError(
+                    f"component {name!r} has missing out-of-fold predictions"
+                )
+            results[name] = select_predictive_stacking_weight(
+                outcomes,
+                assembled.prior_probability_well[observed, q_idx],
+                full_probability[observed, q_idx],
+            )
+    return results
+
+
+def _apply_componentwise_stacking(
+    components: dict[str, ComponentProbability],
+    component_draws: dict[str, NDArray[np.float64]],
+    assembled_groups: Mapping[str, AssembledInputs],
+    stacking: Mapping[str, PredictiveStackingResult],
+    *,
+    ci_level: float,
+) -> None:
+    """Apply selected component weights before the existing combination."""
+    tail = (1.0 - ci_level) / 2.0
+    for assembled in assembled_groups.values():
+        if assembled.prior_probability_grid is None:
+            raise RuntimeError(
+                "predictive stacking requires prior probabilities on the grid"
+            )
+        for q_idx, name in enumerate(assembled.component_names):
+            selection = stacking[name]
+            draws = apply_predictive_stacking(
+                assembled.prior_probability_grid[:, q_idx],
+                component_draws[name],
+                weight=selection.weight,
+            )
+            component_draws[name] = draws
+            interval = np.quantile(draws, [tail, 1.0 - tail], axis=0)
+            probability = components[name].probability.copy()
+            probability["probability"] = draws.mean(axis=0)
+            probability["probability_lo"] = interval[0]
+            probability["probability_hi"] = interval[1]
+            diagnostics = {
+                **components[name].diagnostics,
+                "predictive_stacking_weight": selection.weight,
+                "predictive_stacking_prior_log_score": (
+                    selection.prior_log_score
+                ),
+                "predictive_stacking_full_log_score": selection.full_log_score,
+                "predictive_stacking_selected_log_score": (
+                    selection.selected_log_score
+                ),
+                "predictive_stacking_n": selection.n_observations,
+                "predictive_stacking_validation": "blocked_out_of_fold",
+            }
+            components[name] = ComponentProbability(
+                probability=probability,
+                model=components[name].model,
+                feature_names=components[name].feature_names,
+                diagnostics=diagnostics,
+            )
 
 
 def _restore_streaming_posterior_states(
@@ -1224,7 +1620,7 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         for name, alpha in alphas.items()
         if name not in prior_only_names
     }
-    assembled = None
+    assembled_groups: dict[str, AssembledInputs] = {}
     if fit_alphas:
         loaded_labels = load_labels(cfg.labels)
         fitted_label_columns = {
@@ -1237,16 +1633,20 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             config=replace(
                 loaded_labels.config,
                 label_columns=fitted_label_columns,
+                observation_models={
+                    name: model
+                    for name, model in loaded_labels.config.observation_models.items()
+                    if name in fitted_label_columns
+                },
             ),
         )
-        assembled = assemble_gblk_inputs(
-            adapter,
-            fitted_labels,
-            fit_alphas,
-            evidence_config=cfg.evidence,
+        assembled_groups = _assemble_likelihood_groups(
+            adapter, fitted_labels, fit_alphas, cfg
         )
-    if assembled is not None and assembled.component_names:
-        grid_gdf = adapter.pr_norm(assembled.component_names[0])
+    assembled = assembled_groups.get("bernoulli")
+    first_assembled = next(iter(assembled_groups.values()), None)
+    if first_assembled is not None and first_assembled.component_names:
+        grid_gdf = adapter.pr_norm(first_assembled.component_names[0])
     elif prior_only_names:
         grid_gdf = adapter.pr_norm(prior_only_names[0])
     else:
@@ -1255,11 +1655,16 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         )
 
     if cfg.inference.gblk_bayesian.enabled:
-        if assembled is not None and not cfg.spatial_field.enabled:
+        if assembled_groups and not cfg.spatial_field.enabled:
             raise GEOPFAValueError(
                 "Bayesian GBLK requires spatial_field.enabled=True"
             )
         if cfg.outputs.posterior_draw_blocks:
+            if "gaussian" in assembled_groups:
+                raise GEOPFAValueError(
+                    "streamed posterior blocks do not yet support Gaussian "
+                    "components"
+                )
             evidence_design = (
                 None
                 if assembled is None
@@ -1279,6 +1684,23 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             )
         components: dict[str, ComponentProbability] = {}
         component_draws: dict[str, NDArray[np.float64]] = {}
+        fit_families = tuple(sorted(assembled_groups))
+        family_configs = dict.fromkeys(
+            fit_families, cfg.inference.gblk_bayesian
+        )
+        if len(fit_families) > 1:
+            family_seeds = np.random.SeedSequence(
+                cfg.inference.gblk_bayesian.seed
+            ).spawn(len(fit_families))
+            family_configs = {
+                family: replace(
+                    cfg.inference.gblk_bayesian,
+                    seed=int(seed.generate_state(1, dtype=np.uint64)[0]),
+                )
+                for family, seed in zip(
+                    fit_families, family_seeds, strict=True
+                )
+            }
         if assembled is not None:
             evidence_design = _prepare_joint_evidence(assembled, cfg)
             model_a_wght = _resolve_a_wght(
@@ -1287,7 +1709,7 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
             components, _, component_draws = _run_gblk_bayesian(
                 assembled,
                 grid_gdf,
-                cfg.inference.gblk_bayesian,
+                family_configs["bernoulli"],
                 well_offsets=assembled.well_offsets,
                 grid_offsets=assembled.grid_offsets,
                 evidence_diagnostics=evidence_design.diagnostics,
@@ -1297,6 +1719,35 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 a_wght=model_a_wght,
                 coordinate_scaling=cfg.spatial_field.coordinate_scaling,
             )
+        gaussian_assembled = assembled_groups.get("gaussian")
+        if gaussian_assembled is not None:
+            gaussian_grid = adapter.pr_norm(
+                gaussian_assembled.component_names[0]
+            )
+            if not gaussian_grid.geometry.equals(grid_gdf.geometry):
+                raise GEOPFAValueError(
+                    "Gaussian and Bernoulli components must share a prediction grid"
+                )
+            gaussian_evidence = _prepare_joint_evidence(
+                gaussian_assembled, cfg
+            )
+            model_a_wght = _resolve_a_wght(
+                gaussian_assembled.well_coords.shape[1], a_wght
+            )
+            gaussian_components, gaussian_draws = _run_gblk_gaussian_bayesian(
+                gaussian_assembled,
+                grid_gdf,
+                alphas,
+                cfg,
+                family_configs["gaussian"],
+                evidence_design=gaussian_evidence,
+                nc=nc,
+                nlevel=cfg.spatial_field.n_levels,
+                a_wght=model_a_wght,
+                coordinate_scaling=cfg.spatial_field.coordinate_scaling,
+            )
+            components.update(gaussian_components)
+            component_draws.update(gaussian_draws)
         prior_names = sorted(prior_only_names)
         seed_sequences = np.random.SeedSequence(
             cfg.inference.gblk_bayesian.seed
@@ -1360,6 +1811,20 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 model=model,
                 feature_names=feature_names,
                 diagnostics=diagnostics,
+            )
+        if cfg.inference.predictive_stacking.enabled:
+            stacking = _estimate_predictive_stacking(
+                assembled_groups,
+                cfg,
+                nc=nc,
+                a_wght=a_wght,
+            )
+            _apply_componentwise_stacking(
+                components,
+                component_draws,
+                assembled_groups,
+                stacking,
+                ci_level=cfg.inference.gblk_bayesian.ci_level,
             )
         ordered_names = tuple(sorted(components))
         if ordered_names != tuple(sorted(cfg.alpha)):

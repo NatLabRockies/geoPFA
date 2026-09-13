@@ -49,6 +49,7 @@ ALLOWED_PU_MODES: tuple[str, ...] = (
     "naive_pseudo_absence",
     "nnpu",
 )
+ALLOWED_OBSERVATION_FAMILIES: tuple[str, ...] = ("bernoulli", "gaussian")
 ALLOWED_SITE_SELECTION_MODES: tuple[str, ...] = ("off", "joint_binary")
 ALLOWED_SPATIAL_BACKENDS: tuple[str, ...] = ("latticekrigx", "rbf", "none")
 ALLOWED_COORDINATE_SCALINGS: tuple[str, ...] = (
@@ -310,12 +311,76 @@ class GridConfig:
 
 
 @dataclass(frozen=True)
+class ObservationModelConfig:
+    """Likelihood contract for one observed PFA component.
+
+    Gaussian responses are divided by ``response_scale`` before fitting. This
+    keeps the latent-field prior on a meaningful, dimensionless scale while
+    preserving predictions in the response's original units.
+    """
+
+    family: str = "bernoulli"
+    response_scale: float | None = None
+
+    def __post_init__(self) -> None:
+        """Reject unsupported families and invalid response scales."""
+        if self.family not in ALLOWED_OBSERVATION_FAMILIES:
+            allowed = ", ".join(ALLOWED_OBSERVATION_FAMILIES)
+            raise ValueError(
+                f"labels.observation_models family must be one of: {allowed}"
+            )
+        if self.family == "gaussian":
+            if self.response_scale is None:
+                raise ValueError(
+                    "Gaussian observation models require response_scale"
+                )
+            scale = _require_finite_real_value(
+                self.response_scale,
+                context="labels.observation_models.response_scale",
+            )
+            if scale <= 0.0:
+                raise ValueError(
+                    "labels.observation_models.response_scale must be positive"
+                )
+        elif self.response_scale is not None:
+            raise ValueError(
+                "response_scale is defined only for Gaussian observation models"
+            )
+
+    @classmethod
+    def from_dict(
+        cls, raw: Mapping[str, Any], component_name: str
+    ) -> ObservationModelConfig:
+        """Build a component likelihood from a parsed-JSON mapping."""
+        context = f"labels.observation_models.{component_name}"
+        _reject_unknown_keys(
+            raw, {"family", "response_scale"}, context=context
+        )
+        return cls(
+            family=str(raw.get("family", "bernoulli")),
+            response_scale=_require_optional_json_real(
+                raw, "response_scale", context=context
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a plain-dict representation."""
+        payload: dict[str, Any] = {"family": self.family}
+        if self.response_scale is not None:
+            payload["response_scale"] = self.response_scale
+        return payload
+
+
+@dataclass(frozen=True)
 class LabelsConfig:
     """Where the labelled wells live and how their labels are stored."""
 
     source: str
     id_col: str
     label_columns: Mapping[str, str]
+    observation_models: Mapping[str, ObservationModelConfig] = field(
+        default_factory=dict
+    )
     layer: str | None = None
     label_quality_col: str | None = None
     label_source_col: str | None = None
@@ -325,6 +390,22 @@ class LabelsConfig:
 
     def __post_init__(self) -> None:
         """Reject unidentified PU configurations for every construction path."""
+        unknown_models = set(self.observation_models) - set(self.label_columns)
+        if unknown_models:
+            raise ValueError(
+                "labels.observation_models contains component(s) without label "
+                "columns: " + ", ".join(sorted(unknown_models))
+            )
+        invalid_models = {
+            name
+            for name, model in self.observation_models.items()
+            if not isinstance(model, ObservationModelConfig)
+        }
+        if invalid_models:
+            raise TypeError(
+                "labels.observation_models values must be "
+                "ObservationModelConfig instances"
+            )
         if self.pu_mode not in ALLOWED_PU_MODES:
             allowed = ", ".join(ALLOWED_PU_MODES)
             raise ValueError(
@@ -367,6 +448,7 @@ class LabelsConfig:
                 "source",
                 "id_col",
                 "label_columns",
+                "observation_models",
                 "layer",
                 "label_quality_col",
                 "label_source_col",
@@ -392,6 +474,12 @@ class LabelsConfig:
             source=str(raw["source"]),
             id_col=str(raw["id_col"]),
             label_columns=dict(raw["label_columns"]),
+            observation_models={
+                str(name): ObservationModelConfig.from_dict(model, str(name))
+                for name, model in dict(
+                    raw.get("observation_models", {})
+                ).items()
+            },
             layer=raw.get("layer"),
             label_quality_col=raw.get("label_quality_col"),
             label_source_col=raw.get("label_source_col"),
@@ -415,12 +503,24 @@ class LabelsConfig:
             return float(prior[component])
         return float(prior)
 
+    def observation_model_for(self, component: str) -> ObservationModelConfig:
+        """Return the declared model, defaulting to a Bernoulli response."""
+        if component not in self.label_columns:
+            raise KeyError(
+                f"component {component!r} is not configured in label_columns"
+            )
+        return self.observation_models.get(component, ObservationModelConfig())
+
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
         return {
             "source": self.source,
             "id_col": self.id_col,
             "label_columns": dict(self.label_columns),
+            "observation_models": {
+                name: model.to_dict()
+                for name, model in self.observation_models.items()
+            },
             "layer": self.layer,
             "label_quality_col": self.label_quality_col,
             "label_source_col": self.label_source_col,
@@ -1325,12 +1425,45 @@ class GBLKBayesianConfig:
 
 
 @dataclass(frozen=True)
+class PredictiveStackingConfig:
+    """Componentwise shrinkage selected from blocked predictive risk."""
+
+    enabled: bool = False
+
+    @classmethod
+    def from_dict(
+        cls, raw: Mapping[str, Any] | None
+    ) -> PredictiveStackingConfig:
+        """Build from a parsed-JSON mapping."""
+        if raw is None:
+            return cls()
+        _reject_unknown_keys(
+            raw, {"enabled"}, context="inference.predictive_stacking"
+        )
+        return cls(
+            enabled=_require_json_bool(
+                raw,
+                "enabled",
+                False,
+                context="inference.predictive_stacking",
+            )
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a plain-dict representation."""
+        return {"enabled": self.enabled}
+
+
+@dataclass(frozen=True)
 class InferenceConfig:
     """Inference backend selection + nested backend-specific configs."""
 
     backend: str = "gblk"
     gblk_bayesian: GBLKBayesianConfig = field(
         default_factory=GBLKBayesianConfig
+    )
+    predictive_stacking: PredictiveStackingConfig = field(
+        default_factory=PredictiveStackingConfig
     )
 
     def __post_init__(self) -> None:
@@ -1348,7 +1481,9 @@ class InferenceConfig:
         if raw is None:
             return cls()
         _reject_unknown_keys(
-            raw, {"backend", "gblk_bayesian"}, context="inference"
+            raw,
+            {"backend", "gblk_bayesian", "predictive_stacking"},
+            context="inference",
         )
         backend = raw.get("backend", "gblk")
         if backend not in ALLOWED_INFERENCE_BACKENDS:
@@ -1361,6 +1496,9 @@ class InferenceConfig:
             gblk_bayesian=GBLKBayesianConfig.from_dict(
                 raw.get("gblk_bayesian")
             ),
+            predictive_stacking=PredictiveStackingConfig.from_dict(
+                raw.get("predictive_stacking")
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1368,6 +1506,7 @@ class InferenceConfig:
         return {
             "backend": self.backend,
             "gblk_bayesian": self.gblk_bayesian.to_dict(),
+            "predictive_stacking": self.predictive_stacking.to_dict(),
         }
 
 
@@ -1857,6 +1996,14 @@ class ProbabilisticConfig:
                 "inference.gblk_bayesian.enabled=True requires "
                 "inference.backend='gblk'"
             )
+        if self.inference.predictive_stacking.enabled and not (
+            self.inference.backend == "gblk"
+            and self.inference.gblk_bayesian.enabled
+        ):
+            raise ValueError(
+                "inference.predictive_stacking.enabled=True requires "
+                "Bayesian GBLK inference"
+            )
         if self.spatial_field.enabled and self.spatial_field.backend == "none":
             raise ValueError(
                 "spatial_field.enabled=True requires a spatial backend"
@@ -1964,7 +2111,7 @@ class ProbabilisticConfig:
             )
         return cls.from_dict(pfa["probabilistic"])
 
-    def validate(self) -> list[str]:  # noqa: PLR0912, PLR0915
+    def validate(self) -> list[str]:  # noqa: PLR0912, PLR0914, PLR0915
         """Validate cross-field constraints and numeric hyperparameter ranges.
 
         Returns a list of error strings; empty list means the config is valid.
@@ -1995,6 +2142,14 @@ class ProbabilisticConfig:
                 "outputs.posterior_draw_blocks requires "
                 "inference.gblk_bayesian.cluster_effect=false so grid prediction "
                 "is projected in bounded draw blocks rather than materialized by INLA"
+            )
+        if (
+            self.outputs.posterior_draw_blocks
+            and self.inference.predictive_stacking.enabled
+        ):
+            errors.append(
+                "inference.predictive_stacking currently requires "
+                "outputs.posterior_draw_blocks=false"
             )
         if (
             self.inference.gblk_bayesian.enabled
@@ -2043,6 +2198,40 @@ class ProbabilisticConfig:
         if not self.labels.label_columns:
             errors.append(
                 "labels.label_columns is empty; no components are configured"
+            )
+        gaussian_components = {
+            name
+            for name in self.labels.label_columns
+            if self.labels.observation_model_for(name).family == "gaussian"
+        }
+        if gaussian_components and not (
+            self.inference.backend == "gblk"
+            and self.inference.gblk_bayesian.enabled
+        ):
+            errors.append(
+                "Gaussian component observations require Bayesian GBLK inference"
+            )
+        if gaussian_components and self.labels.pu_mode != "off":
+            errors.append(
+                "Gaussian component observations require labels.pu_mode='off'"
+            )
+        if gaussian_components and self.outputs.posterior_draw_blocks:
+            errors.append(
+                "Gaussian component observations currently require "
+                "outputs.posterior_draw_blocks=false"
+            )
+        invalid_gaussian_alpha = {
+            name
+            for name in gaussian_components
+            if self.alpha.get(name) is None
+            or self.alpha[name].mode
+            not in {"thermal_exceedance", "thermal_layer_exceedance"}
+        }
+        if invalid_gaussian_alpha:
+            errors.append(
+                "Gaussian heat components require a thermal exceedance alpha "
+                "with a continuous prior mean; offending components: "
+                + ", ".join(sorted(invalid_gaussian_alpha))
             )
         data_informed_components = {
             name
@@ -2373,6 +2562,7 @@ __all__ = [
     "ALLOWED_EVIDENCE_STANDARDIZATIONS",
     "ALLOWED_INFERENCE_BACKENDS",
     "ALLOWED_KERNELS",
+    "ALLOWED_OBSERVATION_FAMILIES",
     "ALLOWED_OUTPUT_FORMATS",
     "ALLOWED_PU_MODES",
     "ALLOWED_SITE_SELECTION_MODES",
@@ -2387,7 +2577,9 @@ __all__ = [
     "GridConfig",
     "InferenceConfig",
     "LabelsConfig",
+    "ObservationModelConfig",
     "OutputsConfig",
+    "PredictiveStackingConfig",
     "ProbabilisticConfig",
     "RegularizationConfig",
     "ScenarioConfig",

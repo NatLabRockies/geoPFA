@@ -5,7 +5,7 @@ Translates :class:`~geopfa.prob.pfa_grid.PFAGridAdapter`,
 :class:`~geopfa.prob.alpha.AlphaCResult` objects into the array-level inputs consumed by
 :func:`latticekrigx.glk.joint.fit_joint`:
 
-* ``y (n, Q)``     — binary component labels at well locations.
+* ``y (n, Q)``     — component responses at well locations.
 * ``observed_mask`` — ``(n, Q)`` bool preserving componentwise label availability.
 * ``labeled_mask`` — ``(n,)`` bool; ``True`` only for complete component rows.
 * ``offsets (n, Q)`` — alpha logit offsets at well locations, snapped from
@@ -52,13 +52,14 @@ from latticekrigx.glk.hierarchy import EBPoolResult, eb_pool_coefficients
 from latticekrigx.glk.support import Support, averaged_basis_row
 from latticekrigx.model.config import LKInfo
 from numpy.typing import NDArray
+from scipy.special import expit
 
 from geopfa.exceptions import GEOPFAValueError
 from geopfa import transformation
 from geopfa.prob.alpha import AlphaCResult
-from geopfa.prob.config import EvidenceConfig
+from geopfa.prob.config import EvidenceConfig, LabelsConfig
 from geopfa.prob.fitting import _is_sparse_binary
-from geopfa.prob.labels import LoadedLabels, _coerce_binary_labels
+from geopfa.prob.labels import LoadedLabels, _coerce_component_labels
 from geopfa.prob.pfa_grid import PFAGridAdapter
 from geopfa.prob.spatial_alignment import (
     align_to_grid_crs,
@@ -105,6 +106,9 @@ class AssembledInputs:
         with shape ``(G, L_q)``.
     layer_names
         Ordered layer names for each component's evidence matrix.
+    prior_probability_grid, prior_probability_well
+        Configured event probability before the outcome update, retained on
+        the grid and at observation locations for predictive stacking.
     """
 
     component_names: tuple[str, ...]
@@ -118,6 +122,8 @@ class AssembledInputs:
     evidence: dict[str, NDArray[np.float64]] = field(default_factory=dict)
     grid_evidence: dict[str, NDArray[np.float64]] = field(default_factory=dict)
     layer_names: dict[str, list[str]] = field(default_factory=dict)
+    prior_probability_grid: NDArray[np.float64] | None = None
+    prior_probability_well: NDArray[np.float64] | None = None
 
     @property
     def n(self) -> int:
@@ -179,14 +185,14 @@ def _transformed_layer_model(
 def _build_labels_array(
     wells_gdf: gpd.GeoDataFrame,
     component_names: tuple[str, ...],
-    label_cols: dict[str, str],
+    labels_config: LabelsConfig,
 ) -> tuple[NDArray[np.float64], NDArray[np.bool_], NDArray[np.bool_]]:
     """Build labels plus componentwise and complete-case observation masks."""
     n = len(wells_gdf)
     Q = len(component_names)
     y_raw = np.full((n, Q), np.nan, dtype=np.float64)
     for q_idx, comp in enumerate(component_names):
-        col = label_cols.get(comp)
+        col = labels_config.label_columns.get(comp)
         if col is None:
             raise GEOPFAValueError(
                 f"component {comp!r} has no declared label column"
@@ -195,15 +201,12 @@ def _build_labels_array(
             raise GEOPFAValueError(
                 f"component {comp!r} label column {col!r} is missing"
             )
-        y_raw[:, q_idx] = _coerce_binary_labels(
-            wells_gdf[col], label_column=col
+        y_raw[:, q_idx] = _coerce_component_labels(
+            wells_gdf[col],
+            label_column=col,
+            family=labels_config.observation_model_for(comp).family,
         ).to_numpy(dtype=float)
     observed_mask = np.isfinite(y_raw)
-    observed_values = y_raw[observed_mask]
-    if not np.all((observed_values == 0.0) | (observed_values == 1.0)):
-        raise GEOPFAValueError(
-            "component labels must contain only 0, 1, or missing"
-        )
     labeled_mask = np.all(observed_mask, axis=1)
     y = np.where(np.isfinite(y_raw), y_raw, 0.0)
     return y, observed_mask, labeled_mask
@@ -395,12 +398,13 @@ def _validated_component_names(
     )
 
 
-def assemble_gblk_inputs(
+def assemble_gblk_inputs(  # noqa: PLR0914
     adapter: PFAGridAdapter,
     loaded_labels: LoadedLabels,
     alpha_results: dict[str, AlphaCResult],
     *,
     evidence_config: EvidenceConfig,
+    prior_probability_results: dict[str, AlphaCResult] | None = None,
 ) -> AssembledInputs:
     """Build ``fit_joint`` inputs from geoPFA data structures.
 
@@ -419,6 +423,10 @@ def assemble_gblk_inputs(
     evidence_config
         Canonical evidence allowlist, denylist, coordinate screening, and
         sparse-layer screening contract.
+    prior_probability_results
+        Optional alpha results that retain the configured event-probability
+        logits when ``alpha_results`` has been transformed to another
+        likelihood scale, such as a Gaussian response mean.
 
     Returns
     -------
@@ -433,6 +441,15 @@ def assemble_gblk_inputs(
     component_names = _validated_component_names(
         adapter, loaded_labels, alpha_results
     )
+    probability_results = (
+        alpha_results
+        if prior_probability_results is None
+        else prior_probability_results
+    )
+    if set(probability_results) != set(component_names):
+        raise ValueError(
+            "prior_probability_results must match the fitted component set"
+        )
     if not component_names:
         raise ValueError(
             "no components found in both the adapter and alpha_results; "
@@ -452,15 +469,32 @@ def assemble_gblk_inputs(
         for component in component_names
     ]
     grid_offsets = np.column_stack(aligned_offsets).astype(np.float64)
+    prior_probability_grid = expit(
+        np.column_stack(
+            [
+                _component_values_on_reference(
+                    grid_gdf,
+                    adapter.pr_norm(component),
+                    probability_results[component].grid_offset,
+                    context=(
+                        f"component {component!r} prior-probability grid"
+                    ),
+                )
+                for component in component_names
+            ]
+        ).astype(np.float64)
+    )
 
     wells_gdf = align_to_grid_crs(loaded_labels.gdf, grid_gdf)
     well_coords = extract_coordinates(wells_gdf)
-    well_offsets = grid_offsets[snap_to_grid_indices(wells_gdf, grid_gdf)]
+    well_grid_indices = snap_to_grid_indices(wells_gdf, grid_gdf)
+    well_offsets = grid_offsets[well_grid_indices]
+    prior_probability_well = prior_probability_grid[well_grid_indices]
 
     y, observed_mask, labeled_mask = _build_labels_array(
         wells_gdf,
         component_names,
-        dict(loaded_labels.config.label_columns),
+        loaded_labels.config,
     )
 
     evidence, layer_names_map = _build_evidence(
@@ -486,6 +520,8 @@ def assemble_gblk_inputs(
         evidence=evidence,
         grid_evidence=grid_evidence,
         layer_names=layer_names_map,
+        prior_probability_grid=prior_probability_grid,
+        prior_probability_well=prior_probability_well,
     )
 
 

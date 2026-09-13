@@ -441,6 +441,20 @@ def test_p_gblk_assemble_grid_offsets_equal_alpha_logits():
         )
 
 
+def test_p_gblk_assemble_retains_prior_event_probabilities_at_grid_and_wells():
+    result, meta = _assemble(components=["comp_a"], seed=18)
+
+    expected_grid = 1.0 / (1.0 + np.exp(-meta["alpha"]["comp_a"].grid_offset))
+    np.testing.assert_allclose(
+        result.prior_probability_grid[:, 0], expected_grid
+    )
+    assert result.prior_probability_well.shape == (meta["n_wells"], 1)
+    assert np.all(
+        (result.prior_probability_well >= 0.0)
+        & (result.prior_probability_well <= 1.0)
+    )
+
+
 def test_p_gblk_assemble_well_offsets_are_snapped_from_grid():
     rng = np.random.default_rng(3)
     components = ["c1"]

@@ -21,9 +21,10 @@ independent `backend="bayesian"` model.
 
 ## The GBLK model
 
-The GBLK method fits **all geothermal components jointly** in a single multivariate
-Bernoulli-logit model. For each component $q$ (e.g. heat, reservoir, seal) at every
-well location $i$ with observation support $H_{qi}$:
+The GBLK method supports binary component outcomes and continuous Gaussian
+heat observations. Components with the same response family are fit jointly.
+For a binary component $q$ (e.g. reservoir or seal) at well location $i$ with
+observation support $H_{qi}$:
 
 $$
 \text{logit}\, p_{qi} \;=\; o_q(s_i) \;+\; Z_{qi}\, d_{qr} \;+\; [H_{qi}\, g_q]
@@ -42,7 +43,26 @@ where:
 - **$[H_{qi}\, g_q]$ — latent spatial field.** Multiresolution LatticeKrig basis
   $H_{qi}$ (averaged over the observation support) times latent field coefficients
   $g_q$. All components share the same LatticeKrig basis; cross-component dependence
-  is captured by the estimated $Q \times Q$ correlation matrix $\Omega$.
+  is captured by the estimated $Q \times Q$ correlation matrix $\Omega$ within
+  a same-family fit.
+
+For a Gaussian heat component, the corresponding model is
+
+$$
+T_i / a_T = \mu_T(s_i) / a_T + Z_{Ti}d_T + [H_{Ti}g_T] + \epsilon_i,
+$$
+
+where $T_i$ is the continuous temperature observation, $\mu_T(s_i)$ is the
+configured thermal-model mean, $a_T$ is the declared response scale, and
+$\epsilon_i\mid\tau_T\sim N(0,\tau_T^{-1})$. The
+scale controls numerical conditioning and the physical interpretation of the
+spatial prior; predictions and coefficients are returned in the original
+temperature units. Each posterior mean-field draw remains paired with its
+Gaussian likelihood-precision draw. Their normal survival probability gives
+$\Pr(T(s)>T^*)$ at the configured threshold. Those probability draws then pass
+to the same component-combination step used for binary outcomes. Gaussian and
+Bernoulli components are fit separately, so geoPFA does not claim estimated
+cross-response-family dependence.
 
 The default combined surface is the **conditional plug-in co-occurrence score**:
 
@@ -50,10 +70,13 @@ $$
 p_{\text{plugin}}(s) \;=\; \prod_q \widehat{p}_q(s)
 $$
 
-The component fields are estimated jointly through $\Omega$, but the exported
-MAP combined surface is the product of fitted marginal probabilities. It is not
-a posterior expectation of the joint event and must not be described as one.
-This is the `combined` surface in the `ProbabilisticResult`.
+Same-family component fields can be estimated jointly through $\Omega$. The
+deterministic combined surface is the product of fitted marginal
+probabilities. The Bayesian path combines paired component probabilities
+within each draw and then summarizes those combined draws. Neither quantity is
+an unconditional joint-event probability because the component product is a
+declared conditional combination rule. This is the `combined` surface in the
+`ProbabilisticResult`.
 
 ### Paper-to-geoPFA mapping
 
@@ -61,6 +84,7 @@ This is the `combined` surface in the `ProbabilisticResult`.
 |---|---|---|
 | components $q$ | `heat`, `reservoir`, `seal`, … | `y` columns / `n_components` |
 | prior offset $o_q$ | `alpha.py::build_alpha_c` | `offsets` |
+| continuous heat response | `labels.observation_models` | Gaussian family + identity link |
 | evidence $Z_q d_{qr}$ | processed evidence layers | design matrix + `glk.hierarchy` |
 | latent field $g_q$, $\Omega$ | — | `glk.multivariate` + `fit_joint` |
 | support operator $H_{qi}$ | well point/interval/trajectory/areal | `glk.support` averaged rows |
@@ -89,8 +113,11 @@ The whole pipeline is driven by a single JSON config. Drop a `probabilistic` blo
       "id_col": "well_id",
       "layer": "wells",
       "label_columns": {
-        "heat": "heat_label",
+        "heat": "temperature_c",
         "reservoir": "reservoir_label"
+      },
+      "observation_models": {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
       }
     },
 
@@ -107,7 +134,11 @@ The whole pipeline is driven by a single JSON config. Drop a `probabilistic` blo
       }
     },
 
-    "inference": { "backend": "gblk" },
+    "inference": {
+      "backend": "gblk",
+      "gblk_bayesian": {"enabled": true},
+      "predictive_stacking": {"enabled": true}
+    },
 
     "calibration": { "method": "none" },
 
@@ -139,12 +170,20 @@ artifact if either source tree changes while the model is executing.
 That call:
 
 1. Loads the labelled wells from the configured source (GeoPackage / shapefile / CSV).
-2. Builds `alpha_c` (logit-scale prior offsets) per component using the chosen mode (scalar / layer-logit / raster or in-grid thermal exceedance / multi-layer).
-3. Assembles the joint `(n, Q)` label matrix, `labeled_mask`, and per-component offsets via `gblk_assemble.assemble_gblk_inputs`.
-4. Fits every data-informed component simultaneously via `fit_joint` (GBLK engine in `latticekrigx.glk`), estimating the cross-component correlation matrix $\Omega$ and LatticeKrig latent field coefficients. Components explicitly configured as prior-predictive bypass the outcome likelihood and are identified as such in diagnostics and draw metadata.
-5. Produces per-component probability surfaces `p_q(s)` and the conditional plug-in co-occurrence surface `∏_q p_q(s)`.
-6. Runs any configured ablation scenarios.
-7. Writes outputs to `output_dir/`: per-component CSV + GeoTIFF + Parquet
+2. Builds the configured event prior per component and retains the physical
+   thermal mean for Gaussian heat components.
+3. Assembles component responses, missingness masks, evidence, and offsets via
+   `gblk_assemble.assemble_gblk_inputs`.
+4. Fits each same-family component group through `fit_joint`. Gaussian heat
+   uses an identity link; binary components use a Bernoulli-logit likelihood.
+   Components explicitly configured as prior-predictive bypass the outcome
+   likelihood.
+5. Optionally selects a separate prior/update stacking weight for each fitted
+   component from blocked out-of-fold log score.
+6. Produces per-component probability surfaces `p_q(s)` and the conditional
+   plug-in co-occurrence surface `∏_q p_q(s)`.
+7. Runs any configured ablation scenarios.
+8. Writes outputs to `output_dir/`: per-component CSV + GeoTIFF + Parquet
    (and VTK for 3D), optional paired Bayesian posterior-probability blocks,
    `alpha_provenance.json`, and `manifest.json` (input/output SHA-256 hashes +
    config and implementation hashes + run id).
@@ -162,6 +201,7 @@ are summarized below.
 | `id_col` | required | Unique-id column on the wells file. |
 | `layer` | `null` | Sub-layer for GPKG sources. |
 | `label_columns` | required | Per-component label-column mapping (e.g. `{"heat": "heat_label", "reservoir": "reservoir_label"}`). |
+| `observation_models` | `{}` | Optional per-component likelihood. Omitted components are Bernoulli. A Gaussian component requires `family="gaussian"` and a positive `response_scale`. |
 | `min_wells_for_fit` | `4` | Minimum observed support required by the selected fit; insufficient support raises rather than silently changing models. |
 | `pu_mode` | `"off"` | `"off"`, `"naive_pseudo_absence"`, or modern non-negative PU risk estimation (`"nnpu"`; sequential outcome path only). |
 | `pu_class_prior` | `null` | Externally identified population prevalence required by `pu_mode="nnpu"`; a scalar or per-component mapping with values strictly inside `(0, 1)`. |
@@ -212,7 +252,7 @@ does not produce replicated uncertainty draws.
 | `exclude_layers` | `[]` | Blacklist; alpha layers are auto-added. |
 | `sparse_binary_threshold` | `0.90` | Reject layers where ≥90% of cells share one value. |
 | `coordinate_blacklist` | sensible default | Coordinate-like column names that must never enter the design matrix. |
-| `standardization` | `"training"` | Fit transformations on observed training rows; `"prediction_support"` is an explicit prior-predictive option when no outcome-trained transformation exists. |
+| `standardization` | `"observed_labels"` | Fit transformations on observed training rows; `"prediction_support"` is an explicit prior-predictive option when no outcome-trained transformation exists. |
 
 ### `spatial_field`
 
@@ -246,6 +286,17 @@ remaining options configure the deprecated sequential spatial smoother.
 | `gblk_bayesian.spatial_sd_tail_probability` | `0.05` | Prior probability above `spatial_sd_u`. |
 | `gblk_bayesian.dirichlet_concentration` | `1.5` | Symmetric Paige level-weight concentration. |
 | `gblk_bayesian.kleiber_r0`, `kleiber_r1` | `null` | Required frozen profile parameters for a bivariate fit. |
+| `predictive_stacking.enabled` | `false` | Select a component-specific mixture of the configured event prior and full Bayesian update by buffered or blocked out-of-fold logarithmic score. Zero retains the prior and one retains the full update. |
+
+Predictive stacking uses the spatial split declared in `cross_validation` and
+never scores in-sample predictions. For Gaussian heat, the fit uses continuous
+temperature and its sampled residual precision, while the stacking score uses
+the configured observed threshold event, the quantity passed to component
+combination. The selected weight and the prior, full, and selected held-out log
+scores are recorded in component diagnostics.
+Incremental posterior-block storage is not currently available with Gaussian
+components or predictive stacking; those combinations fail during config
+validation instead of silently omitting either operation.
 
 ### `calibration`
 

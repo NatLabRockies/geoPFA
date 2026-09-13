@@ -195,6 +195,9 @@ def test_thermal_exceedance_with_uncertainty_raster_returns_smooth_prob(
     result = build_alpha_c(comp, cfg, grid_gdf=grid_gdf)
     # P(T>200) = 0.5 → logit(0.5) = 0 (within rescale window)
     assert np.allclose(result.grid_offset, 0.0, atol=1e-3)
+    np.testing.assert_allclose(result.latent_mean, 200.0)
+    np.testing.assert_allclose(result.latent_sd, 50.0)
+    assert result.event_threshold == pytest.approx(200.0)
 
 
 def test_thermal_exceedance_missing_raster_raises(tmp_path: Path) -> None:
@@ -361,6 +364,12 @@ def test_thermal_layer_exceedance_preserves_voxel_depth_variation() -> None:
     result = build_alpha_c(comp, cfg, grid_gdf=grid_gdf)
 
     probability = 1.0 / (1.0 + np.exp(-result.grid_offset))
+    np.testing.assert_allclose(
+        result.latent_mean,
+        thermal["value_interpolated"].to_numpy(dtype=float),
+    )
+    np.testing.assert_allclose(result.latent_sd, 25.0)
+    assert result.event_threshold == pytest.approx(400.0)
     assert result.excluded_layer_names == {"prior_layer_a"}
     assert np.ptp(probability) > 0.9
     for level in np.unique(z):

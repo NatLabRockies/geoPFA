@@ -299,6 +299,27 @@ def test_p_gblk_joint_and_evidence_only_use_partial_evidence_rows(
     ):
         gblk_runner._prepare_joint_evidence(unsupported, cfg)  # noqa: SLF001
 
+    no_evidence_sparse = replace(
+        assembled,
+        observed_mask=np.array(
+            [
+                [True],
+                [True],
+                [True],
+                [False],
+                [False],
+                [False],
+                [False],
+                [False],
+            ]
+        ),
+        evidence={"component_a": np.zeros((8, 0))},
+        grid_evidence={"component_a": np.zeros((2, 0))},
+        layer_names={"component_a": []},
+    )
+    with pytest.raises(GEOPFAValueError, match="fewer than 4 observed labels"):
+        gblk_runner._prepare_joint_evidence(no_evidence_sparse, cfg)  # noqa: SLF001
+
     train_mask = np.array([True] * 6 + [False] * 2)
     test_mask = ~train_mask
     gblk_runner._cv_evidence_only_offsets(  # noqa: SLF001

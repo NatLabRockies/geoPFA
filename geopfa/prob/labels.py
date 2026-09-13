@@ -68,6 +68,39 @@ def _coerce_binary_labels(
     return pd.Series(values, index=series.index, name=series.name, dtype=float)
 
 
+def _coerce_continuous_labels(
+    series: pd.Series, *, label_column: str
+) -> pd.Series:
+    """Return finite continuous responses while preserving missing values."""
+    numeric = pd.to_numeric(series, errors="coerce")
+    values = numeric.to_numpy(dtype=float, na_value=np.nan)
+    observed = series.notna().to_numpy(dtype=bool)
+    nonnumeric = observed & np.isnan(values)
+    if np.any(nonnumeric):
+        raise ValueError(
+            f"label column {label_column!r} contains "
+            f"{int(np.sum(nonnumeric))} nonnumeric observed value(s)"
+        )
+    nonfinite = observed & ~np.isfinite(values)
+    if np.any(nonfinite):
+        raise ValueError(
+            f"label column {label_column!r} contains "
+            f"{int(np.sum(nonfinite))} non-finite observed value(s)"
+        )
+    return pd.Series(values, index=series.index, name=series.name, dtype=float)
+
+
+def _coerce_component_labels(
+    series: pd.Series, *, label_column: str, family: str
+) -> pd.Series:
+    """Validate one response column against its configured likelihood."""
+    if family == "bernoulli":
+        return _coerce_binary_labels(series, label_column=label_column)
+    if family == "gaussian":
+        return _coerce_continuous_labels(series, label_column=label_column)
+    raise ValueError(f"unsupported observation family {family!r}")
+
+
 def _validate_columns(gdf: gpd.GeoDataFrame, cfg: LabelsConfig) -> None:
     if cfg.id_col not in gdf.columns:
         raise KeyError(
@@ -79,8 +112,10 @@ def _validate_columns(gdf: gpd.GeoDataFrame, cfg: LabelsConfig) -> None:
                 f"labelled-well file missing label column {label_col!r} "
                 f"for component {component!r}",
             )
-        gdf[label_col] = _coerce_binary_labels(
-            gdf[label_col], label_column=label_col
+        gdf[label_col] = _coerce_component_labels(
+            gdf[label_col],
+            label_column=label_col,
+            family=cfg.observation_model_for(component).family,
         )
 
 
@@ -181,8 +216,10 @@ def component_labels(loaded: LoadedLabels, component: str) -> gpd.GeoDataFrame:
             f"labels.label_columns: {list(loaded.config.label_columns)}",
         )
     label_col = loaded.config.label_columns[component]
-    series = _coerce_binary_labels(
-        loaded.gdf[label_col], label_column=label_col
+    series = _coerce_component_labels(
+        loaded.gdf[label_col],
+        label_column=label_col,
+        family=loaded.config.observation_model_for(component).family,
     )
     mask = np.isfinite(series.to_numpy(dtype=float))
     subset = loaded.gdf.loc[mask].copy()
