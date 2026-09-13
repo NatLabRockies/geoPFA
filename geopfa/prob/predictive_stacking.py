@@ -18,10 +18,13 @@ class PredictiveStackingResult:
     """Weight and proper-score diagnostics for one component."""
 
     weight: float
-    prior_log_score: float
-    full_log_score: float
-    selected_log_score: float
+    prior_log_score: float | None
+    full_log_score: float | None
+    selected_log_score: float | None
     n_observations: int
+    n_wells: int | None
+    status: str
+    validation_depth_m: float | None = None
 
 
 def _validated_binary_inputs(
@@ -109,6 +112,8 @@ def select_predictive_stacking_weight(
         full_log_score=objective(1.0),
         selected_log_score=selected_score,
         n_observations=int(y.size),
+        n_wells=None,
+        status="estimated",
     )
 
 

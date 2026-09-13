@@ -31,6 +31,7 @@ def test_stacking_selects_update_when_it_improves_proper_score() -> None:
     result = select_predictive_stacking_weight(outcomes, prior, full)
 
     assert result.weight == pytest.approx(1.0)
+    assert result.status == "estimated"
     assert result.selected_log_score == pytest.approx(result.full_log_score)
     assert result.full_log_score < result.prior_log_score
 

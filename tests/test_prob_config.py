@@ -227,6 +227,62 @@ def test_predictive_stacking_config_roundtrips() -> None:
     }
 
 
+def test_predictive_stacking_target_depth_roundtrips() -> None:
+    raw = _minimal_config_dict()
+    raw["dimensions"] = "3d"
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+        "predictive_stacking": {
+            "enabled": True,
+            "validation_depths_m": {"heat": 3_000.0},
+        },
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.inference.predictive_stacking.validation_depths_m == {
+        "heat": 3_000.0
+    }
+    assert cfg.to_dict()["inference"]["predictive_stacking"] == {
+        "enabled": True,
+        "validation_depths_m": {"heat": 3_000.0},
+    }
+
+
+def test_predictive_stacking_target_depth_requires_3d() -> None:
+    raw = _minimal_config_dict()
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+        "predictive_stacking": {
+            "enabled": True,
+            "validation_depths_m": {"heat": 3_000.0},
+        },
+    }
+
+    with pytest.raises(ValueError, match="validation_depths_m.*3d"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_predictive_stacking_target_depth_rejects_unknown_component() -> None:
+    raw = _minimal_config_dict()
+    raw["dimensions"] = "3d"
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+        "predictive_stacking": {
+            "enabled": True,
+            "validation_depths_m": {"not_a_component": 3_000.0},
+        },
+    }
+
+    with pytest.raises(
+        ValueError, match="validation_depths_m.*not_a_component"
+    ):
+        ProbabilisticConfig.from_dict(raw)
+
+
 def test_predictive_stacking_requires_bayesian_gblk() -> None:
     raw = _minimal_config_dict()
     raw["inference"] = {"predictive_stacking": {"enabled": True}}

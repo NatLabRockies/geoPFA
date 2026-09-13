@@ -50,8 +50,10 @@ from geopfa.prob.gblk_backend import (  # noqa: E402
 )
 from geopfa.prob.gblk_runner import (  # noqa: E402
     _gaussian_predictive_exceedance_draws,
+    _select_component_stacking,
     _spawn_child_seeds,
     _stacking_fold_config,
+    _stacking_validation_mask,
     run_gblk_probabilistic,
 )
 from geopfa.prob.predictive_stacking import (  # noqa: E402
@@ -111,6 +113,68 @@ def test_gaussian_event_draws_remain_open_probabilities() -> None:
     )
 
     assert np.all((probability > 0.0) & (probability < 1.0))
+
+
+def test_target_depth_stacking_retains_prior_with_too_few_wells() -> None:
+    selection = _select_component_stacking(
+        outcomes=np.array([0.0, 1.0]),
+        prior_probability=np.array([0.2, 0.8]),
+        full_probability=np.array([0.8, 0.2]),
+        validation_coordinates=np.array([[1.0, 2.0], [1.0, 2.0]]),
+        minimum_wells=2,
+    )
+
+    assert selection.weight == 0.0
+    assert selection.selected_log_score == selection.prior_log_score
+    assert selection.n_observations == 2
+    assert selection.n_wells == 1
+    assert selection.status == "prior_retained_insufficient_validation_wells"
+
+
+def test_target_depth_stacking_retains_prior_without_validation_rows() -> None:
+    selection = _select_component_stacking(
+        outcomes=np.array([]),
+        prior_probability=np.array([]),
+        full_probability=np.array([]),
+        validation_coordinates=np.empty((0, 2)),
+        minimum_wells=2,
+    )
+
+    assert selection.weight == 0.0
+    assert selection.prior_log_score is None
+    assert selection.full_log_score is None
+    assert selection.selected_log_score is None
+    assert selection.n_observations == 0
+    assert selection.n_wells == 0
+    assert selection.status == "prior_retained_no_validation_wells"
+
+
+def test_stacking_validation_depth_is_component_specific() -> None:
+    observed = np.array([True, True, True, False])
+    coordinates = np.array(
+        [
+            [0.0, 0.0, -3_000.0],
+            [1.0, 0.0, -4_000.0],
+            [2.0, 0.0, -4_000.0],
+            [3.0, 0.0, -4_000.0],
+        ]
+    )
+
+    heat = _stacking_validation_mask(
+        observed_mask=observed,
+        coordinates=coordinates,
+        component_name="heat",
+        validation_depths_m={"heat": 4_000.0},
+    )
+    hydraulic = _stacking_validation_mask(
+        observed_mask=observed,
+        coordinates=coordinates,
+        component_name="hydraulic",
+        validation_depths_m={"heat": 4_000.0},
+    )
+
+    np.testing.assert_array_equal(heat, [False, True, True, False])
+    np.testing.assert_array_equal(hydraulic, observed)
 
 
 def test_bayesian_projection_blocks_equal_one_shot_projection() -> None:
@@ -531,8 +595,12 @@ def test_componentwise_stacking_shrinks_only_the_harmful_update(
     def fake_stacking(groups, *_args, **_kwargs):
         stacking_inputs["groups"] = groups
         return {
-            "component_a": PredictiveStackingResult(0.0, 0.2, 0.8, 0.2, 20),
-            "component_b": PredictiveStackingResult(1.0, 0.8, 0.2, 0.2, 20),
+            "component_a": PredictiveStackingResult(
+                0.0, 0.2, 0.8, 0.2, 20, 20, "estimated"
+            ),
+            "component_b": PredictiveStackingResult(
+                1.0, 0.8, 0.2, 0.2, 20, 20, "estimated"
+            ),
         }
 
     monkeypatch.setattr(

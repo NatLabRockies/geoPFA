@@ -78,7 +78,8 @@ probability map.
   the sequential backend; GBLK reports raw out-of-fold diagnostics explicitly.
 - Adaptive component updates — optional predictive stacking uses buffered or
   blocked out-of-fold logarithmic score to mix each Bayesian update with its
-  configured event prior before component combination.
+  configured event prior before component combination. Three-dimensional
+  workflows can align each component's score with a configured target depth.
 - GBLK inference — same-family multivariate Bernoulli-logit or Gaussian-identity
   fits via `latticekrigx.glk` (default), with a conditional plug-in
   co-occurrence surface. The sole Bayesian

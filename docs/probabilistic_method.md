@@ -137,7 +137,10 @@ The whole pipeline is driven by a single JSON config. Drop a `probabilistic` blo
     "inference": {
       "backend": "gblk",
       "gblk_bayesian": {"enabled": true},
-      "predictive_stacking": {"enabled": true}
+      "predictive_stacking": {
+        "enabled": true,
+        "validation_depths_m": {"heat": 3000.0}
+      }
     },
 
     "calibration": { "method": "none" },
@@ -287,13 +290,17 @@ remaining options configure the deprecated sequential spatial smoother.
 | `gblk_bayesian.dirichlet_concentration` | `1.5` | Symmetric Paige level-weight concentration. |
 | `gblk_bayesian.kleiber_r0`, `kleiber_r1` | `null` | Required frozen profile parameters for a bivariate fit. |
 | `predictive_stacking.enabled` | `false` | Select a component-specific mixture of the configured event prior and full Bayesian update by buffered or blocked out-of-fold logarithmic score. Zero retains the prior and one retains the full update. |
+| `predictive_stacking.validation_depths_m` | `{}` | In a 3-D analysis, optionally map component names to positive-down target depths. Each mapped component selects its stacking weight only from held-out observations at that depth. If fewer than `labels.min_wells_for_fit` distinct wells occur there, that component retains its prior. Unmapped components use all of their held-out observations. |
 
 Predictive stacking uses the spatial split declared in `cross_validation` and
 never scores in-sample predictions. For Gaussian heat, the fit uses continuous
 temperature and its sampled residual precision, while the stacking score uses
 the configured observed threshold event, the quantity passed to component
 combination. The selected weight and the prior, full, and selected held-out log
-scores are recorded in component diagnostics.
+scores are recorded in component diagnostics. A component-specific validation
+depth aligns this model-selection step with a target-depth map while the
+Gaussian fit can still use complete temperature profiles and other components
+retain their appropriate validation support.
 Incremental posterior-block storage is not currently available with Gaussian
 components or predictive stacking; those combinations fail during config
 validation instead of silently omitting either operation.

@@ -93,6 +93,93 @@ def _stacking_fold_config(cfg: ProbabilisticConfig) -> ProbabilisticConfig:
     )
 
 
+def _select_component_stacking(
+    *,
+    outcomes: np.ndarray,
+    prior_probability: np.ndarray,
+    full_probability: np.ndarray,
+    validation_coordinates: np.ndarray,
+    minimum_wells: int,
+) -> PredictiveStackingResult:
+    """Select an update weight, retaining the prior under weak validation."""
+    outcome_values = np.asarray(outcomes)
+    prior_values = np.asarray(prior_probability)
+    full_values = np.asarray(full_probability)
+    coordinates = np.asarray(validation_coordinates, dtype=np.float64)
+    if (
+        coordinates.ndim != _TWO_DIMENSIONS
+        or outcome_values.ndim != 1
+        or coordinates.shape[0] != outcome_values.size
+        or coordinates.shape[1] == 0
+        or not np.all(np.isfinite(coordinates))
+    ):
+        raise ValueError(
+            "validation_coordinates must be a finite matrix aligned to outcomes"
+        )
+    if minimum_wells < 1:
+        raise ValueError("minimum_wells must be positive")
+    n_wells = int(np.unique(coordinates, axis=0).shape[0])
+    if outcome_values.size == 0:
+        if prior_values.shape != (0,) or full_values.shape != (0,):
+            raise ValueError(
+                "probability arrays must be empty when outcomes are empty"
+            )
+        return PredictiveStackingResult(
+            weight=0.0,
+            prior_log_score=None,
+            full_log_score=None,
+            selected_log_score=None,
+            n_observations=0,
+            n_wells=0,
+            status="prior_retained_no_validation_wells",
+        )
+    selection = replace(
+        select_predictive_stacking_weight(
+            outcome_values,
+            prior_values,
+            full_values,
+        ),
+        n_wells=n_wells,
+    )
+    if n_wells >= minimum_wells:
+        return selection
+    return replace(
+        selection,
+        weight=0.0,
+        selected_log_score=selection.prior_log_score,
+        status="prior_retained_insufficient_validation_wells",
+    )
+
+
+def _stacking_validation_mask(
+    *,
+    observed_mask: np.ndarray,
+    coordinates: np.ndarray,
+    component_name: str,
+    validation_depths_m: Mapping[str, float],
+) -> np.ndarray:
+    """Restrict one component's validation rows to its declared depth."""
+    observed = np.asarray(observed_mask, dtype=bool)
+    coords = np.asarray(coordinates, dtype=np.float64)
+    if observed.ndim != 1 or coords.ndim != _TWO_DIMENSIONS:
+        raise ValueError("observed_mask and coordinates must be row arrays")
+    if coords.shape[0] != observed.size or not np.all(np.isfinite(coords)):
+        raise ValueError(
+            "coordinates must be finite and aligned to observed_mask"
+        )
+    validation_depth = validation_depths_m.get(component_name)
+    if validation_depth is None:
+        return observed.copy()
+    if coords.shape[1] != _THREE_DIMENSIONS:
+        raise ValueError("target-depth stacking requires 3-D coordinates")
+    return observed & np.isclose(
+        -coords[:, 2],
+        validation_depth,
+        rtol=0.0,
+        atol=1e-6,
+    )
+
+
 def _validate_gblk_config(cfg: ProbabilisticConfig) -> None:
     """Require a valid config that explicitly selects the GBLK backend."""
     cfg.validate_raise()
@@ -1078,7 +1165,17 @@ def _estimate_predictive_stacking(
             assembled, family, cfg, nc=nc, a_wght=a_wght
         )
         for q_idx, name in enumerate(assembled.component_names):
-            observed = assembled.observed_mask[:, q_idx]
+            validation_depth = (
+                cfg.inference.predictive_stacking.validation_depths_m.get(name)
+            )
+            observed = _stacking_validation_mask(
+                observed_mask=assembled.observed_mask[:, q_idx],
+                coordinates=assembled.well_coords,
+                component_name=name,
+                validation_depths_m=(
+                    cfg.inference.predictive_stacking.validation_depths_m
+                ),
+            )
             if family == "bernoulli":
                 outcomes = assembled.y[observed, q_idx]
             else:
@@ -1093,10 +1190,17 @@ def _estimate_predictive_stacking(
                 raise RuntimeError(
                     f"component {name!r} has missing out-of-fold predictions"
                 )
-            results[name] = select_predictive_stacking_weight(
-                outcomes,
-                assembled.prior_probability_well[observed, q_idx],
-                full_probability[observed, q_idx],
+            results[name] = replace(
+                _select_component_stacking(
+                    outcomes=outcomes,
+                    prior_probability=assembled.prior_probability_well[
+                        observed, q_idx
+                    ],
+                    full_probability=full_probability[observed, q_idx],
+                    validation_coordinates=assembled.well_coords[observed, :2],
+                    minimum_wells=cfg.labels.min_wells_for_fit,
+                ),
+                validation_depth_m=validation_depth,
             )
     return results
 
@@ -1140,7 +1244,12 @@ def _apply_componentwise_stacking(
                     selection.selected_log_score
                 ),
                 "predictive_stacking_n": selection.n_observations,
+                "predictive_stacking_n_wells": selection.n_wells,
+                "predictive_stacking_status": selection.status,
                 "predictive_stacking_validation": "blocked_out_of_fold",
+                "predictive_stacking_validation_depth_m": (
+                    selection.validation_depth_m
+                ),
             }
             components[name] = ComponentProbability(
                 probability=probability,

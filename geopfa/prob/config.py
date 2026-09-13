@@ -1429,6 +1429,33 @@ class PredictiveStackingConfig:
     """Componentwise shrinkage selected from blocked predictive risk."""
 
     enabled: bool = False
+    validation_depths_m: Mapping[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Reject invalid component-specific target depths."""
+        if not isinstance(self.validation_depths_m, Mapping):
+            raise TypeError(
+                "inference.predictive_stacking.validation_depths_m must be "
+                "an object"
+            )
+        for component, depth in self.validation_depths_m.items():
+            if not isinstance(component, str) or not component:
+                raise TypeError(
+                    "inference.predictive_stacking.validation_depths_m keys "
+                    "must be non-empty component names"
+                )
+            numeric_depth = _require_finite_real_value(
+                depth,
+                context=(
+                    "inference.predictive_stacking.validation_depths_m."
+                    f"{component}"
+                ),
+            )
+            if numeric_depth < 0.0:
+                raise GEOPFAValueError(
+                    "inference.predictive_stacking.validation_depths_m values "
+                    "must be non-negative"
+                )
 
     @classmethod
     def from_dict(
@@ -1438,20 +1465,41 @@ class PredictiveStackingConfig:
         if raw is None:
             return cls()
         _reject_unknown_keys(
-            raw, {"enabled"}, context="inference.predictive_stacking"
+            raw,
+            {"enabled", "validation_depths_m"},
+            context="inference.predictive_stacking",
         )
+        raw_depths = raw.get("validation_depths_m", {})
+        if not isinstance(raw_depths, Mapping):
+            raise TypeError(
+                "inference.predictive_stacking.validation_depths_m must be "
+                "an object"
+            )
         return cls(
             enabled=_require_json_bool(
                 raw,
                 "enabled",
                 False,
                 context="inference.predictive_stacking",
-            )
+            ),
+            validation_depths_m={
+                component: _require_finite_real_value(
+                    depth,
+                    context=(
+                        "inference.predictive_stacking.validation_depths_m."
+                        f"{component}"
+                    ),
+                )
+                for component, depth in raw_depths.items()
+            },
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {"enabled": self.enabled}
+        output: dict[str, Any] = {"enabled": self.enabled}
+        if self.validation_depths_m:
+            output["validation_depths_m"] = dict(self.validation_depths_m)
+        return output
 
 
 @dataclass(frozen=True)
@@ -2003,6 +2051,23 @@ class ProbabilisticConfig:
             raise ValueError(
                 "inference.predictive_stacking.enabled=True requires "
                 "Bayesian GBLK inference"
+            )
+        stacking_depths = (
+            self.inference.predictive_stacking.validation_depths_m
+        )
+        if stacking_depths and self.dimensions != "3d":
+            raise ValueError(
+                "inference.predictive_stacking.validation_depths_m requires "
+                "dimensions='3d'"
+            )
+        unknown_stacking_depths = set(stacking_depths) - set(
+            self.labels.label_columns
+        )
+        if unknown_stacking_depths:
+            raise ValueError(
+                "inference.predictive_stacking.validation_depths_m contains "
+                "unknown component(s): "
+                + ", ".join(sorted(unknown_stacking_depths))
             )
         if self.spatial_field.enabled and self.spatial_field.backend == "none":
             raise ValueError(
