@@ -299,6 +299,36 @@ than ignored.
 | `sparse_binary_threshold` | `0.90` | Reject layers where ≥90% of cells share one value. |
 | `coordinate_blacklist` | sensible default | Coordinate-like column names that must never enter the design matrix. |
 | `standardization` | `"observed_labels"` | Fit transformations on observed training rows; `"prediction_support"` is an explicit prior-predictive option when no outcome-trained transformation exists. |
+| `feature_expansions` | `{}` | Optional component-keyed quadratic and interaction terms. Each component may set `degree` to 1 or 2, enable pairwise evidence interactions, add selected model-coordinate axes, and interact evidence with those axes. |
+
+Feature expansions are explicit because a quadratic design can grow quickly.
+For example, the following adds squared evidence terms and pairwise evidence
+interactions to `hydraulic`, while `heat` receives a quadratic vertical trend
+and evidence-by-Z interactions:
+
+```json
+{
+  "feature_expansions": {
+    "hydraulic": {
+      "degree": 2,
+      "include_pairwise_interactions": true
+    },
+    "heat": {
+      "degree": 2,
+      "coordinate_axes": ["z"],
+      "include_evidence_coordinate_interactions": true
+    }
+  }
+}
+```
+
+Generated terms enter the same Gaussian coefficient-prior contract as their
+source layers. They are standardized inside each training fold, so held-out
+outcomes and held-out feature distributions do not define the fitted scaling.
+Coordinate terms use the Cartesian model coordinates (`x`, `y`, and, in 3-D,
+`z`); `z` is not silently interpreted as positive-down scientific depth.
+Generated feature names are recorded in diagnostics and can receive explicit
+regularization overrides.
 
 ### `spatial_field`
 

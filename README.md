@@ -72,6 +72,10 @@ probability map.
   Sparse precision reduces coefficient-side
   cost, but current joint training materializes the assembled design;
   prediction streams only on code paths that explicitly expose batching.
+- Configured fixed-effect expansion — component-specific squared evidence,
+  pairwise evidence interactions, coordinate trends, and evidence-coordinate
+  interactions use the same fold-local standardization and coefficient-prior
+  contract as linear evidence. No expansion is enabled by default.
 - Block-CV diagnostics — spatially blocked Brier score, Brier skill score,
   and reliability summaries. Post-hoc calibration is currently available on
   the sequential backend; GBLK reports raw out-of-fold diagnostics explicitly.

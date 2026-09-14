@@ -11,6 +11,7 @@ from shapely.geometry import Point
 from geopfa.prob.alpha import AlphaCResult
 from geopfa.prob.config import (
     EvidenceConfig,
+    EvidenceFeatureExpansionConfig,
     LabelsConfig,
     ObservationModelConfig,
 )
@@ -197,6 +198,91 @@ def test_p_gblk_assemble_honors_evidence_layer_allowlist() -> None:
 
     assert result.layer_names == {"comp_a": ["layer_0_comp_a"]}
     assert result.evidence["comp_a"].shape[1] == 1
+
+
+def test_p_gblk_assemble_expands_component_features_from_config() -> None:
+    result, _ = _assemble(
+        components=["comp_a"],
+        n_layers=2,
+        evidence_config=EvidenceConfig(
+            feature_expansions={
+                "comp_a": EvidenceFeatureExpansionConfig(
+                    degree=2,
+                    include_pairwise_interactions=True,
+                    coordinate_axes=("x",),
+                    include_evidence_coordinate_interactions=True,
+                )
+            }
+        ),
+    )
+
+    names = result.layer_names["comp_a"]
+    assert names == [
+        "layer_0_comp_a",
+        "layer_1_comp_a",
+        "square(layer_0_comp_a)",
+        "square(layer_1_comp_a)",
+        "interaction(layer_0_comp_a,layer_1_comp_a)",
+        "coordinate(x)",
+        "square(coordinate(x))",
+        "interaction(layer_0_comp_a,coordinate(x))",
+        "interaction(layer_1_comp_a,coordinate(x))",
+    ]
+    assert result.evidence["comp_a"].shape == (result.n, len(names))
+    assert result.grid_evidence["comp_a"].shape == (
+        result.n_grid,
+        len(names),
+    )
+    np.testing.assert_allclose(
+        result.evidence["comp_a"][:, 2],
+        np.square(result.evidence["comp_a"][:, 0]),
+    )
+    np.testing.assert_allclose(
+        result.evidence["comp_a"][:, 4],
+        result.evidence["comp_a"][:, 0] * result.evidence["comp_a"][:, 1],
+    )
+    np.testing.assert_allclose(
+        result.evidence["comp_a"][:, 7],
+        result.evidence["comp_a"][:, 0] * result.well_coords[:, 0],
+    )
+
+
+def test_p_gblk_assemble_rejects_feature_name_collision() -> None:
+    result, meta = _assemble(components=["comp_a"], n_layers=1)
+    values = result.grid_evidence["comp_a"][:, 0]
+    grid = meta["grid_gdf"]
+    pfa = _make_pfa(
+        ["comp_a"],
+        grid,
+        n_layers=0,
+        rng=np.random.default_rng(11),
+    )
+    model = grid.copy()
+    model["value_interpolated"] = values
+    layers = pfa["criteria"]["geologic"]["components"]["comp_a"]["layers"]
+    layers["coordinate(x)"] = {
+        "model": model,
+        "model_data_col": "value_interpolated",
+    }
+    adapter = PFAGridAdapter(pfa, criteria="geologic", dimensions="2d")
+    loaded = LoadedLabels(
+        gdf=meta["wells_gdf"],
+        config=_make_labels_config(["comp_a"]),
+    )
+
+    with pytest.raises(ValueError, match="generated feature name"):
+        assemble_gblk_inputs(
+            adapter,
+            loaded,
+            meta["alpha"],
+            evidence_config=EvidenceConfig(
+                feature_expansions={
+                    "comp_a": EvidenceFeatureExpansionConfig(
+                        coordinate_axes=("x",)
+                    )
+                }
+            ),
+        )
 
 
 def test_p_gblk_assemble_applies_configured_nonaffine_transformation() -> None:

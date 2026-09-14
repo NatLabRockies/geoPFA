@@ -13,6 +13,7 @@ from geopfa.prob.config import (
     CombinationConfig,
     CrossValidationConfig,
     EvidenceConfig,
+    EvidenceFeatureExpansionConfig,
     GBLKBayesianConfig,
     GridConfig,
     InferenceConfig,
@@ -71,6 +72,73 @@ def test_minimal_config_parses_with_defaults() -> None:
     assert cfg.outputs.probability_rasters is True
     assert cfg.outputs.posterior_draw_blocks is False
     assert cfg.outputs.posterior_draw_block_size == 20
+
+
+def test_component_feature_expansion_roundtrips() -> None:
+    raw = _minimal_config_dict()
+    raw["dimensions"] = "3d"
+    raw["evidence"] = {
+        "feature_expansions": {
+            "heat": {
+                "degree": 2,
+                "include_pairwise_interactions": True,
+                "coordinate_axes": ["z"],
+                "include_evidence_coordinate_interactions": True,
+            },
+            "reservoir": {"degree": 2},
+        }
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.evidence.feature_expansions == {
+        "heat": EvidenceFeatureExpansionConfig(
+            degree=2,
+            include_pairwise_interactions=True,
+            coordinate_axes=("z",),
+            include_evidence_coordinate_interactions=True,
+        ),
+        "reservoir": EvidenceFeatureExpansionConfig(degree=2),
+    }
+    assert (
+        cfg.to_dict()["evidence"]["feature_expansions"]
+        == raw["evidence"]["feature_expansions"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("dimensions", "expansion", "message"),
+    [
+        ("2d", {"degree": 3}, "degree"),
+        ("2d", {"coordinate_axes": ["z"]}, "coordinate axis.*z"),
+        (
+            "3d",
+            {"include_evidence_coordinate_interactions": True},
+            "coordinate_axes",
+        ),
+    ],
+)
+def test_component_feature_expansion_rejects_invalid_contracts(
+    dimensions: str,
+    expansion: dict[str, object],
+    message: str,
+) -> None:
+    raw = _minimal_config_dict()
+    raw["dimensions"] = dimensions
+    raw["evidence"] = {"feature_expansions": {"heat": expansion}}
+
+    with pytest.raises(ValueError, match=message):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_component_feature_expansion_rejects_unknown_component() -> None:
+    raw = _minimal_config_dict()
+    raw["evidence"] = {
+        "feature_expansions": {"not_a_component": {"degree": 2}}
+    }
+
+    with pytest.raises(ValueError, match="unknown component"):
+        ProbabilisticConfig.from_dict(raw)
 
 
 @pytest.mark.parametrize("reserved_name", ["combined", "Combined"])

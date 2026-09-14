@@ -1051,6 +1051,114 @@ class RegularizationConfig:
 
 
 @dataclass(frozen=True)
+class EvidenceFeatureExpansionConfig:
+    """Optional fixed-effect expansion for one observed component.
+
+    The expansion is applied to raw evidence and model coordinates before the
+    existing fold-local standardization. Degree two adds squared terms.
+    Pairwise evidence and evidence-coordinate interactions are separate,
+    explicit choices so sparse studies do not silently acquire a large design.
+    """
+
+    degree: int = 1
+    include_pairwise_interactions: bool = False
+    coordinate_axes: tuple[str, ...] = ()
+    include_evidence_coordinate_interactions: bool = False
+
+    def __post_init__(self) -> None:
+        """Reject unsupported degrees, axes, and inactive interactions."""
+        if isinstance(self.degree, bool) or self.degree not in {1, 2}:
+            raise ValueError(
+                "evidence.feature_expansions degree must be 1 or 2"
+            )
+        allowed_axes = {"x", "y", "z"}
+        if not isinstance(self.coordinate_axes, tuple) or any(
+            not isinstance(axis, str) or axis not in allowed_axes
+            for axis in self.coordinate_axes
+        ):
+            raise ValueError(
+                "evidence.feature_expansions coordinate_axes must be a tuple "
+                "containing only 'x', 'y', or 'z'"
+            )
+        if len(set(self.coordinate_axes)) != len(self.coordinate_axes):
+            raise ValueError(
+                "evidence.feature_expansions coordinate_axes must not contain "
+                "duplicates"
+            )
+        if (
+            self.include_evidence_coordinate_interactions
+            and not self.coordinate_axes
+        ):
+            raise ValueError(
+                "evidence.feature_expansions coordinate_axes are required "
+                "when include_evidence_coordinate_interactions is true"
+            )
+
+    @classmethod
+    def from_dict(
+        cls,
+        raw: Mapping[str, Any],
+        component_name: str,
+    ) -> EvidenceFeatureExpansionConfig:
+        """Build one component expansion from a parsed JSON mapping."""
+        context = f"evidence.feature_expansions.{component_name}"
+        _reject_unknown_keys(
+            raw,
+            {
+                "degree",
+                "include_pairwise_interactions",
+                "coordinate_axes",
+                "include_evidence_coordinate_interactions",
+            },
+            context=context,
+        )
+        axes = _require_json_string_array(
+            raw,
+            "coordinate_axes",
+            (),
+            context=context,
+        )
+        if axes is None:  # pragma: no cover - helper contract
+            raise RuntimeError(
+                "coordinate_axes parser returned an invalid value"
+            )
+        return cls(
+            degree=_require_json_integer(
+                raw,
+                "degree",
+                1,
+                context=context,
+            ),
+            include_pairwise_interactions=_require_json_bool(
+                raw,
+                "include_pairwise_interactions",
+                False,
+                context=context,
+            ),
+            coordinate_axes=axes,
+            include_evidence_coordinate_interactions=_require_json_bool(
+                raw,
+                "include_evidence_coordinate_interactions",
+                False,
+                context=context,
+            ),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return the compact user-visible representation."""
+        payload: dict[str, Any] = {}
+        if self.degree != 1:
+            payload["degree"] = self.degree
+        if self.include_pairwise_interactions:
+            payload["include_pairwise_interactions"] = True
+        if self.coordinate_axes:
+            payload["coordinate_axes"] = list(self.coordinate_axes)
+        if self.include_evidence_coordinate_interactions:
+            payload["include_evidence_coordinate_interactions"] = True
+        return payload
+
+
+@dataclass(frozen=True)
 class EvidenceConfig:
     """beta_ck evidence-regression configuration."""
 
@@ -1062,6 +1170,9 @@ class EvidenceConfig:
     sparse_binary_threshold: float = 0.90
     coordinate_blacklist: tuple[str, ...] = DEFAULT_COORD_BLACKLIST
     standardization: str = "observed_labels"
+    feature_expansions: Mapping[str, EvidenceFeatureExpansionConfig] = field(
+        default_factory=dict
+    )
 
     def __post_init__(self) -> None:
         """Reject ambiguous layer selectors for programmatic callers."""
@@ -1089,6 +1200,16 @@ class EvidenceConfig:
                 raise ValueError(
                     f"evidence.{name} must not contain duplicates"
                 )
+        if not isinstance(self.feature_expansions, Mapping) or any(
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(expansion, EvidenceFeatureExpansionConfig)
+            for name, expansion in self.feature_expansions.items()
+        ):
+            raise TypeError(
+                "evidence.feature_expansions must map component names to "
+                "EvidenceFeatureExpansionConfig instances"
+            )
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any] | None) -> EvidenceConfig:
@@ -1104,6 +1225,7 @@ class EvidenceConfig:
                 "sparse_binary_threshold",
                 "coordinate_blacklist",
                 "standardization",
+                "feature_expansions",
             },
             context="evidence",
         )
@@ -1134,6 +1256,18 @@ class EvidenceConfig:
             raise RuntimeError(
                 "evidence.coordinate_blacklist parser returned an invalid value"
             )
+        feature_expansions = raw.get("feature_expansions", {})
+        if not isinstance(feature_expansions, Mapping):
+            raise TypeError(
+                "evidence.feature_expansions must be a JSON object"
+            )
+        if any(
+            not isinstance(expansion, Mapping)
+            for expansion in feature_expansions.values()
+        ):
+            raise TypeError(
+                "evidence.feature_expansions values must be JSON objects"
+            )
         return cls(
             regularization=RegularizationConfig.from_dict(
                 raw.get("regularization")
@@ -1153,11 +1287,18 @@ class EvidenceConfig:
                 "observed_labels",
                 context="evidence",
             ),
+            feature_expansions={
+                str(name): EvidenceFeatureExpansionConfig.from_dict(
+                    expansion,
+                    str(name),
+                )
+                for name, expansion in feature_expansions.items()
+            },
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
+        payload: dict[str, Any] = {
             "regularization": self.regularization.to_dict(),
             "include_layers": (
                 list(self.include_layers)
@@ -1169,6 +1310,12 @@ class EvidenceConfig:
             "coordinate_blacklist": list(self.coordinate_blacklist),
             "standardization": self.standardization,
         }
+        if self.feature_expansions:
+            payload["feature_expansions"] = {
+                name: expansion.to_dict()
+                for name, expansion in self.feature_expansions.items()
+            }
+        return payload
 
 
 @dataclass(frozen=True)
@@ -2322,6 +2469,37 @@ class ProbabilisticConfig:
                 "unknown component(s): "
                 + ", ".join(sorted(unknown_stacking_depths))
             )
+        unknown_expansions = set(self.evidence.feature_expansions) - set(
+            self.labels.label_columns
+        )
+        if unknown_expansions:
+            raise ValueError(
+                "evidence.feature_expansions contains unknown component(s): "
+                + ", ".join(sorted(unknown_expansions))
+            )
+        if self.dimensions != "3d":
+            invalid_z = [
+                name
+                for name, expansion in self.evidence.feature_expansions.items()
+                if "z" in expansion.coordinate_axes
+            ]
+            if invalid_z:
+                raise ValueError(
+                    "evidence.feature_expansions coordinate axis 'z' requires "
+                    "dimensions='3d' for component(s): "
+                    + ", ".join(sorted(invalid_z))
+                )
+        prior_only_expansions = [
+            name
+            for name in self.evidence.feature_expansions
+            if name in self.alpha and self.alpha[name].force_prior_predictive
+        ]
+        if prior_only_expansions:
+            raise ValueError(
+                "evidence.feature_expansions require an outcome-updated "
+                "component; force_prior_predictive is set for: "
+                + ", ".join(sorted(prior_only_expansions))
+            )
         if self.spatial_field.enabled and self.spatial_field.backend == "none":
             raise ValueError(
                 "spatial_field.enabled=True requires a spatial backend"
@@ -3101,6 +3279,7 @@ __all__ = [
     "CombinationConfig",
     "CrossValidationConfig",
     "EvidenceConfig",
+    "EvidenceFeatureExpansionConfig",
     "GBLKBayesianConfig",
     "GridConfig",
     "InferenceConfig",

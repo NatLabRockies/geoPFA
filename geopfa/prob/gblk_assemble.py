@@ -54,7 +54,11 @@ from scipy.special import expit
 from geopfa.exceptions import GEOPFAValueError
 from geopfa import transformation
 from geopfa.prob.alpha import AlphaCResult
-from geopfa.prob.config import EvidenceConfig, LabelsConfig
+from geopfa.prob.config import (
+    EvidenceConfig,
+    EvidenceFeatureExpansionConfig,
+    LabelsConfig,
+)
 from geopfa.prob.fitting import _is_sparse_binary
 from geopfa.prob.labels import LoadedLabels, _coerce_component_labels
 from geopfa.prob.pfa_grid import PFAGridAdapter
@@ -65,6 +69,10 @@ from geopfa.prob.spatial_alignment import (
     sample_layer_at_points,
     snap_to_grid_indices,
 )
+
+
+_EVIDENCE_ARRAY_NDIM = 2
+_QUADRATIC_DEGREE = 2
 
 
 @dataclass(frozen=True)
@@ -414,6 +422,122 @@ def _build_grid_evidence(
     return grid_evidence
 
 
+def _expand_component_evidence(  # noqa: PLR0912, PLR0913
+    train: NDArray[np.float64],
+    prediction: NDArray[np.float64],
+    layer_names: list[str],
+    *,
+    train_coordinates: NDArray[np.float64],
+    prediction_coordinates: NDArray[np.float64],
+    expansion: EvidenceFeatureExpansionConfig,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], list[str]]:
+    """Apply one deterministic fixed-effect expansion to aligned arrays."""
+    x_train = np.asarray(train, dtype=np.float64)
+    x_prediction = np.asarray(prediction, dtype=np.float64)
+    train_coords = np.asarray(train_coordinates, dtype=np.float64)
+    prediction_coords = np.asarray(prediction_coordinates, dtype=np.float64)
+    if x_train.ndim != _EVIDENCE_ARRAY_NDIM or x_train.shape[1] != len(
+        layer_names
+    ):
+        raise ValueError("training evidence and layer names are inconsistent")
+    if x_prediction.ndim != _EVIDENCE_ARRAY_NDIM or x_prediction.shape[
+        1
+    ] != len(layer_names):
+        raise ValueError(
+            "prediction evidence and layer names are inconsistent"
+        )
+    if (
+        train_coords.ndim != _EVIDENCE_ARRAY_NDIM
+        or train_coords.shape[0] != x_train.shape[0]
+    ):
+        raise ValueError("training coordinates and evidence are inconsistent")
+    if (
+        prediction_coords.ndim != _EVIDENCE_ARRAY_NDIM
+        or prediction_coords.shape[0] != x_prediction.shape[0]
+        or prediction_coords.shape[1] != train_coords.shape[1]
+    ):
+        raise ValueError(
+            "prediction coordinates and evidence are inconsistent"
+        )
+
+    train_columns = [x_train[:, index] for index in range(x_train.shape[1])]
+    prediction_columns = [
+        x_prediction[:, index] for index in range(x_prediction.shape[1])
+    ]
+    names = list(layer_names)
+
+    def append(
+        name: str,
+        train_values: NDArray[np.float64],
+        prediction_values: NDArray[np.float64],
+    ) -> None:
+        if name in names:
+            raise ValueError(
+                f"generated feature name {name!r} collides with an existing "
+                "evidence feature"
+            )
+        names.append(name)
+        train_columns.append(np.asarray(train_values, dtype=np.float64))
+        prediction_columns.append(
+            np.asarray(prediction_values, dtype=np.float64)
+        )
+
+    base_count = len(layer_names)
+    if expansion.degree == _QUADRATIC_DEGREE:
+        for index, name in enumerate(layer_names):
+            append(
+                f"square({name})",
+                np.square(x_train[:, index]),
+                np.square(x_prediction[:, index]),
+            )
+    if expansion.include_pairwise_interactions:
+        for left in range(base_count):
+            for right in range(left + 1, base_count):
+                append(
+                    f"interaction({layer_names[left]},{layer_names[right]})",
+                    x_train[:, left] * x_train[:, right],
+                    x_prediction[:, left] * x_prediction[:, right],
+                )
+
+    axis_indices = {"x": 0, "y": 1, "z": 2}
+    coordinate_columns: list[tuple[str, int]] = []
+    for axis in expansion.coordinate_axes:
+        axis_index = axis_indices[axis]
+        if axis_index >= train_coords.shape[1]:
+            raise ValueError(
+                f"coordinate axis {axis!r} is unavailable for "
+                f"{train_coords.shape[1]}-D evidence"
+            )
+        coordinate_columns.append((axis, axis_index))
+        coordinate_name = f"coordinate({axis})"
+        append(
+            coordinate_name,
+            train_coords[:, axis_index],
+            prediction_coords[:, axis_index],
+        )
+        if expansion.degree == _QUADRATIC_DEGREE:
+            append(
+                f"square({coordinate_name})",
+                np.square(train_coords[:, axis_index]),
+                np.square(prediction_coords[:, axis_index]),
+            )
+    if expansion.include_evidence_coordinate_interactions:
+        for evidence_index, evidence_name in enumerate(layer_names):
+            for axis, axis_index in coordinate_columns:
+                append(
+                    f"interaction({evidence_name},coordinate({axis}))",
+                    x_train[:, evidence_index] * train_coords[:, axis_index],
+                    x_prediction[:, evidence_index]
+                    * prediction_coords[:, axis_index],
+                )
+
+    return (
+        np.column_stack(train_columns).astype(np.float64),
+        np.column_stack(prediction_columns).astype(np.float64),
+        names,
+    )
+
+
 def _component_values_on_reference(
     reference_grid: gpd.GeoDataFrame,
     component_grid: gpd.GeoDataFrame,
@@ -674,6 +798,22 @@ def assemble_gblk_inputs(  # noqa: PLR0913, PLR0914
     grid_evidence = _build_grid_evidence(
         adapter, component_names, layer_names_map, grid_gdf
     )
+    for component in component_names:
+        expansion = evidence_config.feature_expansions.get(component)
+        if expansion is None:
+            continue
+        (
+            evidence[component],
+            grid_evidence[component],
+            layer_names_map[component],
+        ) = _expand_component_evidence(
+            evidence[component],
+            grid_evidence[component],
+            layer_names_map[component],
+            train_coordinates=well_coords,
+            prediction_coordinates=grid_coords,
+            expansion=expansion,
+        )
 
     return AssembledInputs(
         component_names=component_names,
