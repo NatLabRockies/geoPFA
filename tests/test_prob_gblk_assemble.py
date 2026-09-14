@@ -208,6 +208,7 @@ def test_p_gblk_assemble_expands_component_features_from_config() -> None:
             feature_expansions={
                 "comp_a": EvidenceFeatureExpansionConfig(
                     degree=2,
+                    coordinate_degree=2,
                     include_pairwise_interactions=True,
                     coordinate_axes=("x",),
                     include_evidence_coordinate_interactions=True,

@@ -515,7 +515,7 @@ def _expand_component_evidence(  # noqa: PLR0912, PLR0913
             train_coords[:, axis_index],
             prediction_coords[:, axis_index],
         )
-        if expansion.degree == _QUADRATIC_DEGREE:
+        if expansion.coordinate_degree == _QUADRATIC_DEGREE:
             append(
                 f"square({coordinate_name})",
                 np.square(train_coords[:, axis_index]),

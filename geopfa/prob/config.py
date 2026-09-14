@@ -1061,6 +1061,7 @@ class EvidenceFeatureExpansionConfig:
     """
 
     degree: int = 1
+    coordinate_degree: int = 1
     include_pairwise_interactions: bool = False
     coordinate_axes: tuple[str, ...] = ()
     include_evidence_coordinate_interactions: bool = False
@@ -1070,6 +1071,12 @@ class EvidenceFeatureExpansionConfig:
         if isinstance(self.degree, bool) or self.degree not in {1, 2}:
             raise ValueError(
                 "evidence.feature_expansions degree must be 1 or 2"
+            )
+        if isinstance(
+            self.coordinate_degree, bool
+        ) or self.coordinate_degree not in {1, 2}:
+            raise ValueError(
+                "evidence.feature_expansions coordinate_degree must be 1 or 2"
             )
         allowed_axes = {"x", "y", "z"}
         if not isinstance(self.coordinate_axes, tuple) or any(
@@ -1106,6 +1113,7 @@ class EvidenceFeatureExpansionConfig:
             raw,
             {
                 "degree",
+                "coordinate_degree",
                 "include_pairwise_interactions",
                 "coordinate_axes",
                 "include_evidence_coordinate_interactions",
@@ -1129,6 +1137,12 @@ class EvidenceFeatureExpansionConfig:
                 1,
                 context=context,
             ),
+            coordinate_degree=_require_json_integer(
+                raw,
+                "coordinate_degree",
+                1,
+                context=context,
+            ),
             include_pairwise_interactions=_require_json_bool(
                 raw,
                 "include_pairwise_interactions",
@@ -1149,6 +1163,8 @@ class EvidenceFeatureExpansionConfig:
         payload: dict[str, Any] = {}
         if self.degree != 1:
             payload["degree"] = self.degree
+        if self.coordinate_degree != 1:
+            payload["coordinate_degree"] = self.coordinate_degree
         if self.include_pairwise_interactions:
             payload["include_pairwise_interactions"] = True
         if self.coordinate_axes:

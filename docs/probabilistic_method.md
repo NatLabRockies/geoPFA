@@ -314,7 +314,7 @@ and evidence-by-Z interactions:
       "include_pairwise_interactions": true
     },
     "heat": {
-      "degree": 2,
+      "coordinate_degree": 2,
       "coordinate_axes": ["z"],
       "include_evidence_coordinate_interactions": true
     }
@@ -322,7 +322,8 @@ and evidence-by-Z interactions:
 }
 ```
 
-Generated terms enter the same Gaussian coefficient-prior contract as their
+`degree` controls evidence powers; `coordinate_degree` separately controls
+coordinate powers. Generated terms enter the same Gaussian coefficient-prior contract as their
 source layers. They are standardized inside each training fold, so held-out
 outcomes and held-out feature distributions do not define the fitted scaling.
 Coordinate terms use the Cartesian model coordinates (`x`, `y`, and, in 3-D,

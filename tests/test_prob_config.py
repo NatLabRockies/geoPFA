@@ -81,6 +81,7 @@ def test_component_feature_expansion_roundtrips() -> None:
         "feature_expansions": {
             "heat": {
                 "degree": 2,
+                "coordinate_degree": 2,
                 "include_pairwise_interactions": True,
                 "coordinate_axes": ["z"],
                 "include_evidence_coordinate_interactions": True,
@@ -94,6 +95,7 @@ def test_component_feature_expansion_roundtrips() -> None:
     assert cfg.evidence.feature_expansions == {
         "heat": EvidenceFeatureExpansionConfig(
             degree=2,
+            coordinate_degree=2,
             include_pairwise_interactions=True,
             coordinate_axes=("z",),
             include_evidence_coordinate_interactions=True,
@@ -110,6 +112,7 @@ def test_component_feature_expansion_roundtrips() -> None:
     ("dimensions", "expansion", "message"),
     [
         ("2d", {"degree": 3}, "degree"),
+        ("2d", {"coordinate_degree": 3}, "coordinate_degree"),
         ("2d", {"coordinate_axes": ["z"]}, "coordinate axis.*z"),
         (
             "3d",
