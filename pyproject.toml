@@ -117,7 +117,6 @@ dev-gblk = { features = ["dev", "test"], solve-group = "default" }
 [tool.pixi.pypi-dependencies]
 geoPFA = { path = ".", editable = true }
 latticekrigx = { git = "https://github.com/NatLabRockies/latticekrigx.git", rev = "ff2a16f38dac255a8869d92a099900c3d27f2c8a" }
-scikit-sparse = ">=0.5"
 
 [tool.pixi.dependencies]
 contextily = ">=1.7.0,<2"
@@ -151,6 +150,7 @@ trame = ">=3.13.0,<4"
 trame-vtk = ">=2.11.8,<3"
 trame-vuetify = ">=3.2.2,<4"
 json5 = ">=0.14.0,<0.15"
+scikit-sparse = ">=0.5"
 
 [tool.pixi.feature.build.dependencies]
 uv = ">=0.7.22,<0.8"
