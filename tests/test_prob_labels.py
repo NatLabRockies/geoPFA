@@ -439,6 +439,124 @@ def test_load_labels_preserves_continuous_gaussian_response(
     )
 
 
+def test_load_labels_validates_gaussian_observation_prior_moments(
+    tmp_path: Path,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "well_id": ["A", "B"],
+            "x_m": [100.0, 200.0],
+            "y_m": [400.0, 500.0],
+            "temperature_c": [150.0, 225.0],
+            "loo_temperature_mean_c": [140.0, 210.0],
+            "loo_temperature_sd_c": [20.0, 25.0],
+            "well_balanced_weight": [0.5, 1.5],
+        }
+    )
+    csv_path = tmp_path / "wells.csv"
+    frame.to_csv(csv_path, index=False)
+    cfg = LabelsConfig(
+        source=str(csv_path),
+        source_crs="EPSG:32611",
+        x_col="x_m",
+        y_col="y_m",
+        id_col="well_id",
+        label_columns={"heat": "temperature_c"},
+        observation_models={
+            "heat": ObservationModelConfig(
+                family="gaussian", response_scale=50.0
+            )
+        },
+        prior_response_mean_columns={"heat": "loo_temperature_mean_c"},
+        prior_response_sd_columns={"heat": "loo_temperature_sd_c"},
+        observation_weight_columns={"heat": "well_balanced_weight"},
+        observation_weight_semantics=("generalized_bayesian_power_likelihood"),
+    )
+
+    loaded = load_labels(cfg)
+
+    np.testing.assert_allclose(
+        loaded.gdf["loo_temperature_mean_c"], [140.0, 210.0]
+    )
+    np.testing.assert_allclose(
+        loaded.gdf["loo_temperature_sd_c"], [20.0, 25.0]
+    )
+    np.testing.assert_allclose(loaded.gdf["well_balanced_weight"], [0.5, 1.5])
+
+
+@pytest.mark.parametrize("invalid_weight", [0.0, -1.0, np.nan, np.inf, "bad"])
+def test_load_labels_rejects_invalid_observation_weight(
+    invalid_weight: object,
+    tmp_path: Path,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "well_id": ["A", "B"],
+            "x_m": [100.0, 200.0],
+            "y_m": [400.0, 500.0],
+            "temperature_c": [150.0, 225.0],
+            "well_balanced_weight": [1.0, invalid_weight],
+        }
+    )
+    csv_path = tmp_path / "wells.csv"
+    frame.to_csv(csv_path, index=False)
+    cfg = LabelsConfig(
+        source=str(csv_path),
+        source_crs="EPSG:32611",
+        x_col="x_m",
+        y_col="y_m",
+        id_col="well_id",
+        label_columns={"heat": "temperature_c"},
+        observation_models={
+            "heat": ObservationModelConfig(
+                family="gaussian", response_scale=50.0
+            )
+        },
+        observation_weight_columns={"heat": "well_balanced_weight"},
+        observation_weight_semantics=("generalized_bayesian_power_likelihood"),
+    )
+
+    with pytest.raises(
+        ValueError, match="well_balanced_weight.*positive finite"
+    ):
+        load_labels(cfg)
+
+
+def test_load_labels_rejects_nonpositive_gaussian_prior_sd(
+    tmp_path: Path,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "well_id": ["A", "B"],
+            "x_m": [100.0, 200.0],
+            "y_m": [400.0, 500.0],
+            "temperature_c": [150.0, 225.0],
+            "loo_temperature_mean_c": [140.0, 210.0],
+            "loo_temperature_sd_c": [20.0, 0.0],
+        }
+    )
+    csv_path = tmp_path / "wells.csv"
+    frame.to_csv(csv_path, index=False)
+    cfg = LabelsConfig(
+        source=str(csv_path),
+        source_crs="EPSG:32611",
+        x_col="x_m",
+        y_col="y_m",
+        id_col="well_id",
+        label_columns={"heat": "temperature_c"},
+        observation_models={
+            "heat": ObservationModelConfig(
+                family="gaussian", response_scale=50.0
+            )
+        },
+        prior_response_mean_columns={"heat": "loo_temperature_mean_c"},
+        prior_response_sd_columns={"heat": "loo_temperature_sd_c"},
+    )
+
+    with pytest.raises(ValueError, match="loo_temperature_sd_c.*positive"):
+        load_labels(cfg)
+
+
 def test_load_labels_rejects_nonfinite_gaussian_response(
     tmp_path: Path,
 ) -> None:

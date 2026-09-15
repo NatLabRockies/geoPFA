@@ -271,6 +271,7 @@ def test_gblk_calibration_refits_full_partial_label_model_once_per_union_fold(
         component_names=_COMPONENTS,
         y=outcomes,
         observed_mask=observed,
+        observation_weights=np.ones_like(outcomes),
         labeled_mask=np.all(observed, axis=1),
         well_offsets=np.zeros((8, 2)),
         grid_offsets=np.zeros((2, 2)),

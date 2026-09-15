@@ -71,6 +71,13 @@ ALLOWED_CALIBRATION_FITS: tuple[str, ...] = ("block_cv",)
 ALLOWED_BLOCK_TYPES: tuple[str, ...] = ("grid", "kmeans")
 ALLOWED_COMBINATION_RULES: tuple[str, ...] = ("product",)
 ALLOWED_OUTPUT_FORMATS: tuple[str, ...] = ("geotiff", "csv", "parquet", "vtk")
+ORDINARY_LIKELIHOOD_SEMANTICS = "ordinary_bayesian_likelihood"
+POWER_LIKELIHOOD_SEMANTICS = "generalized_bayesian_power_likelihood"
+ALLOWED_OBSERVATION_WEIGHT_SEMANTICS: tuple[str, ...] = (
+    ORDINARY_LIKELIHOOD_SEMANTICS,
+    POWER_LIKELIHOOD_SEMANTICS,
+)
+_SHA256_HEX_LENGTH = 64
 
 DEFAULT_COORD_BLACKLIST: tuple[str, ...] = (
     "X",
@@ -468,6 +475,12 @@ class LabelsConfig:
     observation_models: Mapping[str, ObservationModelConfig] = field(
         default_factory=dict
     )
+    prior_response_mean_columns: Mapping[str, str] = field(
+        default_factory=dict
+    )
+    prior_response_sd_columns: Mapping[str, str] = field(default_factory=dict)
+    observation_weight_columns: Mapping[str, str] = field(default_factory=dict)
+    observation_weight_semantics: str | None = None
     layer: str | None = None
     min_wells_for_fit: int = 4
     pu_mode: str = "off"
@@ -525,6 +538,84 @@ class LabelsConfig:
                 "labels.observation_models values must be "
                 "ObservationModelConfig instances"
             )
+        for field_name, columns in (
+            ("prior_response_mean_columns", self.prior_response_mean_columns),
+            ("prior_response_sd_columns", self.prior_response_sd_columns),
+        ):
+            if not isinstance(columns, Mapping) or any(
+                not isinstance(name, str)
+                or not name.strip()
+                or not isinstance(column, str)
+                or not column.strip()
+                for name, column in columns.items()
+            ):
+                raise ValueError(
+                    f"labels.{field_name} must map non-empty component names "
+                    "to non-empty column names"
+                )
+            unknown_components = set(columns) - set(self.label_columns)
+            if unknown_components:
+                raise ValueError(
+                    f"labels.{field_name} references component(s) without "
+                    "label columns: " + ", ".join(sorted(unknown_components))
+                )
+            non_gaussian = {
+                name
+                for name in columns
+                if self.observation_model_for(name).family != "gaussian"
+            }
+            if non_gaussian:
+                raise ValueError(
+                    f"labels.{field_name} is defined only for Gaussian "
+                    "components; got " + ", ".join(sorted(non_gaussian))
+                )
+        sd_without_mean = set(self.prior_response_sd_columns) - set(
+            self.prior_response_mean_columns
+        )
+        if sd_without_mean:
+            raise ValueError(
+                "labels.prior_response_sd_columns requires a matching "
+                "labels.prior_response_mean_columns entry for: "
+                + ", ".join(sorted(sd_without_mean))
+            )
+        if not isinstance(self.observation_weight_columns, Mapping) or any(
+            not isinstance(name, str)
+            or not name.strip()
+            or not isinstance(column, str)
+            or not column.strip()
+            for name, column in self.observation_weight_columns.items()
+        ):
+            raise ValueError(
+                "labels.observation_weight_columns must map non-empty "
+                "component names to non-empty column names"
+            )
+        unknown_weight_components = set(self.observation_weight_columns) - set(
+            self.label_columns
+        )
+        if unknown_weight_components:
+            raise ValueError(
+                "labels.observation_weight_columns references component(s) "
+                "without label columns: "
+                + ", ".join(sorted(unknown_weight_components))
+            )
+        if (
+            self.observation_weight_semantics is not None
+            and self.observation_weight_semantics
+            not in ALLOWED_OBSERVATION_WEIGHT_SEMANTICS
+        ):
+            allowed = ", ".join(ALLOWED_OBSERVATION_WEIGHT_SEMANTICS)
+            raise ValueError(
+                "labels.observation_weight_semantics must be one of: "
+                f"{allowed} (got {self.observation_weight_semantics!r})"
+            )
+        if (
+            self.observation_weight_columns
+            and self.observation_weight_semantics is None
+        ):
+            raise ValueError(
+                "labels.observation_weight_columns requires explicit "
+                "labels.observation_weight_semantics"
+            )
         if self.pu_mode not in ALLOWED_PU_MODES:
             allowed = ", ".join(ALLOWED_PU_MODES)
             raise ValueError(
@@ -575,6 +666,10 @@ class LabelsConfig:
                 "z_col",
                 "depth_col",
                 "observation_models",
+                "prior_response_mean_columns",
+                "prior_response_sd_columns",
+                "observation_weight_columns",
+                "observation_weight_semantics",
                 "layer",
                 "min_wells_for_fit",
                 "pu_mode",
@@ -585,6 +680,23 @@ class LabelsConfig:
         label_columns = raw.get("label_columns", {})
         if not isinstance(label_columns, Mapping):
             raise TypeError("labels.label_columns must be a JSON object")
+        prior_response_mean_columns = raw.get(
+            "prior_response_mean_columns", {}
+        )
+        prior_response_sd_columns = raw.get("prior_response_sd_columns", {})
+        observation_weight_columns = raw.get("observation_weight_columns", {})
+        if not isinstance(prior_response_mean_columns, Mapping):
+            raise TypeError(
+                "labels.prior_response_mean_columns must be a JSON object"
+            )
+        if not isinstance(prior_response_sd_columns, Mapping):
+            raise TypeError(
+                "labels.prior_response_sd_columns must be a JSON object"
+            )
+        if not isinstance(observation_weight_columns, Mapping):
+            raise TypeError(
+                "labels.observation_weight_columns must be a JSON object"
+            )
         pu_mode = raw.get("pu_mode", "off")
         if pu_mode not in ALLOWED_PU_MODES:
             allowed = ", ".join(ALLOWED_PU_MODES)
@@ -624,6 +736,16 @@ class LabelsConfig:
                     raw.get("observation_models", {})
                 ).items()
             },
+            prior_response_mean_columns=dict(prior_response_mean_columns),
+            prior_response_sd_columns=dict(prior_response_sd_columns),
+            observation_weight_columns=dict(observation_weight_columns),
+            observation_weight_semantics=_require_json_string(
+                raw,
+                "observation_weight_semantics",
+                None,
+                context="labels",
+                allow_none=True,
+            ),
             layer=raw.get("layer"),
             min_wells_for_fit=_require_json_integer(
                 raw, "min_wells_for_fit", 4, context="labels"
@@ -658,7 +780,7 @@ class LabelsConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
+        payload = {
             "source": self.source,
             "id_col": self.id_col,
             "label_columns": dict(self.label_columns),
@@ -671,6 +793,13 @@ class LabelsConfig:
                 name: model.to_dict()
                 for name, model in self.observation_models.items()
             },
+            "prior_response_mean_columns": dict(
+                self.prior_response_mean_columns
+            ),
+            "prior_response_sd_columns": dict(self.prior_response_sd_columns),
+            "observation_weight_columns": dict(
+                self.observation_weight_columns
+            ),
             "layer": self.layer,
             "min_wells_for_fit": self.min_wells_for_fit,
             "pu_mode": self.pu_mode,
@@ -680,6 +809,11 @@ class LabelsConfig:
                 else self.pu_class_prior
             ),
         }
+        if self.observation_weight_columns:
+            payload["observation_weight_semantics"] = (
+                self.observation_weight_semantics
+            )
+        return payload
 
 
 @dataclass(frozen=True)
@@ -2237,6 +2371,8 @@ class OutputsConfig:
     scenarios: bool = True
     posterior_draw_blocks: bool = False
     posterior_draw_block_size: int = 20
+    posterior_draw_cell_indices_source: str | None = None
+    posterior_draw_cell_indices_sha256: str | None = None
     format: tuple[str, ...] = ("geotiff", "csv")
 
     def __post_init__(self) -> None:
@@ -2257,6 +2393,32 @@ class OutputsConfig:
         )
         if block_size < 1:
             raise ValueError("outputs.posterior_draw_block_size must be >= 1")
+        source = self.posterior_draw_cell_indices_source
+        checksum = self.posterior_draw_cell_indices_sha256
+        if (source is None) != (checksum is None):
+            raise ValueError(
+                "outputs.posterior_draw_cell_indices_source and "
+                "outputs.posterior_draw_cell_indices_sha256 must be declared "
+                "together"
+            )
+        if source is not None and (
+            not isinstance(source, str) or not source.strip()
+        ):
+            raise ValueError(
+                "outputs.posterior_draw_cell_indices_source must be a "
+                "non-empty string"
+            )
+        if checksum is not None and (
+            not isinstance(checksum, str)
+            or len(checksum) != _SHA256_HEX_LENGTH
+            or any(
+                character not in "0123456789abcdef" for character in checksum
+            )
+        ):
+            raise ValueError(
+                "outputs.posterior_draw_cell_indices_sha256 must be a "
+                "lowercase SHA-256 digest"
+            )
         if not isinstance(self.format, tuple) or any(
             not isinstance(fmt, str) or not fmt.strip() for fmt in self.format
         ):
@@ -2287,6 +2449,8 @@ class OutputsConfig:
                 "scenarios",
                 "posterior_draw_blocks",
                 "posterior_draw_block_size",
+                "posterior_draw_cell_indices_source",
+                "posterior_draw_cell_indices_sha256",
                 "format",
             },
             context="outputs",
@@ -2332,12 +2496,26 @@ class OutputsConfig:
                 20,
                 context="outputs",
             ),
+            posterior_draw_cell_indices_source=_require_json_string(
+                raw,
+                "posterior_draw_cell_indices_source",
+                None,
+                context="outputs",
+                allow_none=True,
+            ),
+            posterior_draw_cell_indices_sha256=_require_json_string(
+                raw,
+                "posterior_draw_cell_indices_sha256",
+                None,
+                context="outputs",
+                allow_none=True,
+            ),
             format=formats,
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
+        result = {
             "probability_rasters": self.probability_rasters,
             "uncertainty_rasters": self.uncertainty_rasters,
             "calibration_artifacts": self.calibration_artifacts,
@@ -2347,6 +2525,14 @@ class OutputsConfig:
             "posterior_draw_block_size": self.posterior_draw_block_size,
             "format": list(self.format),
         }
+        if self.posterior_draw_cell_indices_source is not None:
+            result["posterior_draw_cell_indices_source"] = (
+                self.posterior_draw_cell_indices_source
+            )
+            result["posterior_draw_cell_indices_sha256"] = (
+                self.posterior_draw_cell_indices_sha256
+            )
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -2673,6 +2859,14 @@ class ProbabilisticConfig:
                 "outputs.posterior_draw_blocks=false"
             )
         if (
+            self.outputs.posterior_draw_cell_indices_source is not None
+            and not self.outputs.posterior_draw_blocks
+        ):
+            errors.append(
+                "outputs.posterior_draw_cell_indices_source requires "
+                "outputs.posterior_draw_blocks=true"
+            )
+        if (
             self.inference.gblk_bayesian.enabled
             and self.alpha
             and all(
@@ -2929,10 +3123,12 @@ class ProbabilisticConfig:
             errors.append(
                 "Gaussian component observations require labels.pu_mode='off'"
             )
-        if fitted_gaussian_components and self.outputs.posterior_draw_blocks:
+        if self.labels.observation_weight_columns and not (
+            self.inference.backend == "gblk"
+            and self.inference.gblk_bayesian.enabled
+        ):
             errors.append(
-                "Gaussian component observations currently require "
-                "outputs.posterior_draw_blocks=false"
+                "configured observation weights require Bayesian GBLK inference"
             )
         invalid_gaussian_alpha = {
             name
@@ -3268,6 +3464,12 @@ def load_probabilistic_config(path: str | Path) -> ProbabilisticConfig:
         site_selection=replace(
             cfg.site_selection,
             candidate_source=_resolve(cfg.site_selection.candidate_source),
+        ),
+        outputs=replace(
+            cfg.outputs,
+            posterior_draw_cell_indices_source=_resolve(
+                cfg.outputs.posterior_draw_cell_indices_source
+            ),
         ),
     )
     cfg.validate_raise()

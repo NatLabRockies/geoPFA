@@ -7,6 +7,7 @@ Requires the ``dev-gblk`` pixi environment (``latticekrigx`` +
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -51,6 +52,7 @@ from geopfa.prob.gblk_backend import (  # noqa: E402
     fit_gblk_bayesian_joint,
     fit_gblk_gaussian_bayesian_joint,
     project_gblk_bayesian_draw_block,
+    project_gblk_gaussian_bayesian_draw_block,
 )
 from geopfa.prob.gblk_runner import (  # noqa: E402
     _GaussianPredictiveResponseState,
@@ -58,6 +60,7 @@ from geopfa.prob.gblk_runner import (  # noqa: E402
     _assemble_likelihood_groups,
     _blocked_family_predictions,
     _estimate_predictive_stacking,
+    _fitted_label_config,
     _gaussian_prior_exceedance_probability,
     _gaussian_predictive_exceedance_draws,
     _gaussian_predictive_log_density,
@@ -71,6 +74,7 @@ from geopfa.prob.gblk_runner import (  # noqa: E402
     _stacking_validation_mask,
     run_gblk_probabilistic,
 )
+from geopfa.prob.io import verify_posterior_draw_bundle  # noqa: E402
 from geopfa.prob.predictive_stacking import (  # noqa: E402
     PredictiveStackingResult,
 )
@@ -86,6 +90,49 @@ _NC_SMALL = 3
 _OUTER_SMALL = 100
 _IRLS_SMALL = 50
 _N_DRAWS = 8
+
+
+def test_fitted_label_config_removes_all_prior_only_component_metadata() -> (
+    None
+):
+    labels = LabelsConfig(
+        source="labels.gpkg",
+        id_col="well_id",
+        label_columns={"heat": "temperature", "reservoir": "reservoir"},
+        observation_models={
+            "heat": ObservationModelConfig(
+                family="gaussian",
+                response_scale=100.0,
+            ),
+        },
+        prior_response_mean_columns={"heat": "temperature_prior_mean"},
+        prior_response_sd_columns={"heat": "temperature_prior_sd"},
+        observation_weight_columns={
+            "heat": "heat_weight",
+            "reservoir": "reservoir_weight",
+        },
+        observation_weight_semantics=("generalized_bayesian_power_likelihood"),
+    )
+
+    fitted = _fitted_label_config(labels, ("reservoir",))
+
+    assert fitted.label_columns == {"reservoir": "reservoir"}
+    assert fitted.observation_models == {}
+    assert fitted.prior_response_mean_columns == {}
+    assert fitted.prior_response_sd_columns == {}
+    assert fitted.observation_weight_columns == {
+        "reservoir": "reservoir_weight"
+    }
+
+    unweighted = _fitted_label_config(
+        replace(
+            labels,
+            observation_weight_columns={"heat": "heat_weight"},
+        ),
+        ("reservoir",),
+    )
+    assert unweighted.observation_weight_columns == {}
+    assert unweighted.observation_weight_semantics is None
 
 
 def test_spawned_bayesian_seeds_fit_legacy_numpy_seed_domain() -> None:
@@ -414,6 +461,7 @@ def test_gaussian_stacking_uses_configured_prior_probability_bounds(
         prior_probability_grid: np.ndarray | None
         prior_probability_well: np.ndarray | None
         y: np.ndarray
+        well_offsets: np.ndarray
 
     base = _cfg_bayesian(tmp_path / "unused.gpkg", tmp_path / "out")
     cfg = replace(
@@ -461,6 +509,7 @@ def test_gaussian_stacking_uses_configured_prior_probability_bounds(
         prior_probability_grid=None,
         prior_probability_well=None,
         y=np.array([[0.0], [1.0]]),
+        well_offsets=np.zeros((2, 1)),
     )
     monkeypatch.setattr(
         gblk_runner,
@@ -486,6 +535,119 @@ def test_gaussian_stacking_uses_configured_prior_probability_bounds(
     np.testing.assert_array_equal(
         result.prior_probability_well[:, 0], [0.2, 0.8]
     )
+
+
+def test_mixed_likelihood_groups_filter_gaussian_prior_response_columns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @dataclass(frozen=True)
+    class FakeAssembled:
+        component_names: tuple[str, ...]
+        prior_response_mean_grid: np.ndarray | None
+        prior_response_sd_grid: np.ndarray | None
+        prior_response_mean_well: np.ndarray | None
+        prior_response_sd_well: np.ndarray | None
+        prior_probability_grid: np.ndarray | None
+        prior_probability_well: np.ndarray | None
+        y: np.ndarray
+        well_offsets: np.ndarray
+
+    base = _cfg_bayesian(tmp_path / "unused.gpkg", tmp_path / "out")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            label_columns={
+                "component_a": "temperature_c",
+                "component_b": "event",
+            },
+            observation_models={
+                "component_a": ObservationModelConfig(
+                    family="gaussian", response_scale=50.0
+                )
+            },
+            prior_response_mean_columns={
+                "component_a": "temperature_prior_mean_c"
+            },
+            prior_response_sd_columns={
+                "component_a": "temperature_prior_sd_c"
+            },
+        ),
+        alpha={
+            "component_a": AlphaModeConfig(
+                mode="thermal_layer_exceedance",
+                layer="thermal_prior",
+                threshold=400.0,
+                uncertainty_column="temperature_sd_c",
+            ),
+            "component_b": AlphaModeConfig(mode="scalar"),
+        },
+    )
+    fit_alphas = {
+        "component_a": gblk_runner.AlphaCResult(
+            grid_offset=np.zeros(2),
+            scalar_fallback=0.0,
+            provenance={},
+            latent_mean=np.array([350.0, 450.0]),
+            latent_sd=np.full(2, 50.0),
+            event_threshold=400.0,
+        ),
+        "component_b": gblk_runner.AlphaCResult(
+            grid_offset=np.zeros(2),
+            scalar_fallback=0.0,
+            provenance={},
+        ),
+    }
+    grouped_configs: dict[str, LabelsConfig] = {}
+
+    def fake_assemble(_adapter, labels, _alphas, **_kwargs):
+        names = tuple(labels.config.label_columns)
+        family = labels.config.observation_model_for(names[0]).family
+        grouped_configs[family] = labels.config
+        is_gaussian = family == "gaussian"
+        return FakeAssembled(
+            component_names=names,
+            prior_response_mean_grid=(
+                np.array([[350.0], [450.0]]) if is_gaussian else None
+            ),
+            prior_response_sd_grid=(
+                np.full((2, 1), 50.0) if is_gaussian else None
+            ),
+            prior_response_mean_well=(
+                np.array([[350.0], [450.0]]) if is_gaussian else None
+            ),
+            prior_response_sd_well=(
+                np.full((2, 1), 50.0) if is_gaussian else None
+            ),
+            prior_probability_grid=np.full((2, 1), 0.5),
+            prior_probability_well=np.full((2, 1), 0.5),
+            y=np.zeros((2, 1)),
+            well_offsets=np.zeros((2, 1)),
+        )
+
+    monkeypatch.setattr(gblk_runner, "assemble_gblk_inputs", fake_assemble)
+    labels = gblk_runner.LoadedLabels(
+        gdf=gpd.GeoDataFrame({"geometry": []}, crs="EPSG:32611"),
+        config=cfg.labels,
+    )
+
+    result = _assemble_likelihood_groups(
+        None,
+        labels,
+        fit_alphas,
+        cfg,
+        reference_grid=gpd.GeoDataFrame({"geometry": []}, crs="EPSG:32611"),
+    )
+
+    assert set(result) == {"gaussian", "bernoulli"}
+    assert grouped_configs["gaussian"].prior_response_mean_columns == {
+        "component_a": "temperature_prior_mean_c"
+    }
+    assert grouped_configs["gaussian"].prior_response_sd_columns == {
+        "component_a": "temperature_prior_sd_c"
+    }
+    assert grouped_configs["bernoulli"].prior_response_mean_columns == {}
+    assert grouped_configs["bernoulli"].prior_response_sd_columns == {}
 
 
 def test_gaussian_predictive_density_averages_paired_draws() -> None:
@@ -922,6 +1084,8 @@ def test_blocked_predictions_reuse_the_full_model_spatial_domain(
         component_names=("component_a",),
         y=np.array([[0.0], [1.0], [0.0], [1.0]]),
         observed_mask=np.ones((4, 1), dtype=bool),
+        observation_weights=np.ones((4, 1), dtype=float),
+        observation_weight_semantics="ordinary_bayesian_likelihood",
         well_offsets=np.zeros((4, 1)),
         well_coords=np.array(
             [[0.0, 0.0], [1_000.0, 0.0], [0.0, 1_000.0], [1_000.0, 1_000.0]]
@@ -1006,6 +1170,8 @@ def test_blocked_predictions_standardize_against_canonical_grid_support(
         component_names=("component_a",),
         y=np.array([[0.0], [1.0], [0.0], [1.0]]),
         observed_mask=np.ones((4, 1), dtype=bool),
+        observation_weights=np.ones((4, 1), dtype=float),
+        observation_weight_semantics="ordinary_bayesian_likelihood",
         well_offsets=np.zeros((4, 1)),
         well_coords=np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0]]),
         well_ids=np.array(["a", "b", "c", "d"]),
@@ -1328,6 +1494,57 @@ def test_bayesian_projection_blocks_equal_one_shot_projection() -> None:
     np.testing.assert_allclose(one_shot.component_probability, reconstructed)
 
 
+def test_gaussian_projection_blocks_retain_paired_likelihood_precision() -> (
+    None
+):
+    from latticekrigx.basis.assembly import compute_basis
+
+    grid = np.array(
+        [[0.0, 0.0], [0.25, 0.75], [0.75, 0.25], [1.0, 1.0]],
+        dtype=float,
+    )
+    lkinfo = build_lkinfo_2d(grid, nc=3, nlevel=1)
+    basis = compute_basis(grid, lkinfo, normalize=False)
+    rng = np.random.default_rng(109)
+    coefficient_draws = rng.normal(size=(5, basis.shape[1], 1))
+    precision_draws = np.array([[1.0], [2.0], [3.0], [4.0], [5.0]])
+    state = GBLKBayesianPosteriorState(
+        component_names=("heat",),
+        coefficient_draws=coefficient_draws,
+        fixed_coef_draws=None,
+        grid_model=grid,
+        grid_offsets=np.full((len(grid), 1), 4.0),
+        fixed_design_grid=None,
+        lkinfo=lkinfo,
+        fit=SimpleNamespace(inference="inla"),
+        diagnostics={},
+        response_family="gaussian",
+        likelihood_precision_draws=precision_draws,
+    )
+
+    one_shot = project_gblk_gaussian_bayesian_draw_block(state, 0, 5)
+    first = project_gblk_gaussian_bayesian_draw_block(state, 0, 2)
+    second = project_gblk_gaussian_bayesian_draw_block(state, 2, 5)
+
+    for field in (
+        "response_mean",
+        "evidence_mean",
+        "spatial_mean",
+        "likelihood_precision",
+    ):
+        np.testing.assert_allclose(
+            np.concatenate([getattr(first, field), getattr(second, field)]),
+            getattr(one_shot, field),
+        )
+    np.testing.assert_allclose(
+        one_shot.response_mean,
+        one_shot.prior_mean[np.newaxis, :, :]
+        + one_shot.evidence_mean
+        + one_shot.spatial_mean,
+    )
+    np.testing.assert_allclose(one_shot.likelihood_precision, precision_draws)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_runner_from_external_inla(
     monkeypatch: pytest.MonkeyPatch,
@@ -1392,6 +1609,7 @@ def _isolate_runner_from_external_inla(
         **_kwargs,
     ):
         q = len(component_names)
+        response_family = _kwargs.get("response_family", "bernoulli")
         lkinfo = build_lkinfo_2d(np.asarray(grid, dtype=float), nc=3, nlevel=1)
         from latticekrigx.basis.assembly import compute_basis
 
@@ -1419,7 +1637,13 @@ def _isolate_runner_from_external_inla(
                 "n": len(coords),
                 "n_components": q,
             },
+            response_family=response_family,
             projected_mean_draws=None,
+            likelihood_precision_draws=(
+                np.ones((bayes_config.n_draws, q), dtype=float)
+                if response_family == "gaussian"
+                else None
+            ),
         )
 
     monkeypatch.setattr(
@@ -1799,6 +2023,90 @@ def test_gaussian_heat_stage_feeds_existing_component_combination(
     np.testing.assert_allclose(
         result.combined["probability"].to_numpy(), expected_joint
     )
+
+
+def test_gaussian_heat_streams_with_prior_predictive_binary_component(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=6, n_wells=30, seed=312)
+    fixture.wells["temperature_c"] = np.linspace(140.0, 280.0, 30)
+    heat = fixture.pfa["criteria"]["geologic"]["components"]["component_a"]
+    thermal = heat["layers"]["prior_layer_a"]["model"]
+    thermal["value_interpolated"] = np.linspace(150.0, 250.0, len(thermal))
+    thermal["temperature_sd_c"] = 25.0
+    wells_path = tmp_path / "wells.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    base = _cfg_bayesian(wells_path, tmp_path / "out")
+    cfg = replace(
+        base,
+        labels=replace(
+            base.labels,
+            label_columns={"component_a": "temperature_c"},
+            observation_models={
+                "component_a": ObservationModelConfig(
+                    family="gaussian", response_scale=50.0
+                )
+            },
+        ),
+        alpha={
+            "component_a": AlphaModeConfig(
+                mode="thermal_layer_exceedance",
+                layer="prior_layer_a",
+                threshold=200.0,
+                uncertainty_column="temperature_sd_c",
+                p_min=0.001,
+                p_max=0.999,
+            ),
+            "component_b": replace(
+                base.alpha["component_b"],
+                force_prior_predictive=True,
+                use_evidence_prior=True,
+            ),
+        },
+        evidence=replace(
+            base.evidence,
+            regularization=RegularizationConfig(
+                prior_means={"component_b:gradient": 0.0},
+                prior_precisions={"component_b:gradient": 1.0},
+            ),
+        ),
+        inference=replace(
+            base.inference,
+            gblk_bayesian=replace(
+                base.inference.gblk_bayesian,
+                cluster_effect=False,
+                kleiber_profiles={},
+            ),
+        ),
+        outputs=replace(
+            base.outputs,
+            posterior_draw_blocks=True,
+            posterior_draw_block_size=3,
+        ),
+    )
+
+    result = run_gblk_probabilistic(fixture.pfa, cfg, nc=3)
+    index = json.loads(result.posterior_draw_index.read_text(encoding="utf-8"))
+
+    assert index["schema_version"] == 3
+    assert index["component_models"] == [
+        {"family": "gaussian", "event_threshold_scaled": 4.0},
+        {"family": "bernoulli"},
+    ]
+    assert index["state"]["metadata"]["component_roles"] == {
+        "component_a": "joint_posterior",
+        "component_b": "evidence_coefficient_prior_predictive",
+    }
+    assert index["state"]["metadata"]["model"] == (
+        "geopfa_probabilistic_gblk_paige_inla_with_prior_predictive_components"
+    )
+    assert (
+        result.components["component_a"].diagnostics["observation_family"]
+        == "gaussian"
+    )
+    audit = verify_posterior_draw_bundle(result.posterior_draw_index)
+    assert audit["schema_version"] == 3
+    assert audit["decomposition_verified"] is True
 
 
 def test_mixed_family_runner_fits_two_bernoulli_and_one_gaussian_component(
@@ -2253,6 +2561,88 @@ def test_top_level_bayesian_runner_persists_audited_draw_blocks(
     assert manifest_path.is_file()
 
 
+def test_bayesian_runner_uses_hash_bound_draw_cell_subset(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=6, n_wells=30, seed=119)
+    wells_path = tmp_path / "wells.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    selection_path = tmp_path / "paper4_cells.npy"
+    selection = np.array([0, 7, 35], dtype=np.int64)
+    np.save(selection_path, selection, allow_pickle=False)
+    selection_sha256 = hashlib.sha256(selection_path.read_bytes()).hexdigest()
+    output_dir = tmp_path / "out"
+    base_cfg = _cfg_bayesian(wells_path, output_dir)
+    cfg = replace(
+        base_cfg,
+        inference=replace(
+            base_cfg.inference,
+            gblk_bayesian=replace(
+                base_cfg.inference.gblk_bayesian,
+                cluster_effect=False,
+            ),
+        ),
+        outputs=OutputsConfig(
+            probability_rasters=False,
+            uncertainty_rasters=False,
+            calibration_artifacts=False,
+            decision_artifacts=False,
+            scenarios=False,
+            posterior_draw_blocks=True,
+            posterior_draw_block_size=3,
+            posterior_draw_cell_indices_source=str(selection_path),
+            posterior_draw_cell_indices_sha256=selection_sha256,
+            format=(),
+        ),
+    )
+
+    result = run_gblk_probabilistic(fixture.pfa, cfg, nc=3)
+    index = json.loads(result.posterior_draw_index.read_text(encoding="utf-8"))
+
+    assert index["schema_version"] == 4
+    assert index["n_cells"] == 36
+    assert index["materialized_n_cells"] == 3
+    with np.load(
+        result.posterior_draw_index.parent / index["blocks"][0]["path"],
+        allow_pickle=False,
+    ) as block:
+        assert block["component_probability"].shape == (3, 3, 2)
+    assert result.combined["probability"].shape == (36,)
+    audit = verify_posterior_draw_bundle(result.posterior_draw_index)
+    assert audit["materialized_n_cells"] == 3
+    assert audit["full_grid_summaries_verified"] is True
+
+
+def test_bayesian_runner_rejects_draw_cell_subset_checksum_mismatch(
+    tmp_path: Path,
+) -> None:
+    fixture = make_synthetic_pfa(grid_n=6, n_wells=30, seed=120)
+    wells_path = tmp_path / "wells.gpkg"
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    selection_path = tmp_path / "paper4_cells.npy"
+    np.save(selection_path, np.array([0, 7, 35]), allow_pickle=False)
+    base_cfg = _cfg_bayesian(wells_path, tmp_path / "out")
+    cfg = replace(
+        base_cfg,
+        inference=replace(
+            base_cfg.inference,
+            gblk_bayesian=replace(
+                base_cfg.inference.gblk_bayesian,
+                cluster_effect=False,
+            ),
+        ),
+        outputs=replace(
+            base_cfg.outputs,
+            posterior_draw_blocks=True,
+            posterior_draw_cell_indices_source=str(selection_path),
+            posterior_draw_cell_indices_sha256="0" * 64,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="cell-index source checksum"):
+        run_gblk_probabilistic(fixture.pfa, cfg, nc=3)
+
+
 def test_prior_predictive_streaming_run_is_not_labeled_as_posterior(
     tmp_path: Path,
 ) -> None:
@@ -2376,17 +2766,60 @@ def test_streamed_fixed_gaussian_prior_reports_response_distribution(
     assert not component.diagnostics[
         "response_interval_includes_likelihood_variance"
     ]
+    index = json.loads(result.posterior_draw_index.read_text(encoding="utf-8"))
+    assert index["schema_version"] == 3
+    assert index["component_models"][0] == {
+        "family": "gaussian",
+        "event_threshold_scaled": 200.0,
+        "probability_min": 1e-12,
+        "probability_max": 1.0 - 1e-12,
+    }
+    expected_probability = ndtr((thermal_mean - 200.0) / thermal_sd)
+    with np.load(
+        result.posterior_draw_index.parent / index["blocks"][0]["path"],
+        allow_pickle=False,
+    ) as block:
+        assert block["likelihood_precision"].ndim == 3
+        np.testing.assert_allclose(
+            block["likelihood_precision"][:, :, 0],
+            np.broadcast_to(
+                1.0 / thermal_sd**2,
+                block["likelihood_precision"][:, :, 0].shape,
+            ),
+        )
+        np.testing.assert_allclose(
+            block["component_probability"][:, :, 0],
+            np.broadcast_to(
+                expected_probability,
+                block["component_probability"][:, :, 0].shape,
+            ),
+        )
+    audit = verify_posterior_draw_bundle(result.posterior_draw_index)
+    assert audit["schema_version"] == 3
 
 
-def test_top_level_bayesian_runner_resumes_missing_block_without_refit(
+@pytest.mark.parametrize("use_cell_subset", [False, True])
+def test_top_level_bayesian_runner_resumes_missing_block_without_refit(  # noqa: PLR0915
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    use_cell_subset: bool,
 ) -> None:
     fixture = make_synthetic_pfa(grid_n=6, n_wells=30, seed=31)
     wells_path = tmp_path / "wells.gpkg"
     fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
     output_dir = tmp_path / "out"
     base_cfg = _cfg_bayesian(wells_path, output_dir)
+    output_kwargs: dict[str, object] = {}
+    selected = np.array([0, 7, 35], dtype=np.int64)
+    if use_cell_subset:
+        selection_path = tmp_path / "posterior_cells.npy"
+        np.save(selection_path, selected, allow_pickle=False)
+        output_kwargs = {
+            "posterior_draw_cell_indices_source": str(selection_path),
+            "posterior_draw_cell_indices_sha256": hashlib.sha256(
+                selection_path.read_bytes()
+            ).hexdigest(),
+        }
     cfg = replace(
         base_cfg,
         inference=replace(
@@ -2405,6 +2838,7 @@ def test_top_level_bayesian_runner_resumes_missing_block_without_refit(
             posterior_draw_blocks=True,
             posterior_draw_block_size=3,
             format=(),
+            **output_kwargs,
         ),
     )
     final_dir = output_dir / "posterior_draws"
@@ -2472,22 +2906,49 @@ def test_top_level_bayesian_runner_resumes_missing_block_without_refit(
     for block in index["blocks"]:
         with np.load(final_dir / block["path"], allow_pickle=False) as payload:
             combined_blocks.append(payload["combined_probability"])
-    np.testing.assert_allclose(
-        resumed.combined["probability"],
-        np.concatenate(combined_blocks).mean(axis=0),
-    )
+    block_mean = np.concatenate(combined_blocks).mean(axis=0)
+    if use_cell_subset:
+        assert index["schema_version"] == 4
+        np.testing.assert_allclose(
+            resumed.combined["probability"][selected],
+            block_mean,
+        )
+        full_grid_mean = np.load(
+            final_dir / index["full_grid_summaries"]["combined_mean"]["path"],
+            allow_pickle=False,
+        )
+        np.testing.assert_allclose(
+            resumed.combined["probability"],
+            full_grid_mean,
+        )
+    else:
+        np.testing.assert_allclose(
+            resumed.combined["probability"],
+            block_mean,
+        )
 
 
 def test_streamed_bayesian_restart_rejects_changed_analysis_inputs(
     tmp_path: Path,
 ) -> None:
     fixture = make_synthetic_pfa(grid_n=6, n_wells=30, seed=37)
+    fixture.wells["likelihood_weight"] = 0.5
     wells_path = tmp_path / "wells.gpkg"
     fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
     output_dir = tmp_path / "out"
     base_cfg = _cfg_bayesian(wells_path, output_dir)
     cfg = replace(
         base_cfg,
+        labels=replace(
+            base_cfg.labels,
+            observation_weight_columns={
+                "component_a": "likelihood_weight",
+                "component_b": "likelihood_weight",
+            },
+            observation_weight_semantics=(
+                "generalized_bayesian_power_likelihood"
+            ),
+        ),
         inference=replace(
             base_cfg.inference,
             gblk_bayesian=replace(
@@ -2509,6 +2970,15 @@ def test_streamed_bayesian_restart_rejects_changed_analysis_inputs(
     )
     wells_path.unlink()
     changed_wells.to_file(wells_path, layer="wells", driver="GPKG")
+    with pytest.raises(ValueError, match="analysis inputs"):
+        run_gblk_probabilistic(fixture.pfa, cfg, nc=3)
+
+    wells_path.unlink()
+    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
+    changed_weights = fixture.wells.copy()
+    changed_weights.loc[0, "likelihood_weight"] = 2.0
+    wells_path.unlink()
+    changed_weights.to_file(wells_path, layer="wells", driver="GPKG")
     with pytest.raises(ValueError, match="analysis inputs"):
         run_gblk_probabilistic(fixture.pfa, cfg, nc=3)
 
@@ -2781,6 +3251,14 @@ def test_p7_gblk_bayesian_forwards_component_specific_coefficient_prior(
             extra={
                 "c_draws": np.zeros((2, args[1].shape[1], 1)),
                 "fixed_draws": np.array([[[-1.0], [1.0]], [[0.5], [0.25]]]),
+                "likelihood_weighting": {
+                    "semantics": "ordinary_bayesian_likelihood",
+                    "normalizing_constant": "ordinary_likelihood",
+                    "n_observed": 12,
+                    "weight_min": 1.0,
+                    "weight_max": 1.0,
+                    "weight_sum": 12.0,
+                },
             },
         )
 
@@ -2816,11 +3294,13 @@ def test_gaussian_bayesian_stage_uses_identity_response_draws(
     )
     responses = np.array([[1.0], [1.5], [2.0], [2.5]])
     grid = np.array([[0.25, 0.25], [0.75, 0.75]], dtype=float)
+    observation_weights = np.array([[0.25], [0.5], [0.75], [1.0]])
     captured: dict[str, object] = {}
 
     def fake_fit_joint(*args, **kwargs):
         captured["family"] = kwargs["family"]
         captured["link"] = kwargs["link"]
+        captured["observation_weights"] = kwargs["observation_weights"]
         coefficient_draws = np.zeros((2, args[1].shape[1], 1))
         coefficient_draws[0, :, 0] = 0.25
         coefficient_draws[1, :, 0] = 0.75
@@ -2830,6 +3310,14 @@ def test_gaussian_bayesian_stage_uses_identity_response_draws(
                 "c_draws": coefficient_draws,
                 "fixed_draws": None,
                 "likelihood_precision_draws": np.array([[4.0], [9.0]]),
+                "likelihood_weighting": {
+                    "semantics": "generalized_bayesian_power_likelihood",
+                    "normalizing_constant": "not_recomputed",
+                    "n_observed": 4,
+                    "weight_min": 0.25,
+                    "weight_max": 1.0,
+                    "weight_sum": 2.5,
+                },
             },
         )
 
@@ -2841,8 +3329,10 @@ def test_gaussian_bayesian_stage_uses_identity_response_draws(
         grid,
         component_names=("heat",),
         bayes_config=GBLKBayesianConfig(
-            enabled=True, n_draws=2, cluster_effect=False
+            enabled=True, n_draws=2, cluster_effect=True
         ),
+        observation_weights=observation_weights,
+        observation_weight_semantics=("generalized_bayesian_power_likelihood"),
         offsets=np.ones_like(responses),
         grid_offsets=np.ones((len(grid), 1)),
         nc=3,
@@ -2851,12 +3341,32 @@ def test_gaussian_bayesian_stage_uses_identity_response_draws(
     assert isinstance(result, GBLKGaussianFitResult)
     assert captured["family"].name == "gaussian"
     assert captured["link"].name == "identity"
+    np.testing.assert_array_equal(
+        captured["observation_weights"], observation_weights
+    )
     assert result.response_draws.shape == (2, 2, 1)
     np.testing.assert_allclose(
         result.likelihood_precision_draws, [[4.0], [9.0]]
     )
     assert np.all(np.isfinite(result.response_draws))
     assert np.all(result.response_draws > 1.0)
+    assert result.diagnostics["prediction_projection"] == (
+        "paired_coefficient_draws_chunked"
+    )
+    assert result.diagnostics["prediction_chunk_size"] == 10_000
+    assert result.diagnostics["cluster_effect"] is False
+    assert result.diagnostics["likelihood_weight_sums"] == [2.5]
+    assert result.diagnostics["likelihood_weighting"] == {
+        "semantics": "generalized_bayesian_power_likelihood",
+        "normalizing_constant": "not_recomputed",
+        "n_observed": 4,
+        "weight_min": 0.25,
+        "weight_max": 1.0,
+        "weight_sum": 2.5,
+    }
+    assert result.diagnostics["gaussian_precision_interpretation"] == (
+        "working_likelihood_precision_under_generalized_posterior"
+    )
     np.testing.assert_allclose(
         result.response_grid, result.response_draws.mean(axis=0)
     )
@@ -2877,6 +3387,14 @@ def test_p7_gblk_bayesian_uses_lkbox_for_3d(
             extra={
                 "c_draws": np.zeros((2, args[1].shape[1], 1)),
                 "fixed_draws": None,
+                "likelihood_weighting": {
+                    "semantics": "ordinary_bayesian_likelihood",
+                    "normalizing_constant": "ordinary_likelihood",
+                    "n_observed": 12,
+                    "weight_min": 1.0,
+                    "weight_max": 1.0,
+                    "weight_sum": 12.0,
+                },
             },
         )
 
@@ -2954,7 +3472,18 @@ def test_p7_public_bayesian_fitter_is_the_canonical_array_api(
             c_matrix=np.zeros((args[1].shape[1], 2)),
             fixed_coef=None,
             inference="inla",
-            extra={"c_draws": coefficient_draws, "fixed_draws": None},
+            extra={
+                "c_draws": coefficient_draws,
+                "fixed_draws": None,
+                "likelihood_weighting": {
+                    "semantics": "ordinary_bayesian_likelihood",
+                    "normalizing_constant": "ordinary_likelihood",
+                    "n_observed": 96,
+                    "weight_min": 1.0,
+                    "weight_max": 1.0,
+                    "weight_sum": 96.0,
+                },
+            },
         )
 
     monkeypatch.setattr(

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -37,7 +37,11 @@ from scipy.spatial import cKDTree
 from geopfa.exceptions import GEOPFAValueError
 from geopfa.prob.alpha import AlphaCResult, build_alpha_c
 from geopfa.prob.calibration import calibration_intercept_slope, log_loss
-from geopfa.prob.config import GBLKBayesianConfig, ProbabilisticConfig
+from geopfa.prob.config import (
+    GBLKBayesianConfig,
+    LabelsConfig,
+    ProbabilisticConfig,
+)
 from geopfa.prob.cv import spatial_block_cv
 from geopfa.prob.fitting import ComponentProbability
 from geopfa.prob.fitting import _fit_offset_logit
@@ -54,6 +58,7 @@ from geopfa.prob.gblk_backend import (
     fit_gblk_gaussian_bayesian_joint,
     fit_gblk_joint,
     project_gblk_bayesian_draw_block,
+    project_gblk_gaussian_bayesian_draw_block,
 )
 from geopfa.prob.io import (
     PersistedPosteriorDrawState,
@@ -81,6 +86,57 @@ _TWO_DIMENSIONS = 2
 _THREE_DIMENSIONS = 3
 _OPEN_PROBABILITY_EPSILON = 1e-12
 _PREDICTIVE_SUMMARY_CHUNK_SIZE = 10_000
+
+
+def _posterior_draw_cell_indices(
+    cfg: ProbabilisticConfig, *, n_cells: int
+) -> NDArray[np.int64] | None:
+    """Load and hash-verify one strict prediction-cell subset."""
+    source = cfg.outputs.posterior_draw_cell_indices_source
+    expected_sha256 = cfg.outputs.posterior_draw_cell_indices_sha256
+    if source is None:
+        return None
+    if expected_sha256 is None:  # pragma: no cover - config invariant
+        raise RuntimeError("posterior draw cell-index checksum is missing")
+    path = Path(source)
+    if not path.is_file():
+        raise ValueError(
+            f"posterior draw cell-index source does not exist: {path}"
+        )
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != expected_sha256:
+        raise ValueError("posterior draw cell-index source checksum mismatch")
+    try:
+        raw = np.load(path, mmap_mode="r", allow_pickle=False)
+    except (OSError, ValueError) as exc:
+        raise ValueError(
+            "posterior draw cell-index source must be a NumPy .npy array"
+        ) from exc
+    try:
+        if raw.ndim != 1 or raw.dtype.kind not in "iu":
+            raise ValueError(
+                "posterior draw cell indices must be a one-dimensional "
+                "integer array"
+            )
+        indices = np.array(raw, dtype=np.int64, copy=True)
+    finally:
+        mapping = getattr(raw, "_mmap", None)
+        if mapping is not None and not mapping.closed:
+            mapping.close()
+    if (
+        not 0 < indices.size < n_cells
+        or np.any(indices < 0)
+        or np.any(indices >= n_cells)
+        or np.any(np.diff(indices) <= 0)
+    ):
+        raise ValueError(
+            "posterior draw cell indices must be a strictly increasing, "
+            "unique, in-range strict subset of the prediction grid"
+        )
+    return indices
 
 
 def _spawn_child_seeds(seed: int, count: int) -> tuple[int, ...]:
@@ -1156,6 +1212,8 @@ def _run_gblk_bayesian(  # noqa: PLR0913
         component_names=assembled.component_names,
         bayes_config=bayes_cfg,
         observed_mask=assembled.observed_mask,
+        observation_weights=assembled.observation_weights,
+        observation_weight_semantics=assembled.observation_weight_semantics,
         offsets=well_offsets,
         grid_offsets=grid_offsets,
         fixed_effects=evidence_design.train,
@@ -1540,6 +1598,8 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913, PLR0914
         component_names=assembled.component_names,
         bayes_config=bayes_cfg,
         observed_mask=assembled.observed_mask,
+        observation_weights=assembled.observation_weights,
+        observation_weight_semantics=assembled.observation_weight_semantics,
         offsets=assembled.well_offsets,
         grid_offsets=assembled.grid_offsets,
         fixed_effects=evidence_design.train,
@@ -1656,6 +1716,48 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913, PLR0914
     return components, component_draws, response_states
 
 
+def _fitted_label_config(
+    labels: LabelsConfig,
+    fitted_components: Collection[str],
+) -> LabelsConfig:
+    """Restrict every component-keyed label field to fitted components."""
+    fitted = frozenset(fitted_components)
+    observation_weight_columns = {
+        name: column
+        for name, column in labels.observation_weight_columns.items()
+        if name in fitted
+    }
+    return replace(
+        labels,
+        label_columns={
+            name: column
+            for name, column in labels.label_columns.items()
+            if name in fitted
+        },
+        observation_models={
+            name: model
+            for name, model in labels.observation_models.items()
+            if name in fitted
+        },
+        prior_response_mean_columns={
+            name: column
+            for name, column in labels.prior_response_mean_columns.items()
+            if name in fitted
+        },
+        prior_response_sd_columns={
+            name: column
+            for name, column in labels.prior_response_sd_columns.items()
+            if name in fitted
+        },
+        observation_weight_columns=observation_weight_columns,
+        observation_weight_semantics=(
+            labels.observation_weight_semantics
+            if observation_weight_columns
+            else None
+        ),
+    )
+
+
 def _assemble_likelihood_groups(
     adapter: PFAGridAdapter,
     loaded_labels: LoadedLabels,
@@ -1672,18 +1774,7 @@ def _assemble_likelihood_groups(
 
     assembled_groups: dict[str, AssembledInputs] = {}
     for family, names in grouped_names.items():
-        group_labels = replace(
-            loaded_labels.config,
-            label_columns={
-                name: loaded_labels.config.label_columns[name]
-                for name in names
-            },
-            observation_models={
-                name: loaded_labels.config.observation_models[name]
-                for name in names
-                if name in loaded_labels.config.observation_models
-            },
-        )
+        group_labels = _fitted_label_config(loaded_labels.config, names)
         group_alphas = {name: fit_alphas[name] for name in names}
         if family == "gaussian":
             group_alphas = {}
@@ -1776,7 +1867,16 @@ def _assemble_likelihood_groups(
                 ],
                 dtype=np.float64,
             )
-            assembled = replace(assembled, y=assembled.y / scales)
+            if assembled.prior_response_mean_well is None:
+                raise RuntimeError(
+                    "Gaussian components require prior response means at "
+                    "observations"
+                )
+            assembled = replace(
+                assembled,
+                y=assembled.y / scales,
+                well_offsets=assembled.prior_response_mean_well / scales,
+            )
         assembled_groups[family] = assembled
     return assembled_groups
 
@@ -1862,6 +1962,10 @@ def _blocked_family_predictions(
             "component_names": assembled.component_names,
             "bayes_config": fold_cfg,
             "observed_mask": assembled.observed_mask[train_mask],
+            "observation_weights": assembled.observation_weights[train_mask],
+            "observation_weight_semantics": (
+                assembled.observation_weight_semantics
+            ),
             "offsets": assembled.well_offsets[train_mask],
             "grid_offsets": assembled.well_offsets[test_mask],
             "fixed_effects": evidence_design.train,
@@ -2241,6 +2345,14 @@ def _restore_streaming_posterior_states(
 
     metadata = persisted.metadata
     fitted_names = tuple(metadata.get("fitted_component_names", ()))
+    fitted_response_family = metadata.get(
+        "fitted_response_family", "bernoulli"
+    )
+    if fitted_response_family not in {"bernoulli", "gaussian"}:
+        raise ValueError(
+            "persisted fitted response family must be 'bernoulli' or "
+            "'gaussian'"
+        )
     fitted_state = None
     evidence_diagnostics = dict(metadata.get("evidence_diagnostics", {}))
     if fitted_names:
@@ -2271,6 +2383,12 @@ def _restore_streaming_posterior_states(
                 posterior_draw_index=persisted.index_path,
             ),
             diagnostics=dict(metadata["fitted_diagnostics"]),
+            response_family=fitted_response_family,
+            likelihood_precision_draws=(
+                None
+                if fitted_response_family == "bernoulli"
+                else np.asarray(persisted.arrays["likelihood_precision_draws"])
+            ),
         )
 
     prior_states: dict[str, PriorPredictiveEvidenceState | None] = {}
@@ -2378,7 +2496,7 @@ def _streaming_analysis_input_sha256(  # noqa: PLR0913
     grid_gdf: gpd.GeoDataFrame,
     ordered_names: tuple[str, ...],
     prior_names: tuple[str, ...],
-    prior_logit: np.ndarray,
+    prior_predictor: np.ndarray,
     assembled: AssembledInputs | None,
     evidence_design: JointEvidenceDesign | None,
     prior_states: Mapping[str, PriorPredictiveEvidenceState | None],
@@ -2431,7 +2549,10 @@ def _streaming_analysis_input_sha256(  # noqa: PLR0913
         dtype=np.dtype("<f8"),
     )
     _update_analysis_array(
-        digest, "prior_logit", prior_logit, dtype=np.dtype("<f8")
+        digest,
+        "prior_linear_predictor",
+        prior_predictor,
+        dtype=np.dtype("<f8"),
     )
 
     if assembled is None:
@@ -2452,6 +2573,12 @@ def _streaming_analysis_input_sha256(  # noqa: PLR0913
             "observed_mask",
             observed,
             dtype=np.dtype("u1"),
+        )
+        _update_analysis_array(
+            digest,
+            "observation_weights",
+            assembled.observation_weights,
+            dtype=np.dtype("<f8"),
         )
         _update_analysis_json(
             digest,
@@ -2520,22 +2647,39 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
     cfg: ProbabilisticConfig,
     *,
     evidence_design: JointEvidenceDesign | None,
+    fitted_family: str,
     nc: int,
     a_wght: float | None,
     scope: str,
 ) -> ProbabilisticResult:
     """Fit once and persist paired grid draws without a full draw cube."""
+    if fitted_family not in {"bernoulli", "gaussian"}:
+        raise ValueError(
+            "streamed Bayesian fitted family must be 'bernoulli' or 'gaussian'"
+        )
     bayes_cfg = cfg.inference.gblk_bayesian
     ordered_names = tuple(sorted(alphas))
+    has_gaussian_components = any(
+        _is_gaussian_component(cfg, name) for name in ordered_names
+    )
     component_index = {name: index for index, name in enumerate(ordered_names)}
     n_draws = bayes_cfg.n_draws
     n_cells = len(grid_gdf)
     q_total = len(ordered_names)
     prior_names = tuple(sorted(prior_only_names))
     gaussian_prior_responses: dict[str, _GaussianPriorResponseState] = {}
-    prior_logit_columns: list[NDArray[np.float64]] = []
+    prior_predictor_columns: list[NDArray[np.float64]] = []
     for name in ordered_names:
-        if name in prior_names and _is_gaussian_component(cfg, name):
+        if (
+            fitted_family == "gaussian"
+            and assembled is not None
+            and name in assembled.component_names
+        ):
+            source_index = assembled.component_names.index(name)
+            prior_predictor_columns.append(
+                assembled.grid_offsets[:, source_index]
+            )
+        elif name in prior_names and _is_gaussian_component(cfg, name):
             response = _gaussian_prior_response_on_reference(
                 grid_gdf,
                 adapter.pr_norm(name),
@@ -2543,14 +2687,9 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 component_name=name,
             )
             gaussian_prior_responses[name] = response
-            prior_logit_columns.append(
-                np.log(
-                    response.event_probability
-                    / (1.0 - response.event_probability)
-                )
-            )
+            prior_predictor_columns.append(response.mean)
         else:
-            prior_logit_columns.append(
+            prior_predictor_columns.append(
                 _component_values_on_reference(
                     grid_gdf,
                     adapter.pr_norm(name),
@@ -2558,9 +2697,9 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                     context=f"component {name!r} prior grid",
                 )
             )
-    prior_logit = np.column_stack(prior_logit_columns)
-    if prior_logit.shape != (n_cells, q_total) or not np.all(
-        np.isfinite(prior_logit)
+    prior_predictor = np.column_stack(prior_predictor_columns)
+    if prior_predictor.shape != (n_cells, q_total) or not np.all(
+        np.isfinite(prior_predictor)
     ):
         raise RuntimeError(
             "Bayesian component priors do not share one finite grid"
@@ -2599,7 +2738,7 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
         grid_gdf=grid_gdf,
         ordered_names=ordered_names,
         prior_names=prior_names,
-        prior_logit=prior_logit,
+        prior_predictor=prior_predictor,
         assembled=assembled,
         evidence_design=evidence_design,
         prior_states=current_prior_states,
@@ -2625,12 +2764,19 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
             )
         state_arrays = dict(persisted.arrays)
         state_metadata = dict(persisted.metadata)
-        if not np.array_equal(state_arrays["prior_logit"], prior_logit):
-            raise ValueError("persisted prior logits differ from this run")
-        # The writer retains the prior logits after fingerprint validation.
+        prior_state_name = (
+            "prior_linear_predictor"
+            if has_gaussian_components
+            else "prior_logit"
+        )
+        if not np.array_equal(state_arrays[prior_state_name], prior_predictor):
+            raise ValueError(
+                "persisted prior linear predictors differ from this run"
+            )
+        # The writer retains the prior predictor after fingerprint validation.
         # Keep that retained array independent of the disk mappings that must
         # be closed before an incomplete namespace can be renamed on Windows.
-        state_arrays["prior_logit"] = prior_logit
+        state_arrays[prior_state_name] = prior_predictor
         fitted_state, prior_states, evidence_diagnostics = (
             _restore_streaming_posterior_states(persisted, assembled)
         )
@@ -2649,6 +2795,10 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 component_names=assembled.component_names,
                 bayes_config=fitted_bayes_cfg,
                 observed_mask=assembled.observed_mask,
+                observation_weights=assembled.observation_weights,
+                observation_weight_semantics=(
+                    assembled.observation_weight_semantics
+                ),
                 offsets=assembled.well_offsets,
                 grid_offsets=assembled.grid_offsets,
                 fixed_effects=evidence_design.train,
@@ -2660,12 +2810,18 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 nlevel=cfg.spatial_field.n_levels,
                 a_wght=model_a_wght,
                 coordinate_scaling=cfg.spatial_field.coordinate_scaling,
+                response_family=fitted_family,
             )
             evidence_diagnostics = evidence_design.diagnostics
 
         prior_states = current_prior_states
 
-        state_arrays = {"prior_logit": prior_logit}
+        prior_state_name = (
+            "prior_linear_predictor"
+            if has_gaussian_components
+            else "prior_logit"
+        )
+        state_arrays = {prior_state_name: prior_predictor}
         state_metadata = {
             "scope": scope,
             "config_hash": config_hash,
@@ -2678,6 +2834,7 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 if fitted_state is None
                 else list(fitted_state.component_names)
             ),
+            "fitted_response_family": fitted_family,
             "coordinate_transform": cfg.spatial_field.coordinate_scaling,
             "prediction_cell_chunk_size": 10_000,
             "draw_block_size": cfg.outputs.posterior_draw_block_size,
@@ -2700,6 +2857,10 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
             if fitted_state.fixed_design_grid is not None:
                 state_arrays["fixed_design_grid"] = (
                     fitted_state.fixed_design_grid
+                )
+            if fitted_state.likelihood_precision_draws is not None:
+                state_arrays["likelihood_precision_draws"] = (
+                    fitted_state.likelihood_precision_draws
                 )
             state_metadata["lkinfo"] = fitted_state.lkinfo.model_dump(
                 mode="json"
@@ -2734,25 +2895,23 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
         roles = set(state_metadata["component_roles"].values())
         if fitted_state is None:
             state_metadata["model"] = "geopfa_probabilistic_prior_predictive"
-        elif roles == {"joint_posterior"}:
-            state_metadata["model"] = "geopfa_probabilistic_gblk_paige_inla"
         else:
+            model = "geopfa_probabilistic_gblk_paige_inla"
             state_metadata["model"] = (
-                "geopfa_probabilistic_gblk_paige_inla_with_"
-                "prior_predictive_components"
+                model
+                if roles == {"joint_posterior"}
+                else f"{model}_with_prior_predictive_components"
             )
 
     roles = set(state_metadata["component_roles"].values())
+    fitted_model = "geopfa_probabilistic_gblk_paige_inla"
     expected_model = (
         "geopfa_probabilistic_prior_predictive"
         if "joint_posterior" not in roles
         else (
-            "geopfa_probabilistic_gblk_paige_inla"
+            fitted_model
             if roles == {"joint_posterior"}
-            else (
-                "geopfa_probabilistic_gblk_paige_inla_with_"
-                "prior_predictive_components"
-            )
+            else f"{fitted_model}_with_prior_predictive_components"
         )
     )
     if state_metadata.get("model") != expected_model:
@@ -2761,10 +2920,56 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
             "remove the stale generated draw directory and rerun"
         )
 
+    component_models_list: list[dict[str, Any]] = []
+    for name in ordered_names:
+        if not _is_gaussian_component(cfg, name):
+            component_models_list.append({"family": "bernoulli"})
+            continue
+        threshold = alphas[name].event_threshold
+        is_fitted = (
+            fitted_state is not None and name in fitted_state.component_names
+        )
+        response_scale = (
+            cfg.labels.observation_model_for(name).response_scale
+            if is_fitted
+            else 1.0
+        )
+        if threshold is None or response_scale is None:
+            raise RuntimeError(
+                f"Gaussian component {name!r} requires an event threshold "
+                "and response scale"
+            )
+        component_models_list.append(
+            {
+                "family": "gaussian",
+                "event_threshold_scaled": float(threshold)
+                / float(response_scale),
+                **(
+                    {
+                        "probability_min": gaussian_prior_responses[
+                            name
+                        ].p_min,
+                        "probability_max": gaussian_prior_responses[
+                            name
+                        ].p_max,
+                    }
+                    if name in gaussian_prior_responses
+                    else {}
+                ),
+            }
+        )
+    component_models = tuple(component_models_list)
+    draw_cell_indices = _posterior_draw_cell_indices(cfg, n_cells=n_cells)
+    if draw_cell_indices is not None:
+        state_metadata["posterior_draw_cell_selection"] = {
+            "source_sha256": (cfg.outputs.posterior_draw_cell_indices_sha256),
+            "n_cells": int(draw_cell_indices.size),
+        }
     writer = PosteriorDrawBlockWriter(
         grid_gdf,
         cfg.output_dir,
         component_names=ordered_names,
+        component_models=component_models,
         n_draws=n_draws,
         block_size=cfg.outputs.posterior_draw_block_size,
         seed=bayes_cfg.seed,
@@ -2772,6 +2977,7 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
         scope=scope,
         state_arrays=state_arrays,
         state_metadata=state_metadata,
+        draw_cell_indices=draw_cell_indices,
     )
     completed_starts = {start for start, _ in writer.completed_draw_ranges}
     for draw_start in range(0, n_draws, cfg.outputs.posterior_draw_block_size):
@@ -2781,46 +2987,121 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
             draw_start + cfg.outputs.posterior_draw_block_size, n_draws
         )
         block_shape = (draw_stop - draw_start, n_cells, q_total)
-        evidence_logit = np.zeros(block_shape, dtype=np.float64)
-        spatial_logit = np.zeros(block_shape, dtype=np.float64)
+        evidence_predictor = np.zeros(block_shape, dtype=np.float64)
+        spatial_predictor = np.zeros(block_shape, dtype=np.float64)
+        precision_shape = (
+            block_shape
+            if gaussian_prior_responses
+            else (draw_stop - draw_start, q_total)
+        )
+        likelihood_precision = np.ones(precision_shape, dtype=np.float64)
         if fitted_state is not None:
-            fitted_block = project_gblk_bayesian_draw_block(
-                fitted_state, draw_start, draw_stop
-            )
+            if fitted_family == "gaussian":
+                fitted_block = project_gblk_gaussian_bayesian_draw_block(
+                    fitted_state, draw_start, draw_stop
+                )
+                fitted_prior = fitted_block.prior_mean
+                fitted_evidence = fitted_block.evidence_mean
+                fitted_spatial = fitted_block.spatial_mean
+                fitted_precision = fitted_block.likelihood_precision
+            else:
+                fitted_block = project_gblk_bayesian_draw_block(
+                    fitted_state, draw_start, draw_stop
+                )
+                fitted_prior = fitted_block.prior_logit
+                fitted_evidence = fitted_block.evidence_logit
+                fitted_spatial = fitted_block.spatial_logit
+                fitted_precision = None
             for source_index, name in enumerate(fitted_state.component_names):
                 target_index = component_index[name]
                 if not np.array_equal(
-                    fitted_block.prior_logit[:, source_index],
-                    prior_logit[:, target_index],
+                    fitted_prior[:, source_index],
+                    prior_predictor[:, target_index],
                 ):
                     raise RuntimeError(
-                        f"component {name!r} fitted and assembled prior logits differ"
+                        f"component {name!r} fitted and assembled prior "
+                        "linear predictors differ"
                     )
-                evidence_logit[:, :, target_index] = (
-                    fitted_block.evidence_logit[:, :, source_index]
-                )
-                spatial_logit[:, :, target_index] = fitted_block.spatial_logit[
+                evidence_predictor[:, :, target_index] = fitted_evidence[
                     :, :, source_index
                 ]
+                spatial_predictor[:, :, target_index] = fitted_spatial[
+                    :, :, source_index
+                ]
+                if fitted_precision is not None:
+                    if likelihood_precision.ndim == _TWO_DIMENSIONS:
+                        likelihood_precision[:, target_index] = (
+                            fitted_precision[:, source_index]
+                        )
+                    else:
+                        likelihood_precision[:, :, target_index] = (
+                            fitted_precision[:, source_index, np.newaxis]
+                        )
         for name in prior_names:
             prior_state = prior_states[name]
             if prior_state is None:
                 continue
             target_index = component_index[name]
-            evidence_logit[:, :, target_index] = (
+            evidence_predictor[:, :, target_index] = (
                 prior_state.coefficient_draws[draw_start:draw_stop]
                 @ prior_state.standardized_evidence.T
             )
-        component_probability = expit(
-            prior_logit[np.newaxis, :, :] + evidence_logit + spatial_logit
+        for name, response in gaussian_prior_responses.items():
+            target_index = component_index[name]
+            if likelihood_precision.ndim != _THREE_DIMENSIONS:
+                raise RuntimeError(
+                    "Gaussian prior response requires cell-specific precision"
+                )
+            likelihood_precision[:, :, target_index] = np.broadcast_to(
+                1.0 / response.sd**2,
+                (draw_stop - draw_start, n_cells),
+            )
+        eta = (
+            prior_predictor[np.newaxis, :, :]
+            + evidence_predictor
+            + spatial_predictor
         )
-        writer.write_block(
-            draw_start,
-            component_probability=component_probability,
-            prior_logit=prior_logit,
-            evidence_logit=evidence_logit,
-            spatial_logit=spatial_logit,
-        )
+        component_probability = np.empty(block_shape, dtype=np.float64)
+        for target_index, model in enumerate(component_models):
+            if model["family"] == "bernoulli":
+                component_probability[:, :, target_index] = expit(
+                    eta[:, :, target_index]
+                )
+                continue
+            component_probability[:, :, target_index] = np.clip(
+                ndtr(
+                    (eta[:, :, target_index] - model["event_threshold_scaled"])
+                    * np.sqrt(
+                        likelihood_precision[:, target_index, np.newaxis]
+                        if likelihood_precision.ndim == _TWO_DIMENSIONS
+                        else likelihood_precision[:, :, target_index]
+                    )
+                ),
+                float(model.get("probability_min", _OPEN_PROBABILITY_EPSILON)),
+                float(
+                    model.get(
+                        "probability_max",
+                        1.0 - _OPEN_PROBABILITY_EPSILON,
+                    )
+                ),
+            )
+        if not has_gaussian_components:
+            writer.write_block(
+                draw_start,
+                component_probability=component_probability,
+                prior_logit=prior_predictor,
+                evidence_logit=evidence_predictor,
+                spatial_logit=spatial_predictor,
+            )
+        else:
+            writer.write_predictive_block(
+                draw_start,
+                component_probability=component_probability,
+                prior_linear_predictor=prior_predictor,
+                evidence_linear_predictor=evidence_predictor,
+                spatial_linear_predictor=spatial_predictor,
+                likelihood_precision=likelihood_precision,
+            )
     resumed_incomplete_state = persisted is not None and not persisted.complete
     if resumed_incomplete_state:
         persisted.close()
@@ -2853,11 +3134,49 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 **evidence_diagnostics[name],
                 "posterior_draw_storage": "incremental_hashed_blocks",
             }
+            response_scale = 1.0
+            if fitted_family == "gaussian":
+                observation = cfg.labels.observation_model_for(name)
+                if observation.response_scale is None:
+                    raise RuntimeError(
+                        f"Gaussian component {name!r} lacks a response scale"
+                    )
+                response_scale = float(observation.response_scale)
+                threshold = alphas[name].event_threshold
+                if threshold is None:
+                    raise RuntimeError(
+                        f"Gaussian component {name!r} lacks an event threshold"
+                    )
+                precision_draws = fitted_state.likelihood_precision_draws
+                if precision_draws is None:
+                    raise RuntimeError(
+                        f"Gaussian component {name!r} lacks likelihood precision"
+                    )
+                diagnostics.update(
+                    {
+                        "observation_family": "gaussian",
+                        "response_scale": response_scale,
+                        "event_threshold": float(threshold),
+                        "event_probability_estimand": (
+                            "posterior_predictive_response_exceedance"
+                        ),
+                        "likelihood_sd_mean": float(
+                            np.mean(
+                                response_scale
+                                / np.sqrt(precision_draws[:, fitted_index])
+                            )
+                        ),
+                    }
+                )
             width = len(assembled.layer_names.get(name, []))
             if fitted_state.fixed_coef_draws is not None and width:
                 coefficient_draws = fitted_state.fixed_coef_draws[
                     :, :width, fitted_index
                 ]
+                if fitted_family == "gaussian":
+                    coefficient_draws = np.multiply(
+                        coefficient_draws, response_scale
+                    )
                 tail = (1.0 - bayes_cfg.ci_level) / 2.0
                 diagnostics["evidence_beta"] = coefficient_draws.mean(
                     axis=0
@@ -2889,7 +3208,11 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 model = prior_state
                 feature_names = prior_state.feature_names
         if fixed_prior:
-            fixed_probability = expit(prior_logit[:, q_index])
+            fixed_probability = (
+                gaussian_prior_responses[name].event_probability
+                if name in gaussian_prior_responses
+                else expit(prior_predictor[:, q_index])
+            )
             probability_values = fixed_probability
             probability_lower = fixed_probability
             probability_upper = fixed_probability
@@ -3044,21 +3367,11 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     assembled_groups: dict[str, AssembledInputs] = {}
     if fit_alphas:
         loaded_labels = load_labels(cfg.labels)
-        fitted_label_columns = {
-            name: column
-            for name, column in loaded_labels.config.label_columns.items()
-            if name not in prior_only_names
-        }
         fitted_labels = LoadedLabels(
             gdf=loaded_labels.gdf,
-            config=replace(
+            config=_fitted_label_config(
                 loaded_labels.config,
-                label_columns=fitted_label_columns,
-                observation_models={
-                    name: model
-                    for name, model in loaded_labels.config.observation_models.items()
-                    if name in fitted_label_columns
-                },
+                fit_alphas,
             ),
         )
         assembled_groups = _assemble_likelihood_groups(
@@ -3080,24 +3393,31 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 "Bayesian GBLK requires spatial_field.enabled=True"
             )
         if cfg.outputs.posterior_draw_blocks:
-            if "gaussian" in assembled_groups:
+            if len(assembled_groups) > 1:
                 raise GEOPFAValueError(
-                    "streamed posterior blocks do not yet support Gaussian "
-                    "components"
+                    "streamed posterior blocks require all fitted components "
+                    "to use one likelihood family"
                 )
+            fitted_family = (
+                next(iter(assembled_groups))
+                if assembled_groups
+                else "bernoulli"
+            )
+            streamed_assembled = assembled_groups.get(fitted_family)
             evidence_design = (
                 None
-                if assembled is None
-                else _prepare_joint_evidence(assembled, cfg)
+                if streamed_assembled is None
+                else _prepare_joint_evidence(streamed_assembled, cfg)
             )
             return _run_gblk_bayesian_streaming(
-                assembled,
+                streamed_assembled,
                 grid_gdf,
                 adapter,
                 alphas,
                 prior_only_names,
                 cfg,
                 evidence_design=evidence_design,
+                fitted_family=fitted_family,
                 nc=nc,
                 a_wght=a_wght,
                 scope=posterior_scope,
@@ -3519,14 +3839,7 @@ def freeze_gblk_forward_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     }
     fitted_labels = LoadedLabels(
         gdf=loaded_labels.gdf,
-        config=replace(
-            loaded_labels.config,
-            label_columns={
-                name: column
-                for name, column in loaded_labels.config.label_columns.items()
-                if name not in prior_only_names
-            },
-        ),
+        config=_fitted_label_config(loaded_labels.config, fit_alphas),
     )
     if not fit_alphas:
         raise GEOPFAValueError(
@@ -3673,14 +3986,7 @@ def _assemble_from_config(
     }
     fitted_labels = LoadedLabels(
         gdf=loaded_labels.gdf,
-        config=replace(
-            loaded_labels.config,
-            label_columns={
-                name: column
-                for name, column in loaded_labels.config.label_columns.items()
-                if name not in prior_only_names
-            },
-        ),
+        config=_fitted_label_config(loaded_labels.config, fit_alphas),
     )
     return assemble_gblk_inputs(
         adapter,

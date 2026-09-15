@@ -357,6 +357,10 @@ def test_p_gblk_assemble_preserves_componentwise_missingness():
     assert not result.observed_mask[1, 1]
     assert not result.labeled_mask[0]
     assert not result.labeled_mask[1]
+    np.testing.assert_array_equal(
+        result.observation_weights,
+        np.ones_like(result.y),
+    )
 
 
 def test_p_gblk_assemble_rejects_nonnumeric_observed_label():
@@ -491,6 +495,61 @@ def test_p_gblk_assemble_rejects_missing_configured_depth_column():
             LoadedLabels(gdf=wells, config=config),
             _make_alpha_results(components, grid, rng=rng),
         )
+
+
+def test_gaussian_observation_prior_moments_override_snapped_grid_values():
+    rng = np.random.default_rng(107)
+    components = ["heat"]
+    grid = _make_grid_gdf(3)
+    pfa = _make_pfa(components, grid, n_layers=1, rng=rng)
+    wells = _make_wells_gdf(3, components, rng=rng, unlabeled_count=0)
+    wells["heat_label"] = [120.0, 180.0, 140.0]
+    wells["loo_temperature_mean_c"] = [101.0, 102.0, 103.0]
+    wells["loo_temperature_sd_c"] = [11.0, 12.0, 13.0]
+    wells["well_balanced_weight"] = [0.5, 1.0, 1.5]
+    alpha = {
+        "heat": AlphaCResult(
+            grid_offset=np.zeros(len(grid)),
+            scalar_fallback=0.0,
+            latent_mean=np.linspace(150.0, 200.0, len(grid)),
+            latent_sd=np.full(len(grid), 25.0),
+            event_threshold=400.0,
+        )
+    }
+    config = LabelsConfig(
+        source="/synthetic/wells.gpkg",
+        id_col="well_id",
+        label_columns={"heat": "heat_label"},
+        observation_models={
+            "heat": ObservationModelConfig(
+                family="gaussian", response_scale=50.0
+            )
+        },
+        prior_response_mean_columns={"heat": "loo_temperature_mean_c"},
+        prior_response_sd_columns={"heat": "loo_temperature_sd_c"},
+        observation_weight_columns={"heat": "well_balanced_weight"},
+        observation_weight_semantics=("generalized_bayesian_power_likelihood"),
+    )
+
+    result = assemble_gblk_inputs(
+        PFAGridAdapter(pfa, criteria="geologic", dimensions="2d"),
+        LoadedLabels(gdf=wells, config=config),
+        alpha,
+    )
+
+    np.testing.assert_allclose(
+        result.prior_response_mean_well[:, 0], [101.0, 102.0, 103.0]
+    )
+    np.testing.assert_allclose(
+        result.prior_response_sd_well[:, 0], [11.0, 12.0, 13.0]
+    )
+    np.testing.assert_allclose(
+        result.observation_weights[:, 0], [0.5, 1.0, 1.5]
+    )
+    assert (
+        result.observation_weight_semantics
+        == "generalized_bayesian_power_likelihood"
+    )
 
 
 def test_p_gblk_assemble_rejects_negative_positive_down_depth():

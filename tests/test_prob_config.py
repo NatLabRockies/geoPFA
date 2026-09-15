@@ -189,6 +189,8 @@ def test_posterior_draw_output_config_roundtrips() -> None:
     raw["outputs"] = {
         "posterior_draw_blocks": True,
         "posterior_draw_block_size": 7,
+        "posterior_draw_cell_indices_source": "paper4_cells.npy",
+        "posterior_draw_cell_indices_sha256": "a" * 64,
         "format": [],
     }
 
@@ -221,6 +223,38 @@ def test_posterior_draw_blocks_reject_truthy_string() -> None:
     raw["outputs"] = {"posterior_draw_blocks": "true"}
 
     with pytest.raises(ValueError, match="posterior_draw_blocks"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+@pytest.mark.parametrize(
+    "outputs",
+    [
+        {"posterior_draw_cell_indices_source": "cells.npy"},
+        {"posterior_draw_cell_indices_sha256": "a" * 64},
+        {
+            "posterior_draw_cell_indices_source": "cells.npy",
+            "posterior_draw_cell_indices_sha256": "not-a-sha256",
+        },
+    ],
+)
+def test_posterior_draw_cell_subset_requires_paired_hash_bound_fields(
+    outputs: dict[str, object],
+) -> None:
+    raw = _minimal_config_dict()
+    raw["outputs"] = outputs
+
+    with pytest.raises(ValueError, match="posterior_draw_cell_indices"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_posterior_draw_cell_subset_requires_draw_blocks() -> None:
+    raw = _minimal_config_dict()
+    raw["outputs"] = {
+        "posterior_draw_cell_indices_source": "cells.npy",
+        "posterior_draw_cell_indices_sha256": "a" * 64,
+    }
+
+    with pytest.raises(ValueError, match="posterior_draw_blocks=true"):
         ProbabilisticConfig.from_dict(raw)
 
 
@@ -306,6 +340,124 @@ def test_gaussian_component_observation_model_roundtrips() -> None:
         cfg.to_dict()["labels"]["observation_models"]
         == raw["labels"]["observation_models"]
     )
+
+
+def test_gaussian_observation_prior_moment_columns_roundtrip() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+    raw["labels"]["prior_response_mean_columns"] = {
+        "heat": "loo_temperature_mean_c"
+    }
+    raw["labels"]["prior_response_sd_columns"] = {
+        "heat": "loo_temperature_sd_c"
+    }
+    raw["labels"]["observation_weight_columns"] = {
+        "heat": "well_balanced_weight"
+    }
+    raw["labels"]["observation_weight_semantics"] = (
+        "generalized_bayesian_power_likelihood"
+    )
+    raw["alpha"]["heat"] = {
+        "mode": "thermal_layer_exceedance",
+        "layer": "temperature_model",
+        "threshold": 400.0,
+        "uncertainty_column": "temperature_sd_c",
+    }
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {"enabled": True},
+    }
+
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.labels.prior_response_mean_columns == {
+        "heat": "loo_temperature_mean_c"
+    }
+    assert cfg.labels.prior_response_sd_columns == {
+        "heat": "loo_temperature_sd_c"
+    }
+    assert cfg.labels.observation_weight_columns == {
+        "heat": "well_balanced_weight"
+    }
+    assert cfg.labels.observation_weight_semantics == (
+        "generalized_bayesian_power_likelihood"
+    )
+    assert cfg.to_dict()["labels"]["prior_response_mean_columns"] == {
+        "heat": "loo_temperature_mean_c"
+    }
+    assert cfg.to_dict()["labels"]["prior_response_sd_columns"] == {
+        "heat": "loo_temperature_sd_c"
+    }
+    assert cfg.to_dict()["labels"]["observation_weight_columns"] == {
+        "heat": "well_balanced_weight"
+    }
+    assert cfg.to_dict()["labels"]["observation_weight_semantics"] == (
+        "generalized_bayesian_power_likelihood"
+    )
+
+
+def test_observation_weight_column_requires_explicit_likelihood_semantics() -> (
+    None
+):
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_weight_columns"] = {
+        "heat": "well_balanced_weight"
+    }
+
+    with pytest.raises(ValueError, match="observation_weight_semantics"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_observation_weight_column_requires_declared_label_component() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_weight_columns"] = {
+        "not_a_component": "likelihood_weight"
+    }
+
+    with pytest.raises(
+        ValueError, match="observation_weight_columns.*label columns"
+    ):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_observation_weight_columns_require_bayesian_gblk() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_weight_columns"] = {"heat": "likelihood_weight"}
+    raw["labels"]["observation_weight_semantics"] = (
+        "generalized_bayesian_power_likelihood"
+    )
+
+    with pytest.raises(ValueError, match="observation weights.*Bayesian GBLK"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["prior_response_mean_columns", "prior_response_sd_columns"],
+)
+def test_prior_response_moment_columns_require_gaussian_component(
+    field: str,
+) -> None:
+    raw = _minimal_config_dict()
+    raw["labels"][field] = {"heat": "loo_temperature_c"}
+
+    with pytest.raises(ValueError, match=rf"{field}.*Gaussian"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_prior_response_sd_column_requires_matching_mean_column() -> None:
+    raw = _minimal_config_dict()
+    raw["labels"]["observation_models"] = {
+        "heat": {"family": "gaussian", "response_scale": 50.0}
+    }
+    raw["labels"]["prior_response_sd_columns"] = {
+        "heat": "loo_temperature_sd_c"
+    }
+
+    with pytest.raises(ValueError, match="prior_response_sd_columns.*mean"):
+        ProbabilisticConfig.from_dict(raw)
 
 
 def test_gaussian_component_requires_explicit_response_scale() -> None:
@@ -933,7 +1085,7 @@ def test_gaussian_component_requires_thermal_prior_mean() -> None:
         ProbabilisticConfig.from_dict(raw)
 
 
-def test_gaussian_component_rejects_incremental_draw_storage() -> None:
+def test_gaussian_component_supports_incremental_draw_storage() -> None:
     raw = _minimal_config_dict()
     raw["labels"]["observation_models"] = {
         "heat": {"family": "gaussian", "response_scale": 50.0}
@@ -949,8 +1101,9 @@ def test_gaussian_component_rejects_incremental_draw_storage() -> None:
     }
     raw["outputs"] = {"posterior_draw_blocks": True}
 
-    with pytest.raises(ValueError, match="Gaussian.*posterior_draw_blocks"):
-        ProbabilisticConfig.from_dict(raw)
+    cfg = ProbabilisticConfig.from_dict(raw)
+
+    assert cfg.outputs.posterior_draw_blocks is True
 
 
 def test_gaussian_stacking_requires_prior_predictive_uncertainty() -> None:
@@ -1368,6 +1521,19 @@ def test_load_probabilistic_config_resolves_declared_paths_from_config_dir(
         "outcome_feature_columns": ["temperature"],
         "selection_feature_columns": ["roads"],
     }
+    raw["outputs"] = {
+        "posterior_draw_blocks": True,
+        "posterior_draw_cell_indices_source": "../data/paper4_cells.npy",
+        "posterior_draw_cell_indices_sha256": "a" * 64,
+    }
+    raw["inference"] = {
+        "backend": "gblk",
+        "gblk_bayesian": {
+            "enabled": True,
+            "cluster_effect": False,
+            "kleiber_profiles": {"bernoulli": {"r0": 0.25, "r1": 0.10}},
+        },
+    }
     cfg_path = config_dir / "pfa_config.json"
     cfg_path.write_text(json.dumps({"probabilistic": raw}))
 
@@ -1384,6 +1550,9 @@ def test_load_probabilistic_config_resolves_declared_paths_from_config_dir(
     )
     assert Path(cfg.site_selection.candidate_source) == (
         expected_data / "candidates.csv"
+    )
+    assert Path(cfg.outputs.posterior_draw_cell_indices_source) == (
+        expected_data / "paper4_cells.npy"
     )
 
 

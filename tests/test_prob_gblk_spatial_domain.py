@@ -117,6 +117,14 @@ def test_explicit_spatial_domain_freezes_bayesian_geometry_across_folds(
             extra={
                 "c_draws": np.zeros((2, basis.shape[1], y.shape[1])),
                 "fixed_draws": None,
+                "likelihood_weighting": {
+                    "semantics": "ordinary_bayesian_likelihood",
+                    "normalizing_constant": "ordinary_likelihood",
+                    "n_observed": 3,
+                    "weight_min": 1.0,
+                    "weight_max": 1.0,
+                    "weight_sum": 3.0,
+                },
             },
         )
 

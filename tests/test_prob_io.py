@@ -14,6 +14,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.special import ndtr
 
 from geopfa.prob.config import (
     AlphaModeConfig,
@@ -874,6 +875,168 @@ def test_incremental_posterior_writer_persists_state_and_decomposed_blocks(
                     )
                 ),
             )
+
+
+def test_incremental_writer_persists_mixed_family_predictive_blocks(
+    tmp_path: Path,
+) -> None:
+    grid = gpd.GeoDataFrame(
+        geometry=gpd.points_from_xy([0.0, 1.0], [2.0, 3.0]),
+        crs="EPSG:32610",
+    )
+    prior = np.array([[7.5, -0.2], [8.5, 0.2]])
+    writer = PosteriorDrawBlockWriter(
+        grid,
+        tmp_path,
+        component_names=("heat", "reservoir"),
+        component_models=(
+            {"family": "gaussian", "event_threshold_scaled": 8.0},
+            {"family": "bernoulli"},
+        ),
+        n_draws=2,
+        block_size=2,
+        seed=17,
+        combination_rule="product",
+        scope="baseline",
+        state_arrays={"prior_linear_predictor": prior},
+        state_metadata=_posterior_metadata(("heat", "reservoir")),
+    )
+    evidence = np.array(
+        [
+            [[0.1, 0.2], [0.2, -0.1]],
+            [[-0.1, 0.1], [0.3, -0.2]],
+        ]
+    )
+    spatial = np.zeros_like(evidence)
+    precision = np.array([[4.0, 1.0], [9.0, 1.0]])
+    eta = prior[np.newaxis, :, :] + evidence
+    probability = np.empty_like(eta)
+    probability[:, :, 0] = ndtr(
+        (eta[:, :, 0] - 8.0) * np.sqrt(precision[:, 0, np.newaxis])
+    )
+    probability[:, :, 1] = 1.0 / (1.0 + np.exp(-eta[:, :, 1]))
+
+    writer.write_predictive_block(
+        0,
+        component_probability=probability,
+        prior_linear_predictor=prior,
+        evidence_linear_predictor=evidence,
+        spatial_linear_predictor=spatial,
+        likelihood_precision=precision,
+    )
+    summary = writer.finalize(ci_level=0.9)
+    index = json.loads(summary.index_path.read_text(encoding="utf-8"))
+    audit = verify_posterior_draw_bundle(summary.index_path)
+
+    assert index["schema_version"] == 3
+    assert index["component_models"] == [
+        {"family": "gaussian", "event_threshold_scaled": 8.0},
+        {"family": "bernoulli"},
+    ]
+    assert index["decomposition"] == (
+        "prior_linear_predictor + evidence_linear_predictor + "
+        "spatial_linear_predictor"
+    )
+    assert audit["schema_version"] == 3
+    assert audit["decomposition_verified"] is True
+    np.testing.assert_allclose(
+        summary.component_mean, probability.mean(axis=0)
+    )
+
+
+def test_incremental_writer_materializes_only_selected_cells_but_summarizes_full_grid(
+    tmp_path: Path,
+) -> None:
+    grid = gpd.GeoDataFrame(
+        geometry=gpd.points_from_xy([0.0, 1.0, 2.0], [3.0, 4.0, 5.0]),
+        crs="EPSG:32610",
+    )
+    prior = np.array([[-0.5, 0.1], [0.0, 0.2], [0.5, 0.3]], dtype=np.float64)
+    probability = np.array(
+        [
+            [[0.2, 0.3], [0.4, 0.5], [0.6, 0.7]],
+            [[0.3, 0.4], [0.5, 0.6], [0.7, 0.8]],
+        ],
+        dtype=np.float64,
+    )
+    eta = np.log(probability) - np.log1p(-probability)
+    evidence = eta - prior[np.newaxis, :, :]
+    spatial = np.zeros_like(evidence)
+    selected = np.array([0, 2], dtype=np.int64)
+    writer = PosteriorDrawBlockWriter(
+        grid,
+        tmp_path,
+        component_names=("heat", "reservoir"),
+        n_draws=2,
+        block_size=1,
+        seed=17,
+        combination_rule="product",
+        scope="baseline",
+        state_arrays={"prior_logit": prior},
+        state_metadata=_posterior_metadata(("heat", "reservoir")),
+        draw_cell_indices=selected,
+    )
+    writer.write_block(
+        0,
+        component_probability=probability[:1],
+        prior_logit=prior,
+        evidence_logit=evidence[:1],
+        spatial_logit=spatial[:1],
+    )
+
+    resumed = PosteriorDrawBlockWriter(
+        grid,
+        tmp_path,
+        component_names=("heat", "reservoir"),
+        n_draws=2,
+        block_size=1,
+        seed=17,
+        combination_rule="product",
+        scope="baseline",
+        state_arrays={"prior_logit": prior},
+        state_metadata=_posterior_metadata(("heat", "reservoir")),
+        draw_cell_indices=selected,
+    )
+    resumed.write_block(
+        1,
+        component_probability=probability[1:],
+        prior_logit=prior,
+        evidence_logit=evidence[1:],
+        spatial_logit=spatial[1:],
+    )
+    summary = resumed.finalize(ci_level=0.5)
+    index = json.loads(summary.index_path.read_text(encoding="utf-8"))
+
+    assert index["n_cells"] == 3
+    assert index["materialized_n_cells"] == 2
+    assert index["draw_materialization"]["mode"] == "cell_subset"
+    stored_selection = np.load(
+        summary.index_path.parent
+        / index["draw_materialization"]["cell_indices"]["path"],
+        allow_pickle=False,
+    )
+    np.testing.assert_array_equal(stored_selection, selected)
+    with np.load(
+        summary.index_path.parent / index["blocks"][0]["path"],
+        allow_pickle=False,
+    ) as block:
+        assert block["component_probability"].shape == (1, 2, 2)
+        np.testing.assert_array_equal(block["prior_logit"], prior[selected])
+    np.testing.assert_allclose(
+        summary.component_mean, probability.mean(axis=0)
+    )
+    np.testing.assert_allclose(
+        summary.combined_mean, np.prod(probability, axis=2).mean(axis=0)
+    )
+    assert set(index["full_grid_summaries"]) == {
+        "component_mean",
+        "component_interval",
+        "combined_mean",
+        "combined_interval",
+    }
+    audit = verify_posterior_draw_bundle(summary.index_path)
+    assert audit["n_cells"] == 3
+    assert audit["materialized_n_cells"] == 2
 
 
 def test_incremental_draw_writer_names_prior_predictive_uncertainty_truthfully(

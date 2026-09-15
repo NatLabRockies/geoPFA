@@ -64,6 +64,26 @@ to the same component-combination step used for binary outcomes. Gaussian and
 Bernoulli components are fit separately, so geoPFA does not claim estimated
 cross-response-family dependence.
 
+By default, every observed row contributes one ordinary likelihood term. A
+component may instead name a positive observation-weight column and explicitly
+declare `generalized_bayesian_power_likelihood`. In that case geoPFA and
+LatticeKrigX pass the row-aligned weights $w_{qi}$ to R-INLA, and the likelihood
+part of the target is
+
+$$
+\sum_{q,i:\,y_{qi}\ \mathrm{observed}} w_{qi}\log p(y_{qi}\mid\theta).
+$$
+
+R-INLA does not recompute the likelihood normalizing constant for fractional
+weights. Non-unit values therefore define a power likelihood and generalized
+Bayesian posterior, not an ordinary heteroskedastic or within-well Gaussian
+sampling model. Any fitted Gaussian precision under this contract is a working
+likelihood precision under the declared generalized posterior. The config must
+state the semantics explicitly; geoPFA records the observed weight count,
+minimum, maximum, and sum and rejects a semantics/values mismatch. Balancing
+rows can control repeated-profile influence, but it does not estimate
+within-well covariance.
+
 Gaussian component tables report `response_predictive_mean`,
 `response_predictive_lo`, and `response_predictive_hi` in physical response
 units. For a fitted component, the posterior-predictive interval includes
@@ -235,6 +255,8 @@ are summarized below.
 | `depth_col` | `null` | Optional nonnegative, positive-down scientific depth. If CSV `z_col` is omitted, model geometry uses `z = -depth`; if both are present, `z_col` controls geometry and depth remains available for target-depth validation. |
 | `label_columns` | required for fitted or site-selection paths | Per-component label-column mapping (e.g. `{"heat": "heat_label", "reservoir": "reservoir_label"}`). |
 | `observation_models` | `{}` | Optional per-component response family. Omitted labelled components are Bernoulli. A fitted Gaussian component requires `family="gaussian"` and a positive `response_scale`. A Gaussian component with `force_prior_predictive=true` is already in physical units, must declare thermal response uncertainty, and omits `response_scale`. An alpha-only declaration is valid only when that component sets `force_prior_predictive=true`. |
+| `observation_weight_columns` | `{}` | Optional per-component mapping to positive finite row weights. The weights are used only at observed responses and require Bayesian GBLK inference. Non-unit weights define a generalized Bayesian power likelihood. |
+| `observation_weight_semantics` | `null` | Required when weight columns are configured. Use `generalized_bayesian_power_likelihood` for non-unit weights; unit observed weights require `ordinary_bayesian_likelihood`. The runner fails closed if the declared semantics and realized observed values differ. |
 | `min_wells_for_fit` | `4` | Minimum observed support required by the selected fit; insufficient support raises rather than silently changing models. |
 | `pu_mode` | `"off"` | `"off"`, `"naive_pseudo_absence"`, or modern non-negative PU risk estimation (`"nnpu"`; sequential outcome path only). |
 | `pu_class_prior` | `null` | Externally identified population prevalence required by `pu_mode="nnpu"`; a scalar or per-component mapping with values strictly inside `(0, 1)`. |
@@ -384,11 +406,14 @@ leaves any fold below the declared training-well support, geoPFA does not score
 an incomplete out-of-fold prediction set. It retains the affected family
 prior, records `prior_retained_incomplete_spatial_cv`, and preserves the
 missing predictions in the stacking evidence.
-Incremental posterior-block storage is not currently available with fitted
-Gaussian components or predictive stacking. Fixed Gaussian prior-only
-components are supported because their response distribution is configured
-rather than fitted. Unsupported combinations fail during config validation
-instead of silently omitting either operation.
+Incremental posterior-block storage supports a fitted Gaussian family with
+paired latent-mean and likelihood-precision draws, including mixed products
+with fixed prior-only Bernoulli components. Predictive stacking remains
+incompatible with posterior blocks and fails during config validation rather
+than silently omitting either operation. One posterior-block run may contain
+only one fitted response family; separate fitted Gaussian and Bernoulli
+families must be run separately because their posterior innovations are not
+jointly identified.
 
 ### `calibration`
 
@@ -423,6 +448,8 @@ A list of ablation scenarios; each is `{name, include_priors, include_spatial, d
 | `scenarios` | `true` | Emit each configured scenario beneath `output_dir/scenarios/<name>/`; scenarios remain available in memory when this is false. |
 | `posterior_draw_blocks` | `false` | Persist paired, decomposed probability draws for Bayesian posterior, prior-predictive, or mixed runs beneath `output_dir/posterior_draws/`. All-fixed runs are rejected because replicated constants are not uncertainty draws. |
 | `posterior_draw_block_size` | `20` | Number of posterior draws projected and persisted per compressed block; bounds draw-by-grid working memory without changing the estimand. |
+| `posterior_draw_cell_indices_source` | `null` | Optional `.npy` file containing a non-empty, strictly increasing subset of zero-based full-grid cell indices to materialize in every draw block. Exact full-grid posterior means and intervals are still accumulated and persisted. |
+| `posterior_draw_cell_indices_sha256` | `null` | Required lowercase SHA-256 digest of `posterior_draw_cell_indices_source`. The run rejects a mismatch before fitting or resuming. |
 | `format` | 2-D: `["geotiff", "csv"]`; 3-D: `["vtk", "csv"]` | GeoTIFF is 2-D only and VTK is 3-D only. CSV and Parquet support either dimension. |
 
 Draw blocks are available only when `inference.backend="gblk"`,
@@ -438,14 +465,16 @@ It never appends draws from a second posterior fit. Abrupt termination inside
 state or final-product publication is rejected rather than repaired or silently
 mixed.
 
-The schema-version-2 `index.json` fixes the run/scenario scope, component order,
-coordinate columns and CRS, posterior seed, draw IDs, product combination
-contract, and SHA-256 hash of every coordinate, state, and draw payload. Each
-`.npz` block
-contains `prior_logit`, `evidence_logit`, `spatial_logit`,
-`component_probability`, and `combined_probability`. The writer and
-`verify_posterior_draw_bundle` independently verify
-`component_probability = logit^{-1}(prior + evidence + spatial)` and the
+The posterior `index.json` fixes the run/scenario scope, component order,
+coordinate columns and CRS, posterior seed, draw IDs, product-combination
+contract, and SHA-256 hash of every coordinate, state, draw, and summary
+payload. Schema version 2 stores all-Bernoulli draws, version 3 adds Gaussian
+predictive draws, and version 4 stores draw-level payloads only at a hash-bound
+cell subset while retaining exact full-grid component and combined means and
+intervals. Each `.npz` block contains the family-appropriate prior, evidence,
+and spatial decomposition plus component and combined probabilities. The
+writer and `verify_posterior_draw_bundle` independently verify the predictor
+decomposition, Gaussian exceedance calculation where applicable, and the
 within-draw product. Its
 `uncertainty_semantics` is derived from the component roles and distinguishes
 posterior, prior-predictive, and mixed draws. Exact draw means and

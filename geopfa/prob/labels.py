@@ -117,6 +117,54 @@ def _validate_columns(gdf: gpd.GeoDataFrame, cfg: LabelsConfig) -> None:
             label_column=label_col,
             family=cfg.observation_model_for(component).family,
         )
+        observed = np.isfinite(gdf[label_col].to_numpy(dtype=float))
+        for field_name, columns, require_positive in (
+            (
+                "prior response mean",
+                cfg.prior_response_mean_columns,
+                False,
+            ),
+            ("prior response SD", cfg.prior_response_sd_columns, True),
+        ):
+            if component not in columns:
+                continue
+            column = columns[component]
+            if column not in gdf.columns:
+                raise KeyError(
+                    f"labelled-well file missing {field_name} column "
+                    f"{column!r} for component {component!r}"
+                )
+            numeric = pd.to_numeric(gdf[column], errors="coerce")
+            values = numeric.to_numpy(dtype=float, na_value=np.nan)
+            if not np.all(np.isfinite(values[observed])):
+                raise ValueError(
+                    f"{field_name} column {column!r} must contain finite "
+                    "numeric values wherever the component response is observed"
+                )
+            if require_positive and np.any(values[observed] <= 0.0):
+                raise ValueError(
+                    f"{field_name} column {column!r} must be positive "
+                    "wherever the component response is observed"
+                )
+            gdf[column] = numeric.astype(float)
+        weight_column = cfg.observation_weight_columns.get(component)
+        if weight_column is not None:
+            if weight_column not in gdf.columns:
+                raise KeyError(
+                    "labelled-well file missing observation weight column "
+                    f"{weight_column!r} for component {component!r}"
+                )
+            numeric = pd.to_numeric(gdf[weight_column], errors="coerce")
+            values = numeric.to_numpy(dtype=float, na_value=np.nan)
+            if not np.all(np.isfinite(values[observed])) or np.any(
+                values[observed] <= 0.0
+            ):
+                raise ValueError(
+                    f"observation weight column {weight_column!r} must "
+                    "contain positive finite numeric values wherever the "
+                    "component response is observed"
+                )
+            gdf[weight_column] = numeric.astype(float)
 
 
 def _maybe_reproject(

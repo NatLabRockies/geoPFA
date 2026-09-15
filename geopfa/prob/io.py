@@ -24,7 +24,7 @@ from collections.abc import Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from numbers import Integral
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +32,7 @@ import geopandas as gpd
 import numpy as np
 import rasterio
 from rasterio.transform import from_origin
+from scipy.special import ndtr
 
 from .config import (
     ALLOWED_OUTPUT_FORMATS,
@@ -43,7 +44,16 @@ from geopfa.exceptions import GEOPFAValueError
 _MIN_POINTS_FOR_SPACING_CHECK = 3
 _DRAW_ARRAY_DIMENSIONS = 2
 _SUMMARY_CELL_CHUNK_SIZE = 2_048
-_INCREMENTAL_DRAW_SCHEMA_VERSION = 2
+_BERNOULLI_DRAW_SCHEMA_VERSION = 2
+_MIXED_FAMILY_DRAW_SCHEMA_VERSION = 3
+_CELL_SUBSET_DRAW_SCHEMA_VERSION = 4
+_INCREMENTAL_DRAW_SCHEMA_VERSIONS = frozenset(
+    {
+        _BERNOULLI_DRAW_SCHEMA_VERSION,
+        _MIXED_FAMILY_DRAW_SCHEMA_VERSION,
+        _CELL_SUBSET_DRAW_SCHEMA_VERSION,
+    }
+)
 _RUN_RESUME_SCHEMA_VERSION = 1
 _RUN_RESUME_FILENAME = ".probabilistic_run.incomplete.json"
 _RUNTIME_SOURCE_SUFFIXES = {
@@ -60,6 +70,49 @@ _SHAPEFILE_REQUIRED_SIDECARS = (".dbf", ".shx")
 _SHAPEFILE_OPTIONAL_SIDECARS = (".cpg", ".prj")
 _SPATIAL_DIMENSION_2D = 2
 _SPATIAL_DIMENSION_3D = 3
+_OPEN_PROBABILITY_EPSILON = 1e-12
+
+
+def _gaussian_component_probability_bounds(
+    model: Mapping[str, Any],
+) -> tuple[float, float]:
+    """Return and validate one Gaussian component's open clipping bounds."""
+    has_min = "probability_min" in model
+    has_max = "probability_max" in model
+    if has_min != has_max:
+        raise ValueError(
+            "Gaussian component models must declare probability_min and "
+            "probability_max together"
+        )
+    if not has_min:
+        return (
+            _OPEN_PROBABILITY_EPSILON,
+            1.0 - _OPEN_PROBABILITY_EPSILON,
+        )
+    probability_min = model["probability_min"]
+    probability_max = model["probability_max"]
+    if (
+        isinstance(probability_min, bool)
+        or not isinstance(probability_min, Real)
+        or isinstance(probability_max, bool)
+        or not isinstance(probability_max, Real)
+    ):
+        raise TypeError(
+            "Gaussian component probability bounds must be finite and satisfy "
+            "0 < probability_min < probability_max < 1"
+        )
+    lower = float(probability_min)
+    upper = float(probability_max)
+    if (
+        not np.isfinite(lower)
+        or not np.isfinite(upper)
+        or not 0.0 < lower < upper < 1.0
+    ):
+        raise ValueError(
+            "Gaussian component probability bounds must be finite and satisfy "
+            "0 < probability_min < probability_max < 1"
+        )
+    return lower, upper
 
 
 def _surface_point_dimension(name: str, gdf: gpd.GeoDataFrame) -> int:
@@ -658,6 +711,13 @@ def _verify_file_record(root: Path, record: Mapping[str, Any]) -> Path:
     return path
 
 
+def _array_sha256(array: np.ndarray) -> str:
+    """Hash one numeric array in canonical C-contiguous byte order."""
+    return hashlib.sha256(
+        np.ascontiguousarray(array).view(np.uint8)
+    ).hexdigest()
+
+
 class PosteriorDrawBlockWriter:
     """Incrementally persist one immutable posterior/scenario draw namespace.
 
@@ -669,12 +729,13 @@ class PosteriorDrawBlockWriter:
     bounded by the configured draw block and summary cell chunk sizes.
     """
 
-    def __init__(  # noqa: PLR0912, PLR0913, PLR0915
+    def __init__(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
         self,
         grid_gdf: gpd.GeoDataFrame,
         output_dir: Path,
         *,
         component_names: tuple[str, ...],
+        component_models: tuple[Mapping[str, Any], ...] | None = None,
         n_draws: int,
         block_size: int,
         seed: int,
@@ -682,6 +743,7 @@ class PosteriorDrawBlockWriter:
         scope: str,
         state_arrays: Mapping[str, np.ndarray],
         state_metadata: Mapping[str, Any],
+        draw_cell_indices: np.ndarray | None = None,
     ) -> None:
         if not component_names or len(set(component_names)) != len(
             component_names
@@ -691,6 +753,74 @@ class PosteriorDrawBlockWriter:
             not isinstance(name, str) or not name for name in component_names
         ):
             raise ValueError("component_names must contain non-empty strings")
+        if component_models is None:
+            validated_models = tuple(
+                {"family": "bernoulli"} for _ in component_names
+            )
+        else:
+            if len(component_models) != len(component_names):
+                raise ValueError(
+                    "component_models must contain one model per component"
+                )
+            validated_models_list: list[dict[str, Any]] = []
+            for name, raw_model in zip(
+                component_names, component_models, strict=True
+            ):
+                if not isinstance(raw_model, Mapping):
+                    raise TypeError(
+                        f"component model for {name!r} must be a mapping"
+                    )
+                family = raw_model.get("family")
+                allowed_keys = (
+                    {
+                        "family",
+                        "event_threshold_scaled",
+                        "probability_min",
+                        "probability_max",
+                    }
+                    if family == "gaussian"
+                    else {"family"}
+                )
+                unknown = set(raw_model) - allowed_keys
+                if unknown:
+                    raise ValueError(
+                        f"component model for {name!r} has unknown fields: "
+                        + ", ".join(sorted(unknown))
+                    )
+                if family == "bernoulli":
+                    validated_models_list.append({"family": "bernoulli"})
+                    continue
+                if family != "gaussian":
+                    raise ValueError(
+                        f"component model for {name!r} must declare family "
+                        "'bernoulli' or 'gaussian'"
+                    )
+                threshold = raw_model.get("event_threshold_scaled")
+                if (
+                    isinstance(threshold, bool)
+                    or not isinstance(threshold, Real)
+                    or not np.isfinite(float(threshold))
+                ):
+                    raise ValueError(
+                        f"Gaussian component model for {name!r} requires a "
+                        "finite event_threshold_scaled"
+                    )
+                probability_min, probability_max = (
+                    _gaussian_component_probability_bounds(raw_model)
+                )
+                validated_model = {
+                    "family": "gaussian",
+                    "event_threshold_scaled": float(threshold),
+                }
+                if "probability_min" in raw_model:
+                    validated_model.update(
+                        {
+                            "probability_min": probability_min,
+                            "probability_max": probability_max,
+                        }
+                    )
+                validated_models_list.append(validated_model)
+            validated_models = tuple(validated_models_list)
         if (
             isinstance(n_draws, bool)
             or not isinstance(n_draws, Integral)
@@ -748,8 +878,42 @@ class PosteriorDrawBlockWriter:
             )
 
         self.component_names = tuple(component_names)
+        self.component_models = validated_models
+        self.schema_version = (
+            _MIXED_FAMILY_DRAW_SCHEMA_VERSION
+            if any(model["family"] == "gaussian" for model in validated_models)
+            else _BERNOULLI_DRAW_SCHEMA_VERSION
+        )
         self.n_draws = int(n_draws)
         self.n_cells = len(grid_gdf)
+        if draw_cell_indices is None:
+            self.draw_cell_indices: np.ndarray | None = None
+            self.materialized_n_cells = self.n_cells
+        else:
+            indices = np.asarray(draw_cell_indices)
+            if (
+                indices.ndim != 1
+                or indices.dtype.kind not in "iu"
+                or indices.size < 1
+                or indices.size >= self.n_cells
+            ):
+                raise ValueError(
+                    "draw_cell_indices must be a non-empty integer strict "
+                    "subset of the posterior grid"
+                )
+            indices = np.asarray(indices, dtype=np.int64)
+            if (
+                np.any(indices < 0)
+                or np.any(indices >= self.n_cells)
+                or np.any(np.diff(indices) <= 0)
+            ):
+                raise ValueError(
+                    "draw_cell_indices must be strictly increasing, unique, "
+                    "and in range"
+                )
+            self.draw_cell_indices = indices
+            self.materialized_n_cells = int(indices.size)
+            self.schema_version = _CELL_SUBSET_DRAW_SCHEMA_VERSION
         self.block_size = int(block_size)
         self.seed = int(seed)
         self.combination_rule = combination_rule
@@ -770,6 +934,8 @@ class PosteriorDrawBlockWriter:
             json.dumps(
                 {
                     "component_names": self.component_names,
+                    "component_models": self.component_models,
+                    "schema_version": self.schema_version,
                     "n_draws": self.n_draws,
                     "block_size": self.block_size,
                     "seed": self.seed,
@@ -777,6 +943,11 @@ class PosteriorDrawBlockWriter:
                     "scope": self.scope,
                     "coordinate_columns": self.coordinate_columns,
                     "crs": self.crs,
+                    "draw_cell_indices": (
+                        None
+                        if self.draw_cell_indices is None
+                        else self.draw_cell_indices.tolist()
+                    ),
                 },
                 sort_keys=True,
             ).encode("utf-8")
@@ -797,6 +968,23 @@ class PosteriorDrawBlockWriter:
             validated_state[safe_name] = array
         self.state_fingerprint = fingerprint.hexdigest()
         self._prior_logit_state = validated_state.get("prior_logit")
+        self._prior_linear_predictor_state = validated_state.get(
+            "prior_linear_predictor"
+        )
+        has_gaussian_component = any(
+            model["family"] == "gaussian" for model in self.component_models
+        )
+        if (
+            not has_gaussian_component
+            and self._prior_linear_predictor_state is not None
+        ):
+            raise ValueError(
+                "prior_linear_predictor state requires a Gaussian component model"
+            )
+        if has_gaussian_component and self._prior_logit_state is not None:
+            raise ValueError(
+                "mixed-family state must use prior_linear_predictor, not prior_logit"
+            )
 
         if self.final_dir.exists():
             index_path = self.final_dir / "index.json"
@@ -814,6 +1002,8 @@ class PosteriorDrawBlockWriter:
                 )
             self._verify_index(self.final_dir, index)
             self._block_records = list(index["blocks"])
+            self._draw_materialization = index.get("draw_materialization")
+            self._summary_records = index.get("full_grid_summaries")
             self._complete = True
             return
 
@@ -832,6 +1022,12 @@ class PosteriorDrawBlockWriter:
             self._coordinate_record = dict(progress["coordinates"])
             self._state_records = list(progress["state_arrays"])
             self._block_records = list(progress.get("blocks", []))
+            self._draw_materialization = progress.get("draw_materialization")
+            self._summary_records = None
+            self._verify_draw_materialization(
+                self.work_dir, self._draw_materialization
+            )
+            self._verify_summary_work(progress.get("full_grid_summary_work"))
             return
 
         self.work_dir.mkdir(parents=False, exist_ok=False)
@@ -846,6 +1042,28 @@ class PosteriorDrawBlockWriter:
             np.save(path, array, allow_pickle=False)
             state_records.append({"name": name, **self._record_file(path)})
         self._state_records = state_records
+        self._summary_records: dict[str, dict[str, Any]] | None = None
+        if self.draw_cell_indices is None:
+            self._draw_materialization: dict[str, Any] | None = None
+        else:
+            selection_path = self.work_dir / "draw_cell_indices.npy"
+            np.save(selection_path, self.draw_cell_indices, allow_pickle=False)
+            self._draw_materialization = {
+                "mode": "cell_subset",
+                "cell_indices": self._record_file(selection_path),
+            }
+            summary_work = np.lib.format.open_memmap(
+                self.work_dir / "full_grid_probability_work.npy",
+                mode="w+",
+                dtype=np.float64,
+                shape=(
+                    self.n_draws,
+                    self.n_cells,
+                    len(self.component_names) + 1,
+                ),
+            )
+            summary_work.flush()
+            _close_memmap(summary_work)
         self._write_progress()
 
     @property
@@ -869,16 +1087,118 @@ class PosteriorDrawBlockWriter:
             "sha256": _file_sha256(path),
         }
 
+    def _summary_work_record(self) -> dict[str, Any] | None:
+        if self.draw_cell_indices is None:
+            return None
+        path = self.work_dir / "full_grid_probability_work.npy"
+        return {
+            "path": path.relative_to(self.work_dir).as_posix(),
+            "size_bytes": path.stat().st_size,
+            "dtype": "float64",
+            "shape": [
+                self.n_draws,
+                self.n_cells,
+                len(self.component_names) + 1,
+            ],
+        }
+
+    def _verify_draw_materialization(
+        self,
+        root: Path,
+        materialization: Mapping[str, Any] | None,
+    ) -> None:
+        if self.draw_cell_indices is None:
+            if materialization is not None:
+                raise ValueError(
+                    "persisted draw materialization differs from this run"
+                )
+            return
+        if (
+            not isinstance(materialization, Mapping)
+            or materialization.get("mode") != "cell_subset"
+            or not isinstance(materialization.get("cell_indices"), Mapping)
+        ):
+            raise ValueError("posterior draw cell-subset metadata is invalid")
+        path = _verify_file_record(root, materialization["cell_indices"])
+        persisted = np.load(path, mmap_mode="r", allow_pickle=False)
+        try:
+            if not np.array_equal(persisted, self.draw_cell_indices):
+                raise ValueError(
+                    "persisted draw cell indices differ from this run"
+                )
+        finally:
+            _close_memmap(persisted)
+
+    def _verify_summary_work(self, record: Mapping[str, Any] | None) -> None:
+        if self.draw_cell_indices is None:
+            if record is not None:
+                raise ValueError(
+                    "full-grid draw materialization cannot have summary work"
+                )
+            return
+        if not isinstance(record, Mapping):
+            raise ValueError(  # noqa: TRY004
+                "incomplete cell-subset bundle lacks full-grid summary work"
+            )
+        path = _file_record_path(self.work_dir, record)
+        if not path.is_file() or path.stat().st_size != int(
+            record.get("size_bytes", -1)
+        ):
+            raise ValueError("full-grid summary work payload is invalid")
+        summary_work = np.load(path, mmap_mode="r", allow_pickle=False)
+        try:
+            expected_shape = (
+                self.n_draws,
+                self.n_cells,
+                len(self.component_names) + 1,
+            )
+            if (
+                summary_work.dtype != np.float64
+                or summary_work.shape != expected_shape
+            ):
+                raise ValueError("full-grid summary work shape is invalid")
+            for block in self._block_records:
+                start = int(block["draw_start"])
+                stop = int(block["draw_stop"])
+                if _array_sha256(summary_work[start:stop]) != block.get(
+                    "full_grid_probability_sha256"
+                ):
+                    raise ValueError(
+                        "full-grid summary work block checksum mismatch"
+                    )
+        finally:
+            _close_memmap(summary_work)
+
+    def _store_full_grid_probability_block(
+        self,
+        draw_start: int,
+        component_probability: np.ndarray,
+        combined_probability: np.ndarray,
+    ) -> str | None:
+        if self.draw_cell_indices is None:
+            return None
+        draw_stop = draw_start + component_probability.shape[0]
+        path = self.work_dir / "full_grid_probability_work.npy"
+        summary_work = np.load(path, mmap_mode="r+", allow_pickle=False)
+        try:
+            summary_work[draw_start:draw_stop, :, :-1] = component_probability
+            summary_work[draw_start:draw_stop, :, -1] = combined_probability
+            summary_work.flush()
+            return _array_sha256(summary_work[draw_start:draw_stop])
+        finally:
+            _close_memmap(summary_work)
+
     def _write_progress(self) -> None:
         if self._complete:
             return
         _atomic_json_write(
             self.work_dir / "progress.json",
             {
-                "schema_version": 2,
+                "schema_version": self.schema_version,
                 "state_fingerprint": self.state_fingerprint,
                 "scope": self.scope,
                 "component_names": list(self.component_names),
+                "component_models": list(self.component_models),
                 "n_draws": self.n_draws,
                 "n_cells": self.n_cells,
                 "n_components": len(self.component_names),
@@ -892,10 +1212,12 @@ class PosteriorDrawBlockWriter:
                 "uncertainty_semantics": self.uncertainty_semantics,
                 "state_arrays": self._state_records,
                 "blocks": self._block_records,
+                "draw_materialization": self._draw_materialization,
+                "full_grid_summary_work": self._summary_work_record(),
             },
         )
 
-    def write_block(  # noqa: PLR0914
+    def write_block(  # noqa: PLR0912, PLR0914, PLR0915
         self,
         draw_start: int,
         *,
@@ -905,6 +1227,16 @@ class PosteriorDrawBlockWriter:
         spatial_logit: np.ndarray,
     ) -> None:
         """Validate and atomically persist one contiguous draw block."""
+        if self.schema_version not in {
+            _BERNOULLI_DRAW_SCHEMA_VERSION,
+            _CELL_SUBSET_DRAW_SCHEMA_VERSION,
+        } or any(
+            model["family"] != "bernoulli" for model in self.component_models
+        ):
+            raise ValueError(
+                "write_block is defined only for all-Bernoulli posterior draws; "
+                "use write_predictive_block for mixed-family draws"
+            )
         if self._complete:
             return
         expected_start = (
@@ -965,6 +1297,16 @@ class PosteriorDrawBlockWriter:
         combined, _ = _combined_draw_estimand(
             probability, combination_rule=self.combination_rule
         )
+        full_grid_probability_sha256 = self._store_full_grid_probability_block(
+            draw_start, probability, combined
+        )
+        if self.draw_cell_indices is not None:
+            indices = self.draw_cell_indices
+            probability = probability[:, indices, :]
+            prior = prior[indices]
+            evidence = evidence[:, indices, :]
+            spatial = spatial[:, indices, :]
+            combined = combined[:, indices]
         filename = f"blocks/block_{draw_start:08d}_{draw_stop:08d}.npz"
         final_path = self.work_dir / filename
         descriptor, temporary_name = tempfile.mkstemp(
@@ -975,7 +1317,7 @@ class PosteriorDrawBlockWriter:
         try:
             np.savez_compressed(
                 temporary_path,
-                schema_version=np.asarray(2, dtype=np.int64),
+                schema_version=np.asarray(self.schema_version, dtype=np.int64),
                 draw_start=np.asarray(draw_start, dtype=np.int64),
                 draw_stop=np.asarray(draw_stop, dtype=np.int64),
                 draw_id=np.arange(draw_start, draw_stop, dtype=np.int64),
@@ -992,14 +1334,194 @@ class PosteriorDrawBlockWriter:
         finally:
             if temporary_path.exists():
                 temporary_path.unlink()
-        self._block_records.append(
-            {
-                **self._record_file(final_path),
-                "draw_start": draw_start,
-                "draw_stop": draw_stop,
-                "n_draws": draw_stop - draw_start,
-            }
+        record = {
+            **self._record_file(final_path),
+            "draw_start": draw_start,
+            "draw_stop": draw_stop,
+            "n_draws": draw_stop - draw_start,
+        }
+        if full_grid_probability_sha256 is not None:
+            record["full_grid_probability_sha256"] = (
+                full_grid_probability_sha256
+            )
+        self._block_records.append(record)
+        self._write_progress()
+
+    def write_predictive_block(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
+        self,
+        draw_start: int,
+        *,
+        component_probability: np.ndarray,
+        prior_linear_predictor: np.ndarray,
+        evidence_linear_predictor: np.ndarray,
+        spatial_linear_predictor: np.ndarray,
+        likelihood_precision: np.ndarray,
+    ) -> None:
+        """Persist one mixed-family block with exact link reconstruction."""
+        if self.schema_version not in {
+            _MIXED_FAMILY_DRAW_SCHEMA_VERSION,
+            _CELL_SUBSET_DRAW_SCHEMA_VERSION,
+        } or not any(
+            model["family"] == "gaussian" for model in self.component_models
+        ):
+            raise ValueError(
+                "write_predictive_block requires at least one Gaussian component"
+            )
+        if self._complete:
+            return
+        expected_start = (
+            0
+            if not self._block_records
+            else int(self._block_records[-1]["draw_stop"])
         )
+        if draw_start != expected_start:
+            raise ValueError(
+                f"draw blocks must be contiguous; expected start {expected_start}"
+            )
+        draw_stop = min(draw_start + self.block_size, self.n_draws)
+        expected_shape = (
+            draw_stop - draw_start,
+            self.n_cells,
+            len(self.component_names),
+        )
+        probability = np.asarray(component_probability, dtype=np.float64)
+        prior = np.asarray(prior_linear_predictor, dtype=np.float64)
+        evidence = np.asarray(evidence_linear_predictor, dtype=np.float64)
+        spatial = np.asarray(spatial_linear_predictor, dtype=np.float64)
+        precision = np.asarray(likelihood_precision, dtype=np.float64)
+        if probability.shape != expected_shape:
+            raise ValueError(
+                f"component_probability has shape {probability.shape}; "
+                f"expected {expected_shape}"
+            )
+        if evidence.shape != expected_shape or spatial.shape != expected_shape:
+            raise ValueError(
+                "evidence and spatial linear predictors must match "
+                "component_probability"
+            )
+        if prior.shape != expected_shape[1:]:
+            raise ValueError(
+                f"prior_linear_predictor has shape {prior.shape}; "
+                f"expected {expected_shape[1:]}"
+            )
+        expected_precision_shapes = {
+            (draw_stop - draw_start, len(self.component_names)),
+            expected_shape,
+        }
+        if precision.shape not in expected_precision_shapes:
+            raise ValueError(
+                f"likelihood_precision has shape {precision.shape}; "
+                "expected one draw-by-component value or one "
+                "draw-by-cell-by-component value"
+            )
+        if (
+            self._prior_linear_predictor_state is not None
+            and not np.array_equal(prior, self._prior_linear_predictor_state)
+        ):
+            raise ValueError(
+                "prior_linear_predictor differs from persisted state"
+            )
+        for name, array in (
+            ("component_probability", probability),
+            ("prior_linear_predictor", prior),
+            ("evidence_linear_predictor", evidence),
+            ("spatial_linear_predictor", spatial),
+            ("likelihood_precision", precision),
+        ):
+            if not np.isfinite(array).all():
+                raise ValueError(f"{name} must contain only finite values")
+        if np.any((probability < 0.0) | (probability > 1.0)):
+            raise ValueError("component_probability must lie in [0, 1]")
+        eta = prior[np.newaxis, :, :] + evidence + spatial
+        reconstructed = np.empty_like(probability)
+        for component_index, model in enumerate(self.component_models):
+            if model["family"] == "bernoulli":
+                reconstructed[:, :, component_index] = np.exp(
+                    -np.logaddexp(0.0, -eta[:, :, component_index])
+                )
+                continue
+            component_precision = (
+                precision[:, component_index, np.newaxis]
+                if precision.ndim == _DRAW_ARRAY_DIMENSIONS
+                else precision[:, :, component_index]
+            )
+            if np.any(component_precision <= 0.0):
+                raise ValueError(
+                    "Gaussian likelihood precision must be positive"
+                )
+            reconstructed[:, :, component_index] = ndtr(
+                (eta[:, :, component_index] - model["event_threshold_scaled"])
+                * np.sqrt(component_precision)
+            )
+            probability_min, probability_max = (
+                _gaussian_component_probability_bounds(model)
+            )
+            reconstructed[:, :, component_index] = np.clip(
+                reconstructed[:, :, component_index],
+                probability_min,
+                probability_max,
+            )
+        if not np.allclose(probability, reconstructed, rtol=1e-12, atol=1e-15):
+            raise ValueError(
+                "component_probability does not equal the declared "
+                "mixed-family predictor transformation"
+            )
+        combined, _ = _combined_draw_estimand(
+            probability, combination_rule=self.combination_rule
+        )
+        full_grid_probability_sha256 = self._store_full_grid_probability_block(
+            draw_start, probability, combined
+        )
+        if self.draw_cell_indices is not None:
+            indices = self.draw_cell_indices
+            probability = probability[:, indices, :]
+            prior = prior[indices]
+            evidence = evidence[:, indices, :]
+            spatial = spatial[:, indices, :]
+            if precision.ndim != _DRAW_ARRAY_DIMENSIONS:
+                precision = precision[:, indices, :]
+            combined = combined[:, indices]
+        filename = f"blocks/block_{draw_start:08d}_{draw_stop:08d}.npz"
+        final_path = self.work_dir / filename
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{final_path.stem}-",
+            suffix=".npz",
+            dir=final_path.parent,
+        )
+        os.close(descriptor)
+        temporary_path = Path(temporary_name)
+        try:
+            np.savez_compressed(
+                temporary_path,
+                schema_version=np.asarray(self.schema_version, dtype=np.int64),
+                draw_start=np.asarray(draw_start, dtype=np.int64),
+                draw_stop=np.asarray(draw_stop, dtype=np.int64),
+                draw_id=np.arange(draw_start, draw_stop, dtype=np.int64),
+                component_names=np.asarray(
+                    self.component_names, dtype=np.str_
+                ),
+                prior_linear_predictor=prior,
+                evidence_linear_predictor=evidence,
+                spatial_linear_predictor=spatial,
+                likelihood_precision=precision,
+                component_probability=probability,
+                combined_probability=combined,
+            )
+            temporary_path.replace(final_path)
+        finally:
+            if temporary_path.exists():
+                temporary_path.unlink()
+        record = {
+            **self._record_file(final_path),
+            "draw_start": draw_start,
+            "draw_stop": draw_stop,
+            "n_draws": draw_stop - draw_start,
+        }
+        if full_grid_probability_sha256 is not None:
+            record["full_grid_probability_sha256"] = (
+                full_grid_probability_sha256
+            )
+        self._block_records.append(record)
         self._write_progress()
 
     def _verify_index(self, root: Path, index: Mapping[str, Any]) -> None:
@@ -1021,10 +1543,138 @@ class PosteriorDrawBlockWriter:
             raise ValueError(
                 "posterior draw index does not contain a complete draw partition"
             )
+        if index.get("materialized_n_cells") != self.materialized_n_cells:
+            raise ValueError(
+                "posterior draw index materialized cell count differs from this run"
+            )
+        self._verify_draw_materialization(
+            root, index.get("draw_materialization")
+        )
+        summaries = index.get("full_grid_summaries")
+        if self.draw_cell_indices is None:
+            if summaries is not None:
+                raise ValueError(
+                    "full-grid draw bundle must not declare separate summaries"
+                )
+            return
+        expected_names = {
+            "component_mean",
+            "component_interval",
+            "combined_mean",
+            "combined_interval",
+        }
+        if (
+            not isinstance(summaries, Mapping)
+            or set(summaries) != expected_names
+        ):
+            raise ValueError("posterior full-grid summary records are invalid")
+        expected_shapes = {
+            "component_mean": (self.n_cells, len(self.component_names)),
+            "component_interval": (
+                2,
+                self.n_cells,
+                len(self.component_names),
+            ),
+            "combined_mean": (self.n_cells,),
+            "combined_interval": (2, self.n_cells),
+        }
+        for name, expected_shape in expected_shapes.items():
+            record = summaries[name]
+            if not isinstance(record, Mapping):
+                raise ValueError(  # noqa: TRY004
+                    "posterior full-grid summary record is invalid"
+                )
+            array = np.load(
+                _verify_file_record(root, record),
+                mmap_mode="r",
+                allow_pickle=False,
+            )
+            try:
+                if (
+                    array.shape != expected_shape
+                    or array.dtype != np.float64
+                    or not np.isfinite(array).all()
+                ):
+                    raise ValueError(
+                        f"posterior full-grid summary {name!r} is invalid"
+                    )
+            finally:
+                _close_memmap(array)
+
+    def _summary_from_draw_array(
+        self,
+        draws: np.ndarray,
+        *,
+        ci_level: float,
+        index_path: Path,
+    ) -> PosteriorDrawSummary:
+        q = len(self.component_names)
+        component_mean = np.empty((self.n_cells, q), dtype=np.float64)
+        combined_mean = np.empty(self.n_cells, dtype=np.float64)
+        component_interval = np.empty((2, self.n_cells, q), dtype=np.float64)
+        combined_interval = np.empty((2, self.n_cells), dtype=np.float64)
+        tail = (1.0 - ci_level) / 2.0
+        for start in range(0, self.n_cells, _SUMMARY_CELL_CHUNK_SIZE):
+            stop = min(start + _SUMMARY_CELL_CHUNK_SIZE, self.n_cells)
+            chunk = np.array(draws[:, start:stop, :], copy=True)
+            component_mean[start:stop] = chunk[:, :, :q].mean(axis=0)
+            combined_mean[start:stop] = chunk[:, :, q].mean(axis=0)
+            interval = np.quantile(chunk, [tail, 1.0 - tail], axis=0)
+            component_interval[:, start:stop] = interval[:, :, :q]
+            combined_interval[:, start:stop] = interval[:, :, q]
+        return PosteriorDrawSummary(
+            component_mean=component_mean,
+            component_interval=component_interval,
+            combined_mean=combined_mean,
+            combined_interval=combined_interval,
+            index_path=index_path,
+        )
+
+    def _persist_full_grid_summaries(
+        self, *, ci_level: float
+    ) -> PosteriorDrawSummary:
+        path = self.work_dir / "full_grid_probability_work.npy"
+        draws = np.load(path, mmap_mode="r", allow_pickle=False)
+        try:
+            summary = self._summary_from_draw_array(
+                draws,
+                ci_level=ci_level,
+                index_path=self.work_dir / "index.json",
+            )
+        finally:
+            _close_memmap(draws)
+        summary_dir = self.work_dir / "summaries"
+        summary_dir.mkdir()
+        records: dict[str, dict[str, Any]] = {}
+        for name, array in (
+            ("component_mean", summary.component_mean),
+            ("component_interval", summary.component_interval),
+            ("combined_mean", summary.combined_mean),
+            ("combined_interval", summary.combined_interval),
+        ):
+            summary_path = summary_dir / f"{name}.npy"
+            np.save(summary_path, array, allow_pickle=False)
+            records[name] = self._record_file(summary_path)
+        self._summary_records = records
+        return summary
 
     def _summarize(self, root: Path, ci_level: float) -> PosteriorDrawSummary:
         if not np.isfinite(ci_level) or not 0.0 < ci_level < 1.0:
             raise ValueError("ci_level must be finite and in (0, 1)")
+        if self._summary_records is not None:
+            arrays = {
+                name: np.load(
+                    _verify_file_record(root, record), allow_pickle=False
+                )
+                for name, record in self._summary_records.items()
+            }
+            return PosteriorDrawSummary(
+                component_mean=np.asarray(arrays["component_mean"]),
+                component_interval=np.asarray(arrays["component_interval"]),
+                combined_mean=np.asarray(arrays["combined_mean"]),
+                combined_interval=np.asarray(arrays["combined_interval"]),
+                index_path=root / "index.json",
+            )
         q = len(self.component_names)
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=".posterior-summary-", suffix=".dat", dir=self.output_dir
@@ -1048,26 +1698,9 @@ class PosteriorDrawBlockWriter:
                     draws[start:stop, :, :q] = payload["component_probability"]
                     draws[start:stop, :, q] = payload["combined_probability"]
             draws.flush()
-            component_mean = np.empty((self.n_cells, q), dtype=np.float64)
-            combined_mean = np.empty(self.n_cells, dtype=np.float64)
-            component_interval = np.empty(
-                (2, self.n_cells, q), dtype=np.float64
-            )
-            combined_interval = np.empty((2, self.n_cells), dtype=np.float64)
-            tail = (1.0 - ci_level) / 2.0
-            for start in range(0, self.n_cells, _SUMMARY_CELL_CHUNK_SIZE):
-                stop = min(start + _SUMMARY_CELL_CHUNK_SIZE, self.n_cells)
-                chunk = np.array(draws[:, start:stop, :], copy=True)
-                component_mean[start:stop] = chunk[:, :, :q].mean(axis=0)
-                combined_mean[start:stop] = chunk[:, :, q].mean(axis=0)
-                interval = np.quantile(chunk, [tail, 1.0 - tail], axis=0)
-                component_interval[:, start:stop] = interval[:, :, :q]
-                combined_interval[:, start:stop] = interval[:, :, q]
-            return PosteriorDrawSummary(
-                component_mean=component_mean,
-                component_interval=component_interval,
-                combined_mean=combined_mean,
-                combined_interval=combined_interval,
+            return self._summary_from_draw_array(
+                draws,
+                ci_level=ci_level,
                 index_path=root / "index.json",
             )
         finally:
@@ -1091,8 +1724,10 @@ class PosteriorDrawBlockWriter:
             np.full((1, 1, len(self.component_names)), 0.5),
             combination_rule=self.combination_rule,
         )[1]
+        if self.draw_cell_indices is not None:
+            self._persist_full_grid_summaries(ci_level=ci_level)
         index = {
-            "schema_version": 2,
+            "schema_version": self.schema_version,
             "scope": self.scope,
             "uncertainty_semantics": self.uncertainty_semantics,
             "cross_scenario_pairing": (
@@ -1102,19 +1737,33 @@ class PosteriorDrawBlockWriter:
             ),
             "combination_rule": self.combination_rule,
             "combination_estimand": combination_estimand,
-            "decomposition": "prior_logit + evidence_logit + spatial_logit",
+            "decomposition": (
+                "prior_logit + evidence_logit + spatial_logit"
+                if all(
+                    model["family"] == "bernoulli"
+                    for model in self.component_models
+                )
+                else (
+                    "prior_linear_predictor + evidence_linear_predictor + "
+                    "spatial_linear_predictor"
+                )
+            ),
             "probability_dtype": "float64",
             "coordinate_dtype": "float64",
             "component_names": list(self.component_names),
+            "component_models": list(self.component_models),
             "coordinate_columns": list(self.coordinate_columns),
             "crs": self.crs,
             "n_draws": self.n_draws,
             "n_cells": self.n_cells,
+            "materialized_n_cells": self.materialized_n_cells,
             "n_components": len(self.component_names),
             "seed": self.seed,
             "block_size": self.block_size,
             "ci_level": float(ci_level),
             "coordinates": self._coordinate_record,
+            "draw_materialization": self._draw_materialization,
+            "full_grid_summaries": self._summary_records,
             "state": {
                 "fingerprint": self.state_fingerprint,
                 "metadata": self.state_metadata,
@@ -1123,6 +1772,9 @@ class PosteriorDrawBlockWriter:
             "blocks": self._block_records,
         }
         _atomic_json_write(self.work_dir / "index.json", index)
+        summary_work_path = self.work_dir / "full_grid_probability_work.npy"
+        if summary_work_path.exists():
+            summary_work_path.unlink()
         self.work_dir.replace(self.final_dir)
         self._complete = True
         (self.final_dir / "progress.json").unlink()
@@ -1159,7 +1811,10 @@ def load_posterior_draw_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 "incomplete posterior draw directory lacks progress.json"
             )
         payload = json.loads(progress_path.read_text(encoding="utf-8"))
-        if payload.get("schema_version") != _INCREMENTAL_DRAW_SCHEMA_VERSION:
+        if (
+            payload.get("schema_version")
+            not in _INCREMENTAL_DRAW_SCHEMA_VERSIONS
+        ):
             raise ValueError("incomplete posterior draw schema is unsupported")
         root = work_dir
         state_metadata = payload["state_metadata"]
@@ -1248,9 +1903,10 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
         raise ValueError(f"posterior draw index does not exist: {index_path}")
     root = index_path.parent
     index = json.loads(index_path.read_text(encoding="utf-8"))
-    if index.get("schema_version") != _INCREMENTAL_DRAW_SCHEMA_VERSION:
+    schema_version = index.get("schema_version")
+    if schema_version not in _INCREMENTAL_DRAW_SCHEMA_VERSIONS:
         raise ValueError(
-            "incremental posterior verification requires schema_version 2"
+            "incremental posterior verification requires schema_version 2, 3, or 4"
         )
     n_draws = int(index["n_draws"])
     n_cells = int(index["n_cells"])
@@ -1263,6 +1919,32 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
         raise ValueError(
             "posterior draw index has inconsistent component names"
         )
+    component_models = index.get("component_models")
+    if schema_version == _BERNOULLI_DRAW_SCHEMA_VERSION:
+        component_models = [{"family": "bernoulli"} for _ in component_names]
+    elif (
+        not isinstance(component_models, list)
+        or len(component_models) != n_components
+        or any(not isinstance(model, Mapping) for model in component_models)
+    ):
+        raise ValueError(
+            "schema-3 posterior draw index has invalid component models"
+        )
+    has_gaussian_component = any(
+        model.get("family") == "gaussian" for model in component_models
+    )
+    expected_decomposition = (
+        (
+            "prior_linear_predictor + evidence_linear_predictor + "
+            "spatial_linear_predictor"
+        )
+        if has_gaussian_component
+        else "prior_logit + evidence_logit + spatial_logit"
+    )
+    if index.get("decomposition") != expected_decomposition:
+        raise ValueError(
+            "posterior draw index has inconsistent decomposition metadata"
+        )
     expected_semantics = _uncertainty_semantics(
         component_names, index["state"]["metadata"]
     )
@@ -1271,6 +1953,49 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
             "posterior draw uncertainty semantics are inconsistent with "
             "component inference roles"
         )
+    materialized_n_cells = int(index.get("materialized_n_cells", n_cells))
+    materialization = index.get("draw_materialization")
+    summary_records = index.get("full_grid_summaries")
+    if materialization is None:
+        if materialized_n_cells != n_cells or summary_records is not None:
+            raise ValueError(
+                "posterior full-grid materialization metadata is inconsistent"
+            )
+        materialized_indices = np.arange(n_cells, dtype=np.int64)
+    else:
+        if (
+            schema_version != _CELL_SUBSET_DRAW_SCHEMA_VERSION
+            or not isinstance(materialization, Mapping)
+            or materialization.get("mode") != "cell_subset"
+            or not isinstance(materialization.get("cell_indices"), Mapping)
+            or not 0 < materialized_n_cells < n_cells
+        ):
+            raise ValueError("posterior draw cell-subset metadata is invalid")
+        selection_path = _verify_file_record(
+            root, materialization["cell_indices"]
+        )
+        materialized_indices = np.asarray(
+            np.load(selection_path, allow_pickle=False)
+        )
+        if (
+            materialized_indices.dtype.kind not in "iu"
+            or materialized_indices.shape != (materialized_n_cells,)
+            or np.any(materialized_indices < 0)
+            or np.any(materialized_indices >= n_cells)
+            or np.any(np.diff(materialized_indices) <= 0)
+        ):
+            raise ValueError("posterior draw cell indices are invalid")
+        expected_summary_names = {
+            "component_mean",
+            "component_interval",
+            "combined_mean",
+            "combined_interval",
+        }
+        if (
+            not isinstance(summary_records, Mapping)
+            or set(summary_records) != expected_summary_names
+        ):
+            raise ValueError("posterior full-grid summary records are invalid")
     for record in (
         index["coordinates"],
         *index["state"]["arrays"],
@@ -1316,19 +2041,53 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
                 "posterior draw blocks do not form a contiguous partition"
             )
         with np.load(root / record["path"], allow_pickle=False) as payload:
-            expected_shape = (draw_stop - draw_start, n_cells, n_components)
+            expected_shape = (
+                draw_stop - draw_start,
+                materialized_n_cells,
+                n_components,
+            )
             probability = np.asarray(payload["component_probability"])
-            prior = np.asarray(payload["prior_logit"])
-            evidence = np.asarray(payload["evidence_logit"])
-            spatial = np.asarray(payload["spatial_logit"])
-            combined = np.asarray(payload["combined_probability"])
             if (
-                probability.shape != expected_shape
-                or evidence.shape != expected_shape
-                or spatial.shape != expected_shape
-                or prior.shape != expected_shape[1:]
-                or combined.shape != expected_shape[:2]
+                int(np.asarray(payload["schema_version"]).item())
+                != schema_version
             ):
+                raise ValueError(
+                    "posterior block schema differs from its index"
+                )
+            if not has_gaussian_component:
+                prior = np.asarray(payload["prior_logit"])
+                evidence = np.asarray(payload["evidence_logit"])
+                spatial = np.asarray(payload["spatial_logit"])
+                precision = None
+            else:
+                prior = np.asarray(payload["prior_linear_predictor"])
+                evidence = np.asarray(payload["evidence_linear_predictor"])
+                spatial = np.asarray(payload["spatial_linear_predictor"])
+                precision = np.asarray(payload["likelihood_precision"])
+            combined = np.asarray(payload["combined_probability"])
+            payload_shapes = (
+                probability.shape,
+                evidence.shape,
+                spatial.shape,
+                prior.shape,
+                combined.shape,
+            )
+            expected_shapes = (
+                expected_shape,
+                expected_shape,
+                expected_shape[1:],
+                expected_shape[:2],
+            )
+            invalid_shape = (
+                payload_shapes[:3] != (expected_shape,) * 3
+                or payload_shapes[3:] != expected_shapes[2:]
+            )
+            if precision is not None:
+                invalid_shape = invalid_shape or precision.shape not in {
+                    (draw_stop - draw_start, n_components),
+                    expected_shape,
+                }
+            if invalid_shape:
                 raise ValueError(
                     "posterior block payload shapes are inconsistent"
                 )
@@ -1342,6 +2101,8 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
                     "posterior block identifiers are inconsistent"
                 )
             arrays = (probability, prior, evidence, spatial, combined)
+            if precision is not None:
+                arrays = (*arrays, precision)
             if any(not np.isfinite(array).all() for array in arrays):
                 raise ValueError("posterior block contains nonfinite values")
             if np.any((probability < 0.0) | (probability > 1.0)) or np.any(
@@ -1351,12 +2112,62 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
                     "posterior block probabilities lie outside [0, 1]"
                 )
             eta = prior[np.newaxis, :, :] + evidence + spatial
-            reconstructed = np.exp(-np.logaddexp(0.0, -eta))
+            reconstructed = np.empty_like(probability)
+            for component_index, model in enumerate(component_models):
+                family = model.get("family")
+                if family == "bernoulli":
+                    reconstructed[:, :, component_index] = np.exp(
+                        -np.logaddexp(0.0, -eta[:, :, component_index])
+                    )
+                    continue
+                threshold = model.get("event_threshold_scaled")
+                invalid_threshold = (
+                    isinstance(threshold, bool)
+                    or not isinstance(threshold, Real)
+                    or not np.isfinite(float(threshold))
+                )
+                invalid_gaussian_model = (
+                    schema_version
+                    not in {
+                        _MIXED_FAMILY_DRAW_SCHEMA_VERSION,
+                        _CELL_SUBSET_DRAW_SCHEMA_VERSION,
+                    }
+                    or family != "gaussian"
+                    or invalid_threshold
+                )
+                probability_min, probability_max = (
+                    _gaussian_component_probability_bounds(model)
+                )
+                component_precision = (
+                    None
+                    if precision is None
+                    else (
+                        precision[:, component_index, np.newaxis]
+                        if precision.ndim == _DRAW_ARRAY_DIMENSIONS
+                        else precision[:, :, component_index]
+                    )
+                )
+                invalid_precision = component_precision is None or np.any(
+                    component_precision <= 0.0
+                )
+                if invalid_gaussian_model or invalid_precision:
+                    raise ValueError(
+                        "posterior draw index has an invalid component model"
+                    )
+                reconstructed[:, :, component_index] = ndtr(
+                    (eta[:, :, component_index] - float(threshold))
+                    * np.sqrt(component_precision)
+                )
+                reconstructed[:, :, component_index] = np.clip(
+                    reconstructed[:, :, component_index],
+                    probability_min,
+                    probability_max,
+                )
             if not np.allclose(
                 probability, reconstructed, rtol=1e-12, atol=1e-15
             ):
                 raise ValueError(
-                    "posterior block logit decomposition is inconsistent"
+                    "posterior block predictor decomposition is inconsistent"
                 )
             expected_combined, _ = _combined_draw_estimand(
                 probability, combination_rule=index["combination_rule"]
@@ -1372,11 +2183,120 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
         raise ValueError(
             "posterior draw blocks do not cover every requested draw"
         )
-    return {
-        "schema_version": 2,
+    if materialization is not None:
+        expected_summary_shapes = {
+            "component_mean": (n_cells, n_components),
+            "component_interval": (2, n_cells, n_components),
+            "combined_mean": (n_cells,),
+            "combined_interval": (2, n_cells),
+        }
+        summary_arrays: dict[str, np.ndarray] = {}
+        with ExitStack() as mappings:
+            for name, expected_shape in expected_summary_shapes.items():
+                record = summary_records[name]
+                if not isinstance(record, Mapping):
+                    raise ValueError(  # noqa: TRY004
+                        "posterior full-grid summary record is invalid"
+                    )
+                summary_array = np.load(
+                    _verify_file_record(root, record),
+                    mmap_mode="r",
+                    allow_pickle=False,
+                )
+                mappings.callback(_close_memmap, summary_array)
+                if (
+                    summary_array.shape != expected_shape
+                    or summary_array.dtype != np.float64
+                    or not np.isfinite(summary_array).all()
+                ):
+                    raise ValueError(
+                        f"posterior full-grid summary {name!r} is invalid"
+                    )
+                if np.any((summary_array < 0.0) | (summary_array > 1.0)):
+                    raise ValueError(
+                        f"posterior full-grid summary {name!r} is invalid"
+                    )
+                summary_arrays[name] = summary_array
+            if np.any(
+                summary_arrays["component_interval"][0]
+                > summary_arrays["component_interval"][1]
+            ) or np.any(
+                summary_arrays["combined_interval"][0]
+                > summary_arrays["combined_interval"][1]
+            ):
+                raise ValueError("posterior full-grid intervals are invalid")
+            tail = (1.0 - float(index["ci_level"])) / 2.0
+            for cell_start in range(
+                0, materialized_n_cells, _SUMMARY_CELL_CHUNK_SIZE
+            ):
+                cell_stop = min(
+                    cell_start + _SUMMARY_CELL_CHUNK_SIZE,
+                    materialized_n_cells,
+                )
+                draw_chunk = np.empty(
+                    (
+                        n_draws,
+                        cell_stop - cell_start,
+                        n_components + 1,
+                    ),
+                    dtype=np.float64,
+                )
+                for block in index["blocks"]:
+                    draw_start = int(block["draw_start"])
+                    draw_stop = int(block["draw_stop"])
+                    with np.load(
+                        root / block["path"], allow_pickle=False
+                    ) as payload:
+                        draw_chunk[draw_start:draw_stop, :, :n_components] = (
+                            payload["component_probability"][
+                                :, cell_start:cell_stop, :
+                            ]
+                        )
+                        draw_chunk[draw_start:draw_stop, :, n_components] = (
+                            payload["combined_probability"][
+                                :, cell_start:cell_stop
+                            ]
+                        )
+                full_indices = materialized_indices[cell_start:cell_stop]
+                expected_mean = draw_chunk.mean(axis=0)
+                expected_interval = np.quantile(
+                    draw_chunk, [tail, 1.0 - tail], axis=0
+                )
+                if not np.allclose(
+                    summary_arrays["component_mean"][full_indices],
+                    expected_mean[:, :n_components],
+                    rtol=1e-12,
+                    atol=1e-15,
+                ) or not np.allclose(
+                    summary_arrays["combined_mean"][full_indices],
+                    expected_mean[:, n_components],
+                    rtol=1e-12,
+                    atol=1e-15,
+                ):
+                    raise ValueError(
+                        "posterior full-grid summary means differ from "
+                        "materialized draws"
+                    )
+                if not np.allclose(
+                    summary_arrays["component_interval"][:, full_indices],
+                    expected_interval[:, :, :n_components],
+                    rtol=1e-12,
+                    atol=1e-15,
+                ) or not np.allclose(
+                    summary_arrays["combined_interval"][:, full_indices],
+                    expected_interval[:, :, n_components],
+                    rtol=1e-12,
+                    atol=1e-15,
+                ):
+                    raise ValueError(
+                        "posterior full-grid summary intervals differ from "
+                        "materialized draws"
+                    )
+    audit = {
+        "schema_version": schema_version,
+        "n_cells": n_cells,
         "scope": index["scope"],
         "n_draws": n_draws,
-        "n_cells": n_cells,
         "n_components": n_components,
         "n_blocks": len(index["blocks"]),
         "uncertainty_semantics": expected_semantics,
@@ -1386,6 +2306,14 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
         "decomposition_verified": True,
         "combination_verified": True,
     }
+    if materialization is not None:
+        audit.update(
+            {
+                "materialized_n_cells": materialized_n_cells,
+                "full_grid_summaries_verified": True,
+            }
+        )
+    return audit
 
 
 def _file_sha256(path: Path) -> str:
@@ -1835,6 +2763,47 @@ def _verify_incomplete_draw_prefix(payload: Mapping[str, Any]) -> None:
         expected_start = draw_stop
 
 
+def _cell_subset_resume_records(
+    payload: Mapping[str, Any], *, complete: bool
+) -> list[Any]:
+    """Return schema-v4 materialization and summary file records."""
+    if payload.get("schema_version") != _CELL_SUBSET_DRAW_SCHEMA_VERSION:
+        return []
+    materialization = payload.get("draw_materialization")
+    if (
+        not isinstance(materialization, Mapping)
+        or materialization.get("mode") != "cell_subset"
+        or not isinstance(materialization.get("cell_indices"), Mapping)
+    ):
+        raise TypeError(
+            "resumable cell-subset posterior materialization is invalid"
+        )
+    records = [materialization["cell_indices"]]
+    if not complete:
+        summary_work = payload.get("full_grid_summary_work")
+        if not isinstance(summary_work, Mapping):
+            raise TypeError(
+                "resumable cell-subset posterior summary work is invalid"
+            )
+        records.append(summary_work)
+        return records
+    summaries = payload.get("full_grid_summaries")
+    expected_summaries = {
+        "component_mean",
+        "component_interval",
+        "combined_mean",
+        "combined_interval",
+    }
+    if not isinstance(summaries, Mapping) or set(summaries) != (
+        expected_summaries
+    ):
+        raise TypeError(
+            "resumable cell-subset posterior summaries are invalid"
+        )
+    records.extend(summaries.values())
+    return records
+
+
 def _posterior_resume_files(
     namespace: Path,
     *,
@@ -1853,7 +2822,7 @@ def _posterior_resume_files(
     payload = _read_json_mapping(
         metadata_path, context="resumable posterior metadata"
     )
-    if payload.get("schema_version") != _INCREMENTAL_DRAW_SCHEMA_VERSION:
+    if payload.get("schema_version") not in _INCREMENTAL_DRAW_SCHEMA_VERSIONS:
         raise ValueError("resumable posterior schema is unsupported")
     state_metadata = (
         payload.get("state", {}).get("metadata")
@@ -1879,10 +2848,12 @@ def _posterior_resume_files(
         if isinstance(state, dict)
         else payload.get("state_arrays", [])
     )
+    subset_records = _cell_subset_resume_records(payload, complete=complete)
     indexed_records = [
         payload.get("coordinates"),
         *state_records,
         *payload.get("blocks", []),
+        *subset_records,
     ]
     if any(not isinstance(record, dict) for record in indexed_records):
         raise TypeError("resumable posterior file records are invalid")

@@ -7,6 +7,7 @@ Translates :class:`~geopfa.prob.pfa_grid.PFAGridAdapter`,
 
 * ``y (n, Q)``     — component responses at well locations.
 * ``observed_mask`` — ``(n, Q)`` bool preserving componentwise label availability.
+* ``observation_weights`` — positive ``(n, Q)`` likelihood multipliers.
 * ``labeled_mask`` — ``(n,)`` bool; ``True`` only for complete component rows.
 * ``offsets (n, Q)`` — alpha logit offsets at well locations, snapped from
   the per-component grid offsets in every declared coordinate dimension.
@@ -58,6 +59,8 @@ from geopfa.prob.config import (
     EvidenceConfig,
     EvidenceFeatureExpansionConfig,
     LabelsConfig,
+    ORDINARY_LIKELIHOOD_SEMANTICS,
+    POWER_LIKELIHOOD_SEMANTICS,
 )
 from geopfa.prob.fitting import _is_sparse_binary
 from geopfa.prob.labels import LoadedLabels, _coerce_component_labels
@@ -89,6 +92,9 @@ class AssembledInputs:
         ``observed_mask`` to distinguish from a genuine negative label.
     observed_mask
         Component-level label availability, shape ``(n, Q)``.
+    observation_weights
+        Positive component-level likelihood multipliers, shape ``(n, Q)``.
+        Components without a configured weight column receive unit weights.
     labeled_mask
         Complete-case label availability, shape ``(n,)``. ``True`` only
         when every fitted component has a finite label for that well.
@@ -130,6 +136,7 @@ class AssembledInputs:
     component_names: tuple[str, ...]
     y: NDArray[np.float64]
     observed_mask: NDArray[np.bool_]
+    observation_weights: NDArray[np.float64]
     labeled_mask: NDArray[np.bool_]
     well_offsets: NDArray[np.float64]
     grid_offsets: NDArray[np.float64]
@@ -146,9 +153,31 @@ class AssembledInputs:
     prior_response_mean_well: NDArray[np.float64] | None = None
     prior_response_sd_grid: NDArray[np.float64] | None = None
     prior_response_sd_well: NDArray[np.float64] | None = None
+    observation_weight_semantics: str = ORDINARY_LIKELIHOOD_SEMANTICS
 
     def __post_init__(self) -> None:
         """Require row-aligned identity and optional scientific depth."""
+        weights = np.asarray(self.observation_weights)
+        if (
+            weights.shape != self.y.shape
+            or not np.all(np.isfinite(weights))
+            or np.any(weights <= 0.0)
+        ):
+            raise ValueError(
+                "observation_weights must be positive and finite with shape "
+                f"{self.y.shape}"
+            )
+        observed_weights = weights[np.asarray(self.observed_mask, dtype=bool)]
+        required_semantics = (
+            POWER_LIKELIHOOD_SEMANTICS
+            if np.any(observed_weights != 1.0)
+            else ORDINARY_LIKELIHOOD_SEMANTICS
+        )
+        if self.observation_weight_semantics != required_semantics:
+            raise ValueError(
+                "observation_weight_semantics must match the observed "
+                f"likelihood weights; expected {required_semantics!r}"
+            )
         if np.asarray(self.well_ids).shape != (self.n,):
             raise ValueError(
                 f"well_ids must have shape ({self.n},); "
@@ -223,8 +252,13 @@ def _build_labels_array(
     wells_gdf: gpd.GeoDataFrame,
     component_names: tuple[str, ...],
     labels_config: LabelsConfig,
-) -> tuple[NDArray[np.float64], NDArray[np.bool_], NDArray[np.bool_]]:
-    """Build labels plus componentwise and complete-case observation masks."""
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.bool_],
+    NDArray[np.bool_],
+    NDArray[np.float64],
+]:
+    """Build labels, masks, and positive component likelihood weights."""
     n = len(wells_gdf)
     Q = len(component_names)
     y_raw = np.full((n, Q), np.nan, dtype=np.float64)
@@ -246,7 +280,34 @@ def _build_labels_array(
     observed_mask = np.isfinite(y_raw)
     labeled_mask = np.all(observed_mask, axis=1)
     y = np.where(np.isfinite(y_raw), y_raw, 0.0)
-    return y, observed_mask, labeled_mask
+    observation_weights = np.ones((n, Q), dtype=np.float64)
+    for q_idx, component in enumerate(component_names):
+        column = labels_config.observation_weight_columns.get(component)
+        if column is None:
+            continue
+        if column not in wells_gdf.columns:
+            raise GEOPFAValueError(
+                f"component {component!r} observation weight column "
+                f"{column!r} is missing"
+            )
+        try:
+            values = wells_gdf[column].to_numpy(dtype=np.float64)
+        except (TypeError, ValueError) as exc:
+            raise GEOPFAValueError(
+                f"component {component!r} observation weight column "
+                f"{column!r} must contain numeric values"
+            ) from exc
+        observed = observed_mask[:, q_idx]
+        if not np.all(np.isfinite(values[observed])) or np.any(
+            values[observed] <= 0.0
+        ):
+            raise GEOPFAValueError(
+                f"component {component!r} observation weight column "
+                f"{column!r} must contain positive finite values wherever "
+                "the response is observed"
+            )
+        observation_weights[observed, q_idx] = values[observed]
+    return y, observed_mask, labeled_mask, observation_weights
 
 
 def _build_well_metadata(
@@ -782,11 +843,35 @@ def assemble_gblk_inputs(  # noqa: PLR0913, PLR0914
         else prior_response_sd_grid[well_grid_indices]
     )
 
-    y, observed_mask, labeled_mask = _build_labels_array(
+    y, observed_mask, labeled_mask, observation_weights = _build_labels_array(
         wells_gdf,
         component_names,
         loaded_labels.config,
     )
+    if prior_response_mean_well is not None:
+        prior_response_mean_well = prior_response_mean_well.copy()
+        for component_index, component in enumerate(component_names):
+            column = loaded_labels.config.prior_response_mean_columns.get(
+                component
+            )
+            if column is None:
+                continue
+            observed = observed_mask[:, component_index]
+            prior_response_mean_well[observed, component_index] = (
+                wells_gdf.loc[observed, column].to_numpy(dtype=np.float64)
+            )
+    if prior_response_sd_well is not None:
+        prior_response_sd_well = prior_response_sd_well.copy()
+        for component_index, component in enumerate(component_names):
+            column = loaded_labels.config.prior_response_sd_columns.get(
+                component
+            )
+            if column is None:
+                continue
+            observed = observed_mask[:, component_index]
+            prior_response_sd_well[observed, component_index] = wells_gdf.loc[
+                observed, column
+            ].to_numpy(dtype=np.float64)
 
     evidence, layer_names_map = _build_evidence(
         wells_gdf,
@@ -819,6 +904,7 @@ def assemble_gblk_inputs(  # noqa: PLR0913, PLR0914
         component_names=component_names,
         y=y,
         observed_mask=observed_mask,
+        observation_weights=observation_weights,
         labeled_mask=labeled_mask,
         well_offsets=well_offsets,
         grid_offsets=grid_offsets,
@@ -835,6 +921,10 @@ def assemble_gblk_inputs(  # noqa: PLR0913, PLR0914
         prior_response_mean_well=prior_response_mean_well,
         prior_response_sd_grid=prior_response_sd_grid,
         prior_response_sd_well=prior_response_sd_well,
+        observation_weight_semantics=(
+            loaded_labels.config.observation_weight_semantics
+            or ORDINARY_LIKELIHOOD_SEMANTICS
+        ),
     )
 
 

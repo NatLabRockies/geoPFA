@@ -39,6 +39,12 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 from numpy.typing import NDArray
 
+from geopfa.prob.config import (
+    ALLOWED_OBSERVATION_WEIGHT_SEMANTICS,
+    ORDINARY_LIKELIHOOD_SEMANTICS,
+    POWER_LIKELIHOOD_SEMANTICS,
+)
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from latticekrigx.glk.joint import JointResult
 
@@ -67,6 +73,43 @@ _THREE_D = 3
 _MAX_PAIGE_COMPONENTS = 2
 _SPATIAL_DIMS = {2, 3}
 _BAYESIAN_PREDICTION_CHUNK_SIZE = 10_000
+
+
+def _likelihood_weighting_metadata(
+    weights: NDArray[np.float64],
+    observed: NDArray[np.bool_],
+    semantics: str,
+) -> dict[str, object]:
+    """Validate and summarize ordinary versus power-likelihood semantics."""
+    if semantics not in ALLOWED_OBSERVATION_WEIGHT_SEMANTICS:
+        allowed = ", ".join(ALLOWED_OBSERVATION_WEIGHT_SEMANTICS)
+        raise ValueError(
+            "observation_weight_semantics must be one of: "
+            f"{allowed} (got {semantics!r})"
+        )
+    observed_weights = np.asarray(weights[observed], dtype=np.float64)
+    required = (
+        POWER_LIKELIHOOD_SEMANTICS
+        if np.any(observed_weights != 1.0)
+        else ORDINARY_LIKELIHOOD_SEMANTICS
+    )
+    if semantics != required:
+        raise ValueError(
+            "observation_weight_semantics does not match the observed "
+            f"likelihood weights; expected {required!r}"
+        )
+    return {
+        "semantics": semantics,
+        "normalizing_constant": (
+            "not_recomputed"
+            if semantics == POWER_LIKELIHOOD_SEMANTICS
+            else "ordinary_likelihood"
+        ),
+        "n_observed": int(observed_weights.size),
+        "weight_min": float(observed_weights.min()),
+        "weight_max": float(observed_weights.max()),
+        "weight_sum": float(observed_weights.sum()),
+    }
 
 
 @dataclass
@@ -150,6 +193,7 @@ class GBLKBayesianPosteriorState:
     diagnostics: dict[str, Any]
     response_family: str = "bernoulli"
     projected_mean_draws: NDArray[np.float64] | None = None
+    likelihood_precision_draws: NDArray[np.float64] | None = None
 
 
 @dataclass(frozen=True)
@@ -162,6 +206,19 @@ class GBLKBayesianDrawBlock:
     prior_logit: NDArray[np.float64]
     evidence_logit: NDArray[np.float64]
     spatial_logit: NDArray[np.float64]
+
+
+@dataclass(frozen=True)
+class GBLKGaussianDrawBlock:
+    """One paired Gaussian posterior block in scaled response units."""
+
+    draw_start: int
+    draw_stop: int
+    response_mean: NDArray[np.float64]
+    prior_mean: NDArray[np.float64]
+    evidence_mean: NDArray[np.float64]
+    spatial_mean: NDArray[np.float64]
+    likelihood_precision: NDArray[np.float64]
 
 
 def build_paige_prior(config: GBLKBayesianConfig) -> Any:
@@ -494,6 +551,8 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
     bayes_config: GBLKBayesianConfig,
     labeled_mask: NDArray[np.bool_] | None = None,
     observed_mask: NDArray[np.bool_] | None = None,
+    observation_weights: NDArray[np.float64] | None = None,
+    observation_weight_semantics: str = ORDINARY_LIKELIHOOD_SEMANTICS,
     offsets: NDArray[np.float64] | None = None,
     grid_offsets: NDArray[np.float64] | None = None,
     fixed_effects: NDArray[np.float64] | None = None,
@@ -599,6 +658,24 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         )
     if not np.all(np.isfinite(y[observed])):
         raise ValueError("observed labels must be finite")
+    if observation_weights is None:
+        likelihood_weights = np.ones_like(y, dtype=np.float64)
+    else:
+        likelihood_weights = np.asarray(observation_weights, dtype=np.float64)
+        if (
+            likelihood_weights.shape != y.shape
+            or not np.all(np.isfinite(likelihood_weights))
+            or np.any(likelihood_weights <= 0.0)
+        ):
+            raise ValueError(
+                "observation_weights must be positive and finite with shape "
+                f"{y.shape}"
+            )
+    likelihood_weighting = _likelihood_weighting_metadata(
+        likelihood_weights,
+        observed,
+        observation_weight_semantics,
+    )
 
     if offsets is None:
         train_offsets = np.zeros_like(y)
@@ -671,7 +748,10 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         n_components=n_components,
     )
     fit_kwargs: dict[str, Any] = {}
-    if bayes_config.cluster_effect:
+    use_inla_prediction = (
+        response_family == "bernoulli" and bayes_config.cluster_effect
+    )
+    if use_inla_prediction:
         basis_grid = compute_basis(grid_model, lkinfo, normalize=False)
         if not isinstance(basis_grid, sp.csr_matrix):
             basis_grid = basis_grid.tocsr()
@@ -687,6 +767,7 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         X=fixed_design,
         labeled_mask=labeled_mask,
         observed_mask=observed,
+        observation_weights=likelihood_weights,
         offsets=train_offsets,
         family=family,
         link=link,
@@ -706,13 +787,21 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         ),
         **fit_kwargs,
     )
-    fixed_draws_raw = fit.extra.get("fixed_draws")
+    fit_payload = fit.extra
+    if fit_payload.get("likelihood_weighting") != likelihood_weighting:
+        raise RuntimeError(
+            "LatticeKrigX likelihood-weighting metadata does not match "
+            "geoPFA's fitted observation contract"
+        )
+    fixed_draws_raw = fit_payload.get("fixed_draws")
     fixed_coef_draws = (
         None
         if fixed_draws_raw is None
         else np.asarray(fixed_draws_raw, dtype=np.float64)
     )
-    coefficient_draws = np.asarray(fit.extra.get("c_draws"), dtype=np.float64)
+    coefficient_draws = np.asarray(
+        fit_payload.get("c_draws"), dtype=np.float64
+    )
     expected_coefficient_shape = (
         bayes_config.n_draws,
         basis_train.shape[1],
@@ -728,6 +817,24 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         raise RuntimeError(
             "canonical Bayesian posterior returned nonfinite field draws"
         )
+    likelihood_precision_draws = None
+    if response_family == "gaussian":
+        likelihood_precision_draws = np.asarray(
+            fit_payload.get("likelihood_precision_draws"), dtype=np.float64
+        )
+        expected_precision_shape = (
+            bayes_config.n_draws,
+            n_components,
+        )
+        if (
+            likelihood_precision_draws.shape != expected_precision_shape
+            or not np.all(np.isfinite(likelihood_precision_draws))
+            or np.any(likelihood_precision_draws <= 0.0)
+        ):
+            raise RuntimeError(
+                "canonical Bayesian posterior returned invalid Gaussian "
+                "likelihood precision draws"
+            )
     if fixed_design_grid is None:
         if fixed_coef_draws is not None:
             raise RuntimeError(
@@ -756,9 +863,9 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
                 "canonical Bayesian posterior returned nonfinite fixed-effect draws"
             )
     projected_mean_draws = None
-    if bayes_config.cluster_effect:
+    if use_inla_prediction:
         projected_mean_draws = np.asarray(
-            fit.extra.get("mean_draws"), dtype=np.float64
+            fit_payload.get("mean_draws"), dtype=np.float64
         )
         expected_prediction_shape = (
             bayes_config.n_draws,
@@ -807,9 +914,31 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         "n_grid": int(grid.shape[0]),
         "prediction_projection": prediction_projection,
         "prediction_chunk_size": (
-            None
-            if bayes_config.cluster_effect
-            else _BAYESIAN_PREDICTION_CHUNK_SIZE
+            None if use_inla_prediction else _BAYESIAN_PREDICTION_CHUNK_SIZE
+        ),
+        "likelihood_weights_explicit": observation_weights is not None,
+        "likelihood_weight_sums": [
+            float(likelihood_weights[observed[:, index], index].sum())
+            for index in range(n_components)
+        ],
+        "likelihood_weight_minima": [
+            float(likelihood_weights[observed[:, index], index].min())
+            for index in range(n_components)
+        ],
+        "likelihood_weight_maxima": [
+            float(likelihood_weights[observed[:, index], index].max())
+            for index in range(n_components)
+        ],
+        "likelihood_weighting": likelihood_weighting,
+        "gaussian_precision_interpretation": (
+            "working_likelihood_precision_under_generalized_posterior"
+            if response_family == "gaussian"
+            and observation_weight_semantics == POWER_LIKELIHOOD_SEMANTICS
+            else (
+                "observation_likelihood_precision"
+                if response_family == "gaussian"
+                else None
+            )
         ),
         "n_draws": int(bayes_config.n_draws),
         "ci_level": float(bayes_config.ci_level),
@@ -836,11 +965,7 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
             "r_0": kleiber_r0,
             "r_1": kleiber_r1,
         },
-        "cluster_effect": (
-            bayes_config.cluster_effect
-            if response_family == "bernoulli"
-            else False
-        ),
+        "cluster_effect": use_inla_prediction,
         "inla_validation_outputs_requested": bayes_config.validate_inla,
     }
     return GBLKBayesianPosteriorState(
@@ -855,6 +980,7 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
         diagnostics=diagnostics,
         response_family=response_family,
         projected_mean_draws=projected_mean_draws,
+        likelihood_precision_draws=likelihood_precision_draws,
     )
 
 
@@ -966,6 +1092,50 @@ def project_gblk_bayesian_draw_block(
     )
 
 
+def project_gblk_gaussian_bayesian_draw_block(
+    state: GBLKBayesianPosteriorState,
+    draw_start: int,
+    draw_stop: int,
+) -> GBLKGaussianDrawBlock:
+    """Project one paired Gaussian posterior block without materialization."""
+    if state.response_family != "gaussian":
+        raise ValueError(
+            "Gaussian response projection requires a Gaussian posterior state"
+        )
+    precision = state.likelihood_precision_draws
+    if precision is None:
+        raise RuntimeError(
+            "Gaussian posterior state lacks likelihood precision draws"
+        )
+    response_mean, prior_mean, evidence_mean, spatial_mean = (
+        _project_gblk_bayesian_mean_block(state, draw_start, draw_stop)
+    )
+    likelihood_precision = np.asarray(
+        precision[draw_start:draw_stop], dtype=np.float64
+    )
+    expected_shape = (
+        draw_stop - draw_start,
+        len(state.component_names),
+    )
+    if (
+        likelihood_precision.shape != expected_shape
+        or not np.all(np.isfinite(likelihood_precision))
+        or np.any(likelihood_precision <= 0.0)
+    ):
+        raise RuntimeError(
+            "Gaussian posterior block has invalid likelihood precision draws"
+        )
+    return GBLKGaussianDrawBlock(
+        draw_start=draw_start,
+        draw_stop=draw_stop,
+        response_mean=response_mean,
+        prior_mean=prior_mean,
+        evidence_mean=evidence_mean,
+        spatial_mean=spatial_mean,
+        likelihood_precision=likelihood_precision,
+    )
+
+
 def fit_gblk_gaussian_bayesian_joint(  # noqa: PLR0913
     coords_spatial: NDArray[np.float64],
     responses: NDArray[np.float64],
@@ -975,6 +1145,8 @@ def fit_gblk_gaussian_bayesian_joint(  # noqa: PLR0913
     bayes_config: GBLKBayesianConfig,
     labeled_mask: NDArray[np.bool_] | None = None,
     observed_mask: NDArray[np.bool_] | None = None,
+    observation_weights: NDArray[np.float64] | None = None,
+    observation_weight_semantics: str = ORDINARY_LIKELIHOOD_SEMANTICS,
     offsets: NDArray[np.float64] | None = None,
     grid_offsets: NDArray[np.float64] | None = None,
     fixed_effects: NDArray[np.float64] | None = None,
@@ -996,6 +1168,8 @@ def fit_gblk_gaussian_bayesian_joint(  # noqa: PLR0913
         bayes_config=bayes_config,
         labeled_mask=labeled_mask,
         observed_mask=observed_mask,
+        observation_weights=observation_weights,
+        observation_weight_semantics=observation_weight_semantics,
         offsets=offsets,
         grid_offsets=grid_offsets,
         fixed_effects=fixed_effects,
@@ -1013,7 +1187,7 @@ def fit_gblk_gaussian_bayesian_joint(  # noqa: PLR0913
         state, 0, bayes_config.n_draws
     )
     likelihood_precision_draws = np.asarray(
-        state.fit.extra.get("likelihood_precision_draws"),
+        state.likelihood_precision_draws,
         dtype=np.float64,
     )
     expected_precision_shape = (
@@ -1052,6 +1226,8 @@ def fit_gblk_bayesian_joint(  # noqa: PLR0913
     bayes_config: GBLKBayesianConfig,
     labeled_mask: NDArray[np.bool_] | None = None,
     observed_mask: NDArray[np.bool_] | None = None,
+    observation_weights: NDArray[np.float64] | None = None,
+    observation_weight_semantics: str = ORDINARY_LIKELIHOOD_SEMANTICS,
     offsets: NDArray[np.float64] | None = None,
     grid_offsets: NDArray[np.float64] | None = None,
     fixed_effects: NDArray[np.float64] | None = None,
@@ -1073,6 +1249,8 @@ def fit_gblk_bayesian_joint(  # noqa: PLR0913
         bayes_config=bayes_config,
         labeled_mask=labeled_mask,
         observed_mask=observed_mask,
+        observation_weights=observation_weights,
+        observation_weight_semantics=observation_weight_semantics,
         offsets=offsets,
         grid_offsets=grid_offsets,
         fixed_effects=fixed_effects,

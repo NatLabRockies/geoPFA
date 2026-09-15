@@ -90,14 +90,19 @@ probability map.
   fits via `latticekrigx.glk` (default), with a conditional plug-in
   co-occurrence surface. The sole Bayesian
   dispatch selects LatticeKrigX's public Paige/INLA model, including real 2-D or
-  3-D geometry and declared fixed-coefficient priors. The runtime contract and
-  validation requirements are documented in `docs/probabilistic_method.md`.
+  3-D geometry, declared fixed-coefficient priors, and explicit row-level
+  likelihood weights. Non-unit weights are recorded and interpreted as a
+  generalized Bayesian power likelihood, never as an ordinary heteroskedastic
+  sampling model. The runtime contract and validation requirements are
+  documented in `docs/probabilistic_method.md`.
 - Outputs: GeoTIFF, CSV, Parquet, VTK (.vtp for 3D), JSON calibration
   metrics, Markdown diagnostics report, SHA-256 manifest binding the effective
   config, inputs, outputs, and the geoPFA/LatticeKrigX runtime implementations,
   and optional incremental, hash-verified posterior, prior-predictive, or
-  mixed state/probability blocks. Only a verified incomplete posterior workspace
-  may resume its completed block prefix after an ordinary execution error.
+  mixed state/probability blocks. Draw-level blocks can be restricted to a
+  hash-bound cell subset while exact full-grid summaries are retained. Only a
+  verified incomplete posterior workspace may resume its completed block prefix
+  after an ordinary execution error.
 - Frozen forward-state export — deterministic GBLK MAP fits can be decomposed
   into prior, named evidence, and spatial logit contributions and evaluated in
   vectorized batches by downstream sensitivity studies without refitting.
