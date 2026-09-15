@@ -485,7 +485,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/5f/97/2aab507d3d00ca626e8e57c1eac6a79e4e5fbcc63eb99733ff55d1717f65/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/61/b2/6c756b27a492ed39bdce50b62815eb5f6731d5c6efb49a1830288ead3d19/pyinla-0.1.8-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
@@ -941,7 +941,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h8bce59a_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/0f/82/8680b2e2265c44985f70b436982c42902e02e643820f20ec4d1419cec5ad/pyinla-0.1.8-cp312-cp312-macosx_10_9_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl
@@ -1397,7 +1397,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/19/95/6195171e385007300f0f5574592e467c568becce2d937a0b6804f218bc49/pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl
@@ -1843,7 +1843,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/40/8c/985c1d41ea1107c2534abd9870e4ed5c8e7669b5c308297835c001e7a1c4/pydantic_core-2.46.4-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/64/8c/8e0be28b7f6535bb00f2b5d70affddbede792b2cd4aab642f6177be0bffc/pyinla-0.1.8-cp312-cp312-win_amd64.whl
@@ -2329,7 +2329,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/5f/97/2aab507d3d00ca626e8e57c1eac6a79e4e5fbcc63eb99733ff55d1717f65/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/61/b2/6c756b27a492ed39bdce50b62815eb5f6731d5c6efb49a1830288ead3d19/pyinla-0.1.8-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
@@ -2784,7 +2784,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h8bce59a_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/0f/82/8680b2e2265c44985f70b436982c42902e02e643820f20ec4d1419cec5ad/pyinla-0.1.8-cp312-cp312-macosx_10_9_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl
@@ -3239,7 +3239,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/19/95/6195171e385007300f0f5574592e467c568becce2d937a0b6804f218bc49/pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl
@@ -3684,7 +3684,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/40/8c/985c1d41ea1107c2534abd9870e4ed5c8e7669b5c308297835c001e7a1c4/pydantic_core-2.46.4-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/64/8c/8e0be28b7f6535bb00f2b5d70affddbede792b2cd4aab642f6177be0bffc/pyinla-0.1.8-cp312-cp312-win_amd64.whl
@@ -4225,7 +4225,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/02/36/ecc85bc96c273dc8a11273ed4782272975e6338d4a3e9228621175edf0e3/jaraco_functools-4.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/9a/e3186e760c57ee5f1c27ea5cea577a0ff9abfca51eefcb4d9a4cd39aff2e/pandoc-2.4.tar.gz
       - pypi: https://files.pythonhosted.org/packages/20/2c/0622f20ff02b2ef32558733443805dc82fd4c275be01b2d19d14676f3a1b/cryptography-49.0.0-cp311-abi3-manylinux_2_28_x86_64.whl
@@ -4761,7 +4761,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h8bce59a_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/02/36/ecc85bc96c273dc8a11273ed4782272975e6338d4a3e9228621175edf0e3/jaraco_functools-4.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0f/82/8680b2e2265c44985f70b436982c42902e02e643820f20ec4d1419cec5ad/pyinla-0.1.8-cp312-cp312-macosx_10_9_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/10/9a/e3186e760c57ee5f1c27ea5cea577a0ff9abfca51eefcb4d9a4cd39aff2e/pandoc-2.4.tar.gz
@@ -5294,7 +5294,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/02/36/ecc85bc96c273dc8a11273ed4782272975e6338d4a3e9228621175edf0e3/jaraco_functools-4.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/9a/e3186e760c57ee5f1c27ea5cea577a0ff9abfca51eefcb4d9a4cd39aff2e/pandoc-2.4.tar.gz
       - pypi: https://files.pythonhosted.org/packages/19/95/6195171e385007300f0f5574592e467c568becce2d937a0b6804f218bc49/pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl
@@ -5816,7 +5816,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/02/36/ecc85bc96c273dc8a11273ed4782272975e6338d4a3e9228621175edf0e3/jaraco_functools-4.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/10/9a/e3186e760c57ee5f1c27ea5cea577a0ff9abfca51eefcb4d9a4cd39aff2e/pandoc-2.4.tar.gz
       - pypi: https://files.pythonhosted.org/packages/3a/7a/882d99539b19b1490cac5d77c67338d126e4122c8276bf640e411650c830/twine-6.2.0-py3-none-any.whl
@@ -6352,7 +6352,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/02/36/ecc85bc96c273dc8a11273ed4782272975e6338d4a3e9228621175edf0e3/jaraco_functools-4.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/20/2c/0622f20ff02b2ef32558733443805dc82fd4c275be01b2d19d14676f3a1b/cryptography-49.0.0-cp311-abi3-manylinux_2_28_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3a/7a/882d99539b19b1490cac5d77c67338d126e4122c8276bf640e411650c830/twine-6.2.0-py3-none-any.whl
@@ -6855,7 +6855,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h8bce59a_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/02/36/ecc85bc96c273dc8a11273ed4782272975e6338d4a3e9228621175edf0e3/jaraco_functools-4.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/0f/82/8680b2e2265c44985f70b436982c42902e02e643820f20ec4d1419cec5ad/pyinla-0.1.8-cp312-cp312-macosx_10_9_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3a/7a/882d99539b19b1490cac5d77c67338d126e4122c8276bf640e411650c830/twine-6.2.0-py3-none-any.whl
@@ -7355,7 +7355,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/02/36/ecc85bc96c273dc8a11273ed4782272975e6338d4a3e9228621175edf0e3/jaraco_functools-4.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/19/95/6195171e385007300f0f5574592e467c568becce2d937a0b6804f218bc49/pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/3a/7a/882d99539b19b1490cac5d77c67338d126e4122c8276bf640e411650c830/twine-6.2.0-py3-none-any.whl
@@ -7844,7 +7844,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/02/36/ecc85bc96c273dc8a11273ed4782272975e6338d4a3e9228621175edf0e3/jaraco_functools-4.6.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/3a/7a/882d99539b19b1490cac5d77c67338d126e4122c8276bf640e411650c830/twine-6.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
@@ -8381,7 +8381,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/10/9a/e3186e760c57ee5f1c27ea5cea577a0ff9abfca51eefcb4d9a4cd39aff2e/pandoc-2.4.tar.gz
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/5f/97/2aab507d3d00ca626e8e57c1eac6a79e4e5fbcc63eb99733ff55d1717f65/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
@@ -8871,7 +8871,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h8bce59a_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/0f/82/8680b2e2265c44985f70b436982c42902e02e643820f20ec4d1419cec5ad/pyinla-0.1.8-cp312-cp312-macosx_10_9_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/10/9a/e3186e760c57ee5f1c27ea5cea577a0ff9abfca51eefcb4d9a4cd39aff2e/pandoc-2.4.tar.gz
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
@@ -9361,7 +9361,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/10/9a/e3186e760c57ee5f1c27ea5cea577a0ff9abfca51eefcb4d9a4cd39aff2e/pandoc-2.4.tar.gz
       - pypi: https://files.pythonhosted.org/packages/19/95/6195171e385007300f0f5574592e467c568becce2d937a0b6804f218bc49/pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
@@ -9840,7 +9840,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/10/9a/e3186e760c57ee5f1c27ea5cea577a0ff9abfca51eefcb4d9a4cd39aff2e/pandoc-2.4.tar.gz
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/40/8c/985c1d41ea1107c2534abd9870e4ed5c8e7669b5c308297835c001e7a1c4/pydantic_core-2.46.4-cp312-cp312-win_amd64.whl
@@ -10348,7 +10348,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/5f/97/2aab507d3d00ca626e8e57c1eac6a79e4e5fbcc63eb99733ff55d1717f65/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/61/b2/6c756b27a492ed39bdce50b62815eb5f6731d5c6efb49a1830288ead3d19/pyinla-0.1.8-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
@@ -10830,7 +10830,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h8bce59a_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/0f/82/8680b2e2265c44985f70b436982c42902e02e643820f20ec4d1419cec5ad/pyinla-0.1.8-cp312-cp312-macosx_10_9_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/f2/7a29fb0571562034b05c38dceabba48dcc622be5d6c5448db80779e55de7/pytest_cases-3.10.1-py2.py3-none-any.whl
@@ -11312,7 +11312,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/19/95/6195171e385007300f0f5574592e467c568becce2d937a0b6804f218bc49/pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/f2/7a29fb0571562034b05c38dceabba48dcc622be5d6c5448db80779e55de7/pytest_cases-3.10.1-py2.py3-none-any.whl
@@ -11783,7 +11783,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/40/8c/985c1d41ea1107c2534abd9870e4ed5c8e7669b5c308297835c001e7a1c4/pydantic_core-2.46.4-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/61/f2/7a29fb0571562034b05c38dceabba48dcc622be5d6c5448db80779e55de7/pytest_cases-3.10.1-py2.py3-none-any.whl
@@ -12296,7 +12296,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.0-pyhcf101f3_0.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/5f/97/2aab507d3d00ca626e8e57c1eac6a79e4e5fbcc63eb99733ff55d1717f65/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/61/b2/6c756b27a492ed39bdce50b62815eb5f6731d5c6efb49a1830288ead3d19/pyinla-0.1.8-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
@@ -12778,7 +12778,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zlib-ng-2.3.3-h8bce59a_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-64/zstd-1.5.7-h3eecb57_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/0f/82/8680b2e2265c44985f70b436982c42902e02e643820f20ec4d1419cec5ad/pyinla-0.1.8-cp312-cp312-macosx_10_9_x86_64.whl
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/f2/7a29fb0571562034b05c38dceabba48dcc622be5d6c5448db80779e55de7/pytest_cases-3.10.1-py2.py3-none-any.whl
@@ -13260,7 +13260,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-hed4e4f5_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hbf9d68e_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/19/95/6195171e385007300f0f5574592e467c568becce2d937a0b6804f218bc49/pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/61/f2/7a29fb0571562034b05c38dceabba48dcc622be5d6c5448db80779e55de7/pytest_cases-3.10.1-py2.py3-none-any.whl
@@ -13731,7 +13731,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/zlib-ng-2.3.3-h0261ad2_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_6.conda
       - pypi: .
-      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+      - pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
       - pypi: https://files.pythonhosted.org/packages/3c/19/003ac39eae3a88b80631f93eb954b61d0f1fc1dce4c84602eb0bf4802466/notebook-7.6.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/40/8c/985c1d41ea1107c2534abd9870e4ed5c8e7669b5c308297835c001e7a1c4/pydantic_core-2.46.4-cp312-cp312-win_amd64.whl
       - pypi: https://files.pythonhosted.org/packages/61/f2/7a29fb0571562034b05c38dceabba48dcc622be5d6c5448db80779e55de7/pytest_cases-3.10.1-py2.py3-none-any.whl
@@ -36055,7 +36055,7 @@ packages:
   - pytest>=7.0 ; extra == 'test'
   - tox>=4.0 ; extra == 'test'
   requires_python: '>=3.11,<3.13'
-- pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=ff2a16f38dac255a8869d92a099900c3d27f2c8a#ff2a16f38dac255a8869d92a099900c3d27f2c8a
+- pypi: git+https://github.com/NatLabRockies/latticekrigx.git?rev=bbc12c7226a58e7c54ae27a4cf757655e15231c7#bbc12c7226a58e7c54ae27a4cf757655e15231c7
   name: latticekrigx
   version: 0.1.0.dev0
   requires_dist:

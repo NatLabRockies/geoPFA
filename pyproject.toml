@@ -116,7 +116,7 @@ dev-gblk = { features = ["dev", "test"], solve-group = "default" }
 
 [tool.pixi.pypi-dependencies]
 geoPFA = { path = ".", editable = true }
-latticekrigx = { git = "https://github.com/NatLabRockies/latticekrigx.git", rev = "ff2a16f38dac255a8869d92a099900c3d27f2c8a" }
+latticekrigx = { git = "https://github.com/NatLabRockies/latticekrigx.git", rev = "bbc12c7226a58e7c54ae27a4cf757655e15231c7" }
 
 [tool.pixi.dependencies]
 c-compiler = "*"
