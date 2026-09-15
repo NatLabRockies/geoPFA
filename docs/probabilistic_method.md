@@ -366,6 +366,17 @@ unsupported sparse-GP tuning vocabulary.
 | `n_levels` | `2` | Number of multiresolution LatticeKrig levels. In 3D, the basis is constructed jointly over x, y, and z. |
 | `lattice_centers_per_dimension` | `6` | Coarsest-level centers per spatial dimension for GBLK. Choose this before outcome evaluation and keep the resulting basis commensurate with the effective training sample. |
 | `coordinate_scaling` | `"axis_range"` | `"axis_range"` gives domain-relative axes; `"physical_isotropic"` preserves metre-scale axis ratios and requires commensurate coordinate units. |
+| `spatial_domain` | omitted | Optional physical-coordinate bounds written as `[[x_min, x_max], [y_min, y_max]]` or the corresponding three-axis array. When supplied, every final, blocked, and buffered fit uses this exact transform and lattice domain. All training and prediction points must lie inside it. |
+
+By default, geoPFA derives the domain from the assembled observations and
+prediction grid. That is convenient for a single fit but is inappropriate when
+omission scenarios must share one prior and basis. Such analyses should freeze
+`spatial_domain` before fitting and reuse it unchanged in every scenario. With
+`coordinate_scaling="physical_isotropic"`, geoPFA divides all axes by the
+largest horizontal span. Length-scale priors are therefore specified in those
+model coordinates. For example, a 5,000 m coarsest-level ELK-F range-proxy
+median on a domain whose largest horizontal span is 30,000 m is configured as
+`cor_scale_median=5000/30000`, not `5000`.
 
 ### `inference`
 
@@ -376,7 +387,7 @@ unsupported sparse-GP tuning vocabulary.
 | `gblk_bayesian.n_draws` | `200` | Number of paired posterior draws. |
 | `gblk_bayesian.seed` | `0` | RNG seed for reproducible draws. |
 | `gblk_bayesian.ci_level` | `0.9` | Credible-interval level for Bayesian probability surfaces and the analytic response interval returned by a fixed Gaussian prior, including when Bayesian fitting is disabled. |
-| `gblk_bayesian.cor_scale_median` | `0.1` | Paige correlation-scale prior median in model coordinates. |
+| `gblk_bayesian.cor_scale_median` | `0.1` | Paige coarsest-level ELK-F range-proxy prior median in model coordinates. Under physical-isotropic scaling, multiply by the recorded common coordinate scale to recover the physical value. Finer-level ELK-F ranges halve with lattice width. |
 | `gblk_bayesian.spatial_sd_u` | `1.0` | Paige spatial standard-deviation threshold. |
 | `gblk_bayesian.spatial_sd_tail_probability` | `0.05` | Prior probability above `spatial_sd_u`. |
 | `gblk_bayesian.dirichlet_concentration` | `1.5` | Symmetric Paige level-weight concentration. |

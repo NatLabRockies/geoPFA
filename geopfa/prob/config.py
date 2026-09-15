@@ -78,6 +78,7 @@ ALLOWED_OBSERVATION_WEIGHT_SEMANTICS: tuple[str, ...] = (
     POWER_LIKELIHOOD_SEMANTICS,
 )
 _SHA256_HEX_LENGTH = 64
+_DOMAIN_BOUND_COUNT = 2
 
 DEFAULT_COORD_BLACKLIST: tuple[str, ...] = (
     "X",
@@ -267,6 +268,65 @@ def _require_optional_json_real(
     if value is None:
         return None
     return _require_finite_real_value(value, context=f"{context}.{key}")
+
+
+def _require_spatial_domain(
+    value: Any,
+) -> tuple[tuple[float, float], ...] | None:
+    """Return finite, ordered 2-D or 3-D physical-domain bounds."""
+    if value is None:
+        return None
+    if not isinstance(value, list | tuple) or len(value) not in {2, 3}:
+        raise GEOPFAValueError(
+            "spatial_field.spatial_domain must contain two or three "
+            "[lower, upper] axis bounds"
+        )
+    domain: list[tuple[float, float]] = []
+    for axis, bounds in enumerate(value):
+        if (
+            not isinstance(bounds, list | tuple)
+            or len(bounds) != _DOMAIN_BOUND_COUNT
+        ):
+            raise GEOPFAValueError(
+                "spatial_field.spatial_domain axis "
+                f"{axis} must contain [lower, upper]"
+            )
+        lower = _require_finite_real_value(
+            bounds[0],
+            context=f"spatial_field.spatial_domain[{axis}][0]",
+        )
+        upper = _require_finite_real_value(
+            bounds[1],
+            context=f"spatial_field.spatial_domain[{axis}][1]",
+        )
+        if lower >= upper:
+            raise GEOPFAValueError(
+                "spatial_field.spatial_domain upper bounds must be strictly "
+                f"greater than lower bounds on axis {axis}"
+            )
+        domain.append((lower, upper))
+    return tuple(domain)
+
+
+def _validate_spatial_domain_dimension(
+    spatial_domain: tuple[tuple[float, float], ...] | None,
+    *,
+    dimensions: str,
+    enabled: bool,
+) -> None:
+    """Validate cross-block dimension and activation constraints."""
+    if spatial_domain is None:
+        return
+    expected_dimension = 3 if dimensions == "3d" else 2
+    if len(spatial_domain) != expected_dimension:
+        raise ValueError(
+            "spatial_field.spatial_domain must contain "
+            f"{expected_dimension} axis bounds for dimensions={dimensions!r}"
+        )
+    if not enabled:
+        raise ValueError(
+            "spatial_field.spatial_domain requires spatial_field.enabled=True"
+        )
 
 
 def _require_json_string_array(
@@ -1477,6 +1537,7 @@ class SpatialFieldConfig:
     n_levels: int = 2
     lattice_centers_per_dimension: int = 6
     coordinate_scaling: str = "axis_range"
+    spatial_domain: tuple[tuple[float, float], ...] | None = None
 
     def __post_init__(self) -> None:
         """Reject unknown spatial model choices for every construction path."""
@@ -1492,6 +1553,11 @@ class SpatialFieldConfig:
                 "spatial_field.coordinate_scaling must be one of: "
                 f"{allowed} (got {self.coordinate_scaling!r})"
             )
+        object.__setattr__(
+            self,
+            "spatial_domain",
+            _require_spatial_domain(self.spatial_domain),
+        )
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any] | None) -> SpatialFieldConfig:
@@ -1506,6 +1572,7 @@ class SpatialFieldConfig:
                 "n_levels",
                 "lattice_centers_per_dimension",
                 "coordinate_scaling",
+                "spatial_domain",
             },
             context="spatial_field",
         )
@@ -1537,11 +1604,12 @@ class SpatialFieldConfig:
                 context="spatial_field",
             ),
             coordinate_scaling=coordinate_scaling,
+            spatial_domain=_require_spatial_domain(raw.get("spatial_domain")),
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
+        payload = {
             "enabled": self.enabled,
             "backend": self.backend,
             "n_levels": self.n_levels,
@@ -1550,6 +1618,11 @@ class SpatialFieldConfig:
             ),
             "coordinate_scaling": self.coordinate_scaling,
         }
+        if self.spatial_domain is not None:
+            payload["spatial_domain"] = [
+                list(bounds) for bounds in self.spatial_domain
+            ]
+        return payload
 
 
 @dataclass(frozen=True)
@@ -2625,6 +2698,11 @@ class ProbabilisticConfig:
             raise ValueError(
                 f"dimensions must be one of: {allowed} (got {self.dimensions!r})",
             )
+        _validate_spatial_domain_dimension(
+            self.spatial_field.spatial_domain,
+            dimensions=self.dimensions,
+            enabled=self.spatial_field.enabled,
+        )
         if (
             self.labels.pu_mode == "nnpu"
             and self.inference.backend != "sequential"

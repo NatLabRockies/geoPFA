@@ -1252,6 +1252,11 @@ def test_full_config_roundtrips_via_to_dict() -> None:
             "n_levels": 3,
             "lattice_centers_per_dimension": 4,
             "coordinate_scaling": "physical_isotropic",
+            "spatial_domain": [
+                [624_790.0, 653_146.0],
+                [4_825_350.0, 4_855_324.0],
+                [-6_000.0, 2_209.0],
+            ],
         },
         "inference": {
             "backend": "gblk",
@@ -1306,6 +1311,10 @@ def test_full_config_roundtrips_via_to_dict() -> None:
     assert out["spatial_field"]["n_levels"] == 3
     assert out["spatial_field"]["lattice_centers_per_dimension"] == 4
     assert out["spatial_field"]["coordinate_scaling"] == "physical_isotropic"
+    assert (
+        out["spatial_field"]["spatial_domain"]
+        == raw["spatial_field"]["spatial_domain"]
+    )
     assert out["alpha"]["heat"]["mode"] == "thermal_layer_exceedance"
     assert (
         out["evidence"]["regularization"]["per_feature_weights"]["layer_a"]
@@ -1339,6 +1348,52 @@ def test_gblk_rejects_non_latticekrigx_spatial_backend() -> None:
 def test_spatial_field_rejects_unknown_coordinate_scaling() -> None:
     with pytest.raises(ValueError, match="coordinate_scaling"):
         SpatialFieldConfig.from_dict({"coordinate_scaling": "vertical_magic"})
+
+
+@pytest.mark.parametrize(
+    "spatial_domain",
+    [
+        [0.0, 1.0],
+        [[0.0, 1.0]],
+        [[0.0, 1.0, 2.0], [0.0, 1.0]],
+        [[0.0, 0.0], [0.0, 1.0]],
+        [[1.0, 0.0], [0.0, 1.0]],
+        [[0.0, float("inf")], [0.0, 1.0]],
+        [[False, 1.0], [0.0, 1.0]],
+    ],
+)
+def test_spatial_field_rejects_invalid_explicit_domain(
+    spatial_domain: object,
+) -> None:
+    with pytest.raises(ValueError, match="spatial_domain"):
+        SpatialFieldConfig.from_dict({"spatial_domain": spatial_domain})
+
+
+def test_explicit_spatial_domain_dimension_must_match_model() -> None:
+    raw = _minimal_config_dict()
+    raw["spatial_field"] = {
+        "spatial_domain": [[0.0, 1.0], [0.0, 1.0], [-1.0, 0.0]]
+    }
+
+    with pytest.raises(ValueError, match="spatial_domain.*dimensions='2d'"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_explicit_spatial_domain_requires_enabled_field() -> None:
+    raw = _minimal_config_dict()
+    raw["spatial_field"] = {
+        "enabled": False,
+        "spatial_domain": [[0.0, 1.0], [0.0, 1.0]],
+    }
+
+    with pytest.raises(ValueError, match="spatial_domain.*enabled"):
+        ProbabilisticConfig.from_dict(raw)
+
+
+def test_default_spatial_config_does_not_change_canonical_payload() -> None:
+    cfg = ProbabilisticConfig.from_dict(_minimal_config_dict())
+
+    assert "spatial_domain" not in cfg.to_dict()["spatial_field"]
 
 
 @pytest.mark.parametrize(

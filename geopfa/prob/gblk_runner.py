@@ -248,8 +248,11 @@ def _grouped_spatial_folds(  # noqa: PLR0913
 
 def _spatial_domain_bounds(
     assembled: AssembledInputs,
+    spatial_domain: tuple[tuple[float, float], ...] | None = None,
 ) -> NDArray[np.float64]:
     """Freeze physical-coordinate bounds across final and validation fits."""
+    if spatial_domain is not None:
+        return np.asarray(spatial_domain, dtype=np.float64)
     coordinates = np.vstack(
         [assembled.well_coords, assembled.grid_coords]
     ).astype(np.float64, copy=False)
@@ -1199,6 +1202,7 @@ def _run_gblk_bayesian(  # noqa: PLR0913
     nlevel: int,
     a_wght: float,
     coordinate_scaling: str,
+    spatial_domain: tuple[tuple[float, float], ...] | None,
 ) -> tuple[
     dict[str, ComponentProbability],
     gpd.GeoDataFrame,
@@ -1220,7 +1224,7 @@ def _run_gblk_bayesian(  # noqa: PLR0913
         fixed_effects_grid=evidence_design.prediction,
         fixed_precision=evidence_design.precision,
         fixed_prior_mean=evidence_design.prior_mean,
-        spatial_domain=_spatial_domain_bounds(assembled),
+        spatial_domain=_spatial_domain_bounds(assembled, spatial_domain),
         nc=nc,
         nlevel=nlevel,
         a_wght=a_wght,
@@ -1606,7 +1610,10 @@ def _run_gblk_gaussian_bayesian(  # noqa: PLR0913, PLR0914
         fixed_effects_grid=evidence_design.prediction,
         fixed_precision=evidence_design.precision,
         fixed_prior_mean=evidence_design.prior_mean,
-        spatial_domain=_spatial_domain_bounds(assembled),
+        spatial_domain=_spatial_domain_bounds(
+            assembled,
+            cfg.spatial_field.spatial_domain,
+        ),
         nc=nc,
         nlevel=nlevel,
         a_wght=a_wght,
@@ -1922,7 +1929,10 @@ def _blocked_family_predictions(
             min_wells_for_fit=_stacking_training_minimum(cfg),
         ),
     )
-    spatial_domain = _spatial_domain_bounds(assembled)
+    spatial_domain = _spatial_domain_bounds(
+        assembled,
+        cfg.spatial_field.spatial_domain,
+    )
     for (train_mask, test_mask), fold_seed in zip(
         folds, fold_seeds, strict=True
     ):
@@ -2805,7 +2815,10 @@ def _run_gblk_bayesian_streaming(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915, P
                 fixed_effects_grid=evidence_design.prediction,
                 fixed_precision=evidence_design.precision,
                 fixed_prior_mean=evidence_design.prior_mean,
-                spatial_domain=_spatial_domain_bounds(assembled),
+                spatial_domain=_spatial_domain_bounds(
+                    assembled,
+                    cfg.spatial_field.spatial_domain,
+                ),
                 nc=nc,
                 nlevel=cfg.spatial_field.n_levels,
                 a_wght=model_a_wght,
@@ -3459,6 +3472,7 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 nlevel=cfg.spatial_field.n_levels,
                 a_wght=model_a_wght,
                 coordinate_scaling=cfg.spatial_field.coordinate_scaling,
+                spatial_domain=cfg.spatial_field.spatial_domain,
             )
         gaussian_assembled = assembled_groups.get("gaussian")
         if gaussian_assembled is not None:
@@ -3654,7 +3668,10 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 fixed_effects_grid=evidence_design.prediction,
                 fixed_precision=evidence_design.precision,
                 fixed_prior_mean=evidence_design.prior_mean,
-                spatial_domain=_spatial_domain_bounds(assembled),
+                spatial_domain=_spatial_domain_bounds(
+                    assembled,
+                    cfg.spatial_field.spatial_domain,
+                ),
                 nc=nc,
                 nlevel=cfg.spatial_field.n_levels,
                 a_wght=model_a_wght,
@@ -4122,7 +4139,10 @@ def _make_fit_fn(  # noqa: PLR0913
     component_names = tuple(
         assembled.component_names[q] for q in component_indices
     )
-    spatial_domain = _spatial_domain_bounds(assembled)
+    spatial_domain = _spatial_domain_bounds(
+        assembled,
+        cfg.spatial_field.spatial_domain,
+    )
 
     def fit_fn(
         train_mask: NDArray[np.bool_], test_mask: NDArray[np.bool_]

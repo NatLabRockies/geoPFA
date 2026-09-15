@@ -1061,14 +1061,31 @@ def test_target_depth_stacking_retains_prior_when_no_rows_match(
     assert selection.evidence.outcomes.size == 0
 
 
+@pytest.mark.parametrize(
+    ("configured_domain", "expected_domain"),
+    [
+        (None, ((-100.0, 2_000.0), (-200.0, 2_500.0))),
+        (
+            ((-500.0, 2_500.0), (-750.0, 3_000.0)),
+            ((-500.0, 2_500.0), (-750.0, 3_000.0)),
+        ),
+    ],
+    ids=("assembled-domain", "configured-domain"),
+)
 def test_blocked_predictions_reuse_the_full_model_spatial_domain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    configured_domain: tuple[tuple[float, float], ...] | None,
+    expected_domain: tuple[tuple[float, float], ...],
 ) -> None:
     base = _cfg_bayesian(tmp_path / "wells.gpkg", tmp_path / "out")
     cfg = replace(
         base,
         labels=replace(base.labels, min_wells_for_fit=1),
+        spatial_field=replace(
+            base.spatial_field,
+            spatial_domain=configured_domain,
+        ),
         cross_validation=replace(
             base.cross_validation, n_folds=2, grid_size=2
         ),
@@ -1137,10 +1154,7 @@ def test_blocked_predictions_reuse_the_full_model_spatial_domain(
 
     assert len(captured_domains) == 2
     for domain in captured_domains:
-        np.testing.assert_allclose(
-            domain,
-            np.array([[-100.0, 2_000.0], [-200.0, 2_500.0]]),
-        )
+        np.testing.assert_allclose(domain, expected_domain)
 
 
 def test_blocked_predictions_standardize_against_canonical_grid_support(
