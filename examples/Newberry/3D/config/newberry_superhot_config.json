@@ -1,10 +1,11 @@
 {
     "criteria": {
         "geologic": {
-            "weight": 1,
+            "weight": 1.0,
             "components": {
                 "heat": {
                     "weight": 0.4,
+                    "pr0": 0.4,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.022,
@@ -13,7 +14,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "interpolate"
@@ -25,7 +26,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "interpolate"
@@ -37,9 +38,9 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "epsg:26910",
-                            "transformation_method": "None",
+                            "transformation_method": null,
                             "processing_method": "interpolate"
                         },
                         "earthquakes": {
@@ -49,16 +50,16 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "epsg:26910",
                             "transformation_method": "negate",
                             "processing_method": "density x magnitude"
                         }
-                    },
-                    "pr0": 0.4
+                    }
                 },
                 "reservoir": {
                     "weight": 0.4,
+                    "pr0": 0.6,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.032,
@@ -67,9 +68,9 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
-                            "transformation_method": "none",
+                            "transformation_method": null,
                             "processing_method": "interpolate"
                         },
                         "mt_resistivity_joint_inv": {
@@ -79,9 +80,9 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
-                            "transformation_method": "none",
+                            "transformation_method": null,
                             "processing_method": "interpolate"
                         },
                         "earthquakes": {
@@ -91,40 +92,39 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "epsg:26910",
-                            "transformation_method": "none",
+                            "transformation_method": null,
                             "processing_method": "density x magnitude"
                         },
                         "ring_faults": {
                             "weight": 0.249,
-                            "units": "None",
-                            "data_col": "None",
+                            "units": null,
+                            "data_col": null,
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "epsg:26910",
                             "transformation_method": "negate",
                             "processing_method": "distance"
                         },
                         "lineaments": {
                             "weight": 0.249,
-                            "units": "None",
-                            "data_col": "None",
+                            "units": null,
+                            "data_col": null,
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "4326",
-                            "is_3d": "no",
+                            "crs": 4326,
                             "transformation_method": "negate",
                             "processing_method": "distance"
                         }
-                    },
-                    "pr0": 0.6
+                    }
                 },
                 "insulation": {
                     "weight": 0.2,
+                    "pr0": 0.8,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.112,
@@ -133,9 +133,9 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
-                            "transformation_method": "none",
+                            "transformation_method": null,
                             "processing_method": "interpolate"
                         },
                         "mt_resistivity_joint_inv": {
@@ -145,7 +145,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "interpolate"
@@ -157,7 +157,7 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "epsg:26910",
                             "transformation_method": "negate",
                             "processing_method": "density x magnitude"
@@ -169,13 +169,12 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "epsg:26910",
                             "transformation_method": "negate",
                             "processing_method": "interpolate"
                         }
-                    },
-                    "pr0": 0.8
+                    }
                 }
             }
         }
