@@ -42,16 +42,16 @@ exclude_patterns = []
 # -- Extension configuration -------------------------------------------------
 
 # -- Autodoc configuration --
-autoclass_content = "both"          # Merge __init__ docstring into the class page
-autodoc_member_order = "bysource"   # Keep methods in source-code order
-autodoc_inherit_docstrings = True   # Inherit docstrings from base classes
+autoclass_content = "both"  # Merge __init__ docstring into the class page
+autodoc_member_order = "bysource"  # Keep methods in source-code order
+autodoc_inherit_docstrings = True  # Inherit docstrings from base classes
 autodoc_typehints = "none"
-add_module_names = False            # Drop "geopfa." prefix from signatures
+add_module_names = False  # Drop "geopfa." prefix from signatures
 
 # -- Autosummary configuration --
-autosummary_generate = True                   # Auto-generate stub pages
-autosummary_generate_overwrite = True         # Regenerate stubs on every build
-autosummary_imported_members = False          # Skip re-exported names
+autosummary_generate = True  # Auto-generate stub pages
+autosummary_generate_overwrite = True  # Regenerate stubs on every build
+autosummary_imported_members = False  # Skip re-exported names
 
 # -- BibTeX configuration --
 bibtex_bibfiles = ["references.bib"]
@@ -82,12 +82,26 @@ intersphinx_mapping = {
 # - GPy has no Sphinx inventory at all.
 #
 nitpick_ignore_regex = [
-    (r"py:class", r"optional"),              # NumPy docstring convention ", optional"
-    (r"py:class", r"numpy\.ndarray"),        # role mismatch: registered as py:data
-    (r"py:class", r"numpy\.random\..*"),     # role mismatch in numpy inventory
-    (r"py:class", r"pandas\.DataFrame"),     # role/path mismatch in pandas inventory
-    (r"py:class", r"geopandas\.GeoDataFrame"),  # role/path mismatch in geopandas inventory
-    (r"py:class", r"GPy\..*"),               # no inventory available
+    (r"py:class", r"optional"),  # NumPy docstring convention ", optional"
+    (r"py:class", r"array-like"),  # NumPy docstring convention
+    (r"py:class", r"geometry-like"),  # Shapely docstring convention
+    (r"py:class", r"default.*"),  # docstring convention ", default=<value>"
+    (r"py:class", r'"default"'),  # docstring convention literal default
+    (r"py:class", r"numpy\.ndarray"),  # role mismatch: registered as py:data
+    (r"py:class", r"numpy\.random\..*"),  # role mismatch in numpy inventory
+    (
+        r"py:class",
+        r"pandas\.DataFrame",
+    ),  # role/path mismatch in pandas inventory
+    (
+        r"py:class",
+        r"geopandas\.GeoDataFrame",
+    ),  # role/path mismatch in geopandas inventory
+    (r"py:class", r"GPy\..*"),  # no inventory available
+    (
+        r"py:obj",
+        r"geopfa\.geopfa[23]d\..*",
+    ),  # deprecated shim members inherited from canonical classes
 ]
 
 # -- Napoleon configuration --
