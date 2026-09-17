@@ -1097,16 +1097,16 @@ class GeospatialDataReaders:
             `pfa['exclusions']['components'][exclusion_component]['layers'][layer]['model']`.
 
         Notes
-        ------
+        -----
         - The function assumes that the exclusion shapefiles are stored
-        in the `data_dir` under a subdirectory named 'exclusion' and
-        that the filenames match the layer names.
+          in the `data_dir` under a subdirectory named 'exclusion' and
+          that the filenames match the layer names.
         - Only shapefile records where the `DN` field has a value
-        greater than 0 are retained for further processing.
+          greater than 0 are retained for further processing.
         - The shapefile geometries are reprojected to the specified
-        `target_crs` to ensure consistent spatial reference.
+          `target_crs` to ensure consistent spatial reference.
         - The processed shapefiles are stored in the `pfa` dictionary
-        under their respective exclusion components and layers.
+          under their respective exclusion components and layers.
         """
         data_dir = Path(data_dir)
 

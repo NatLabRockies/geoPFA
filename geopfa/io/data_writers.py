@@ -50,7 +50,7 @@ class GeospatialDataWriters:
 
         Parameters
         ----------
-        gdf : Geopandas DataFrame
+        gdf : geopandas.GeoDataFrame
             Geopandas DataFrame containing data to write to the shapefile
         path : 'str'
             Path to shapefile to write to
@@ -75,7 +75,7 @@ class GeospatialDataWriters:
 
         Parameters
         ----------
-        gdf : Geopandas DataFrame
+        gdf : geopandas.GeoDataFrame
             Geopandas DataFrame containing data to write to the CSV
         path : 'str'
             Path to CSV to write to
@@ -106,7 +106,7 @@ class GeospatialDataWriters:
         ----------
         pfa : dict
             PFA dictionary containing processed data.
-        data_dir : str or Path
+        data_dir : str or pathlib.Path
             Root directory where processed data will be saved.
 
         Raises
@@ -190,7 +190,7 @@ class GeospatialDataWriters:
         ----------
         pfa : dict
             PFA dictionary.
-        output_path : str or Path
+        output_path : str or pathlib.Path
             Output JSON file path.
 
         Raises
@@ -245,28 +245,30 @@ class GeospatialDataWriters:
         ----------
         pfa : dict
             PFA dictionary after running do_voter_veto.
-        output_dir : str or Path
+        output_dir : str or pathlib.Path
             Directory to write outputs to.
         target_crs : str, optional
             CRS to export to.
         fmt : {"shp", "csv", "both"}, optional
             Output file format.
         level : {"all", "combined", "criteria", "component"}, optional
-            Controls which levels of the PFA favorability hierarchy are exported.
-            - "combined"
-                Export only the final combined favorability model (pfa["pr_norm"] or pfa["pr"]).
-            - "criteria"
-                Export one or more criteria-level models (pfa["criteria"][...]["pr_norm"]).
-                If ``criteria`` is provided, only that criterion is exported; otherwise,
-                all criteria are exported.
-            - "component"
-                Export component-level models within a criterion
-                (pfa["criteria"][...]["components"][...]["pr_norm"]).
-                Requires ``criteria`` to be specified. If ``component`` is provided,
-                only that component is exported; otherwise, all components within the
-                specified criterion are exported.
-            - "all"
-                Export combined, all criteria-level, and all component-level models.
+            Controls which levels of the PFA favorability hierarchy are
+            exported.
+
+            - "combined": Export only the final combined favorability model
+              (pfa["pr_norm"] or pfa["pr"]).
+            - "criteria": Export one or more criteria-level models
+              (pfa["criteria"][...]["pr_norm"]). If ``criteria`` is provided,
+              only that criterion is exported; otherwise, all criteria are
+              exported.
+            - "component": Export component-level models within a criterion
+              (pfa["criteria"][...]["components"][...]["pr_norm"]). Requires
+              ``criteria`` to be specified. If ``component`` is provided, only
+              that component is exported; otherwise, all components within the
+              specified criterion are exported.
+            - "all": Export combined, all criteria-level, and all
+              component-level models.
+
         criteria : str, optional
             If provided, only export this criterion.
         component : str, optional

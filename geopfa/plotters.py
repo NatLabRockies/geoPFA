@@ -111,7 +111,7 @@ class GeospatialDataPlotters:
 
         Parameters
         ----------
-        gdf : pandas geodataframe
+        gdf : geopandas.GeoDataFrame
             Geodataframe containing data to plot, including a geometry column and crs.
         col : str
             Name of column containing data value to plot, if applicable.
@@ -119,9 +119,9 @@ class GeospatialDataPlotters:
             Units of data to plot.
         title : str
             Title to add to plot.
-        area_outline : geodataframe
+        area_outline : geopandas.GeoDataFrame
             Optional, Geodataframe contatining outline of area to overlay on plot.
-        overlay : geodataframe
+        overlay : geopandas.GeoDataFrame
             Optional, Geodataframe containing data locations to plot over map data.
         xlabel, ylabel : str
             Optional, label for x-axis and y-axis.
@@ -318,7 +318,7 @@ class GeospatialDataPlotters:
 
         Parameters
         ----------
-        gdf : GeoDataFrame
+        gdf : geopandas.GeoDataFrame
             Input geospatial dataset containing 3D geometries (Point, Polygon, or MultiPolygon).
             Coordinates are expected to include Z values.
 
@@ -334,10 +334,10 @@ class GeospatialDataPlotters:
 
         Overlay and Additional Geometry
         ------------------------------
-        area_outline : GeoDataFrame, optional
+        area_outline : geopandas.GeoDataFrame, optional
             Polygon geometry plotted as an outline above the data (e.g., study boundary).
 
-        overlay : GeoDataFrame, optional
+        overlay : geopandas.GeoDataFrame, optional
             Additional point data plotted as a secondary scatter layer.
 
         well_path : geometry-like, optional
@@ -414,7 +414,7 @@ class GeospatialDataPlotters:
         - Subplots are dynamically generated based on active views (1-4).
         - All subplots share consistent axis scaling and styling.
         - Colorbars are rendered at the figure level (not per subplot) to ensure
-        consistent sizing and avoid layout distortion.
+          consistent sizing and avoid layout distortion.
         - The main colorbar is placed above the well colorbar.
         - If no valid data remains after filtering/slicing, the function exits early.
         """

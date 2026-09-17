@@ -484,10 +484,12 @@ class Cleaners:
         -----
         - 2D clipping uses GeoPandas .clip() with a shapely box.
         - For 3D extents:
-            1. Geometries are clipped in XY.
-            2. Z filtering is applied based on bounding-box overlap.
+
+          1. Geometries are clipped in XY.
+          2. Z filtering is applied based on bounding-box overlap.
+
         - Geometries are NOT sliced in Z. They are either
-        retained or discarded based on Z intersection.
+          retained or discarded based on Z intersection.
         """
 
         if len(extent) not in (4, 6):
@@ -796,9 +798,9 @@ class Processing:
             or 'cubic'.
         power: int
             Determines how the distance between data points affects the interpolation result.
-            *Specifically, it defines the rate at which the influence of a data point decreases
+            Specifically, it defines the rate at which the influence of a data point decreases
             as the distance from the interpolation location increases.
-            *Adjust power parameter accordingly to change how strongly the distance influences the
+            Adjust power parameter accordingly to change how strongly the distance influences the
             interpolation (default is 2).
 
 
@@ -913,7 +915,7 @@ class Processing:
         The classifications are performed using vectorized operations for efficiency, and the results are stored
         in the `pfa` dictionary under the specified `criteria`, `component`, and `layer`.
 
-        Parameters:
+        Parameters
         ----------
         pfa : dict
             A dictionary containing spatial data, including:
@@ -939,19 +941,19 @@ class Processing:
         background_value : float
             The classification value to assign to points outside both the polygon and buffer areas.
 
-        Returns:
+        Returns
         -------
         dict
             The updated `pfa` dictionary, where the specified layer's grid points are classified based on their
             spatial relationship to the polygons and buffers. The classification is stored in the `model` attribute
             of the layer, with the 'classification' column representing the assigned values.
 
-        Notes:
-        ------
+        Notes
+        -----
         - The function generates a grid of points within the provided extent using `numpy` and classifies the
-        points based on spatial relationships to the polygons and buffers.
+          points based on spatial relationships to the polygons and buffers.
         - The polygon geometries and their buffers are extracted from the `pfa` dictionary and processed with
-        vectorized GeoPandas operations for performance optimization.
+          vectorized GeoPandas operations for performance optimization.
         - The results are stored back in the `pfa` dictionary, with the classifications as part of the layer's model data.
         """
 
@@ -1301,33 +1303,34 @@ class Processing:
         in the `tree` (a spatial index of line geometries). Optionally, it can also compute the nearest distance to intersections
         (if an `intersection_tree` is provided).
 
-        Parameters:
+        Parameters
         ----------
-        gdf_points : GeoDataFrame
+        gdf_points : geopandas.GeoDataFrame
             A GeoDataFrame containing point geometries for which distances will be calculated.
-        tree : STRtree
+        tree : shapely.strtree.STRtree
             A spatial index (STRtree) containing line geometries. This allows for efficient querying of the nearest line
             for each point.
-        intersection_tree : STRtree, optional
+        intersection_tree : shapely.strtree.STRtree, optional
             An optional spatial index (STRtree) containing intersection geometries. If provided, the function calculates
             the nearest distance to intersections as well. If not provided, the intersection distances are set to infinity.
 
-        Returns:
+        Returns
         -------
         tuple
             A tuple containing two pandas Series:
+
             - nearest_line_distances: The nearest distance from each point to the nearest line.
             - nearest_intersection_distances: The nearest distance from each point to the nearest intersection (or infinity
-            if no intersection tree is provided).
+              if no intersection tree is provided).
 
-        Notes:
-        ------
+        Notes
+        -----
         - The function uses an inner helper `get_nearest_line_distance` to query the spatial index (`tree`) and calculate the
-        distance between a point and its nearest line.
+          distance between a point and its nearest line.
         - If no line is found for a point, the distance is set to infinity (`float('inf')`).
         - When an `intersection_tree` is provided, it computes the minimum distance between a point and the intersection geometries.
         - The function returns `float('inf')` for intersection distances if no intersections are found or if the `intersection_tree`
-        is not provided.
+          is not provided.
 
         """
 
@@ -1392,7 +1395,7 @@ class Processing:
         using specified weights. The result is stored in the 'pfa' dictionary under the specified criteria,
         component, and layer.
 
-        Parameters:
+        Parameters
         ----------
         pfa : dict
             The PFA (Potential Field Analysis) dictionary that contains geospatial data for various criteria,
@@ -1414,7 +1417,7 @@ class Processing:
         weight_intersection : float, optional (default=0.3)
             The weight assigned to the distance from the nearest line intersection.
 
-        Returns:
+        Returns
         -------
         pfa : dict
             The updated PFA dictionary with a new distance model stored in the specified layer.
@@ -1906,7 +1909,7 @@ class Processing:
 
         Returns
         -------
-        density_gdf : GeoDataFrame
+        density_gdf : geopandas.GeoDataFrame
             GeoDataFrame populated with point density within the specified extent, with
             point geometry.
         """
@@ -2125,9 +2128,9 @@ class Processing:
         """
         Extracts a 2D representation of faults by taking a slice at the bottom of the model.
 
-        Parameters:
+        Parameters
         ----------
-        gdf : GeoDataFrame
+        gdf : geopandas.GeoDataFrame
             A GeoDataFrame containing 3D fault geometries (Point geometries).
         fault_id_col : str
             The column name representing fault IDs to group points into separate faults.
@@ -2135,7 +2138,7 @@ class Processing:
             A Z-value threshold used to select the bottom slice of the model. Points with
             Z-values within this threshold from the minimum Z will be included.
 
-        Returns:
+        Returns
         -------
         GeoDataFrame
             A GeoDataFrame with LineString geometries representing the bottom traces of each fault.
@@ -2385,6 +2388,7 @@ class Processing:
         pfa : dict
             Updated pfa config which includes the interpolated 3D model
             stored in the specified layer under:
+
             - layer["model"]
             - layer["model_data_col"] = "value_interpolated"
 
@@ -2394,8 +2398,8 @@ class Processing:
         - Builds a full 3D meshgrid in memory before evaluation.
         - Suitable for small to moderate grid sizes.
         - For very large grids (e.g., > ~1e6 voxels), consider using
-        fast_interpolate_points_3d() for improved performance
-        and reduced memory usage.
+          fast_interpolate_points_3d() for improved performance
+          and reduced memory usage.
         """
 
         total_pts = nx * ny * nz
@@ -2537,7 +2541,7 @@ class Processing:
         use_representative_point : bool, optional
             If True, converts Polygon geometries to representative_point()
             before interpolation (faster and safer than centroid for complex shapes).
-        dtype : numpy dtype, optional
+        dtype : numpy.dtype, optional
             Data type used for coordinate and value arrays (default: float32).
             Lower precision reduces memory usage.
 
@@ -2546,17 +2550,18 @@ class Processing:
         pfa : dict
             Updated pfa config which includes the interpolated 3D model
             stored in the specified layer. Depending on build_gdf:
+
             - If True: layer["model"] is a GeoDataFrame of 3D Points.
             - If False: layer["model"] is a dictionary containing
-            coordinate arrays and a 3D values array.
+              coordinate arrays and a 3D values array.
 
         Notes
         -----
         - Designed for large 3D grids where full meshgrid construction
-        would be memory-intensive.
+          would be memory-intensive.
         - Performs interpolation in chunks to reduce peak memory usage.
         - Typically much faster and more scalable than interpolate_points_3d()
-        for large grids.
+          for large grids.
         - Does not support cubic interpolation.
         """
         t0 = time.time()
@@ -3623,14 +3628,14 @@ class Processing:
 
         Parameters
         ----------
-        gdf_points : GeoDataFrame
+        gdf_points : geopandas.GeoDataFrame
             GeoDataFrame containing point data with x, y, z coordinates and fault numbers.
         fault_number_col : str
             Column name in the GeoDataFrame that contains fault numbers.
 
         Returns
         -------
-        gdf_surfaces : GeoDataFrame
+        gdf_surfaces : geopandas.GeoDataFrame
             GeoDataFrame containing surfaces (Polygons or MultiPolygons) for each fault.
         """
         fault_surfaces = []
@@ -3668,7 +3673,7 @@ class Processing:
 
         Parameters
         ----------
-        geom3d : shapely Polygon
+        geom3d : shapely.geometry.Polygon
             3D solid polygon geometry with z-coordinates in its vertices.
         z : float
             Target elevation for slicing the geometry.
@@ -3710,7 +3715,7 @@ class Processing:
         sorting the data by X, Y, and Z coordinates, and aggregating data by grouping on X and Y. The resulting
         2D GeoDataFrame replaces the original 3D data in the `pfa` dictionary.
 
-        Parameters:
+        Parameters
         ----------
         pfa : dict
             A nested dictionary containing geospatial data organized by criteria, components, and layers.
@@ -3722,19 +3727,19 @@ class Processing:
         layer : str
             The key in `pfa['criteria'][criteria]['components'][component]['layers']` identifying the specific 3D layer.
 
-        Returns:
+        Returns
         -------
         dict
             The updated `pfa` dictionary with the 3D layer converted to a 2D representation. The resulting 2D GeoDataFrame
             is stored in `pfa['criteria'][criteria]['components'][component]['layers'][layer]['data']`.
 
-        Raises:
+        Raises
         ------
         ValueError
             If the `geometry` column in the GeoDataFrame is not of type `Point` or contains invalid geometries.
 
-        Notes:
-        ------
+        Notes
+        -----
         - Empty geometries (e.g., `POINT EMPTY`) are filtered out before processing.
         - Sorting is performed by X, Y, and Z coordinates.
         - Aggregation sums the values in the specified data column while keeping a representative geometry for each (X, Y) pair.
@@ -3804,20 +3809,20 @@ class Processing:
         """
         Create a 2D representation of 3D faults by extracting the trace at the top of each fault.
 
-        Parameters:
+        Parameters
         ----------
-        gdf_3d : GeoDataFrame
+        gdf_3d : geopandas.GeoDataFrame
             A GeoDataFrame containing 3D fault data with geometries (Polygons or MultiPolygons).
         fault_id_col : str
             The name of the column in `gdf_3d` that uniquely identifies faults.
 
-        Returns:
+        Returns
         -------
         GeoDataFrame
             A GeoDataFrame containing 2D fault traces (LineStrings) for the top of each fault.
 
-        Notes:
-        ------
+        Notes
+        -----
         - The Z-coordinate is extracted for the "top" of each fault.
         - The resulting GeoDataFrame is 2D (ignoring Z-coordinates in the output geometries).
         """
@@ -3870,9 +3875,9 @@ class Processing:
         """
         Extracts a 2D representation of faults by taking a slice at the bottom of the model.
 
-        Parameters:
+        Parameters
         ----------
-        gdf : GeoDataFrame
+        gdf : geopandas.GeoDataFrame
             A GeoDataFrame containing 3D fault geometries (Point geometries).
         fault_id_col : str
             The column name representing fault IDs to group points into separate faults.
@@ -3880,7 +3885,7 @@ class Processing:
             A Z-value threshold used to select the bottom slice of the model. Points with
             Z-values within this threshold from the minimum Z will be included.
 
-        Returns:
+        Returns
         -------
         GeoDataFrame
             A GeoDataFrame with LineString geometries representing the bottom traces of each fault.
@@ -3984,10 +3989,12 @@ class Processing:
             If None (default), 2D interpolation is performed.
         extent : list or tuple, optional
             Spatial extent defining the interpolation grid.
+
             - For 2D interpolation: length 4
-            [x_min, y_min, x_max, y_max]
+              [x_min, y_min, x_max, y_max]
             - For 3D interpolation: length 6
-            [x_min, y_min, z_min, x_max, y_max, z_max]
+              [x_min, y_min, z_min, x_max, y_max, z_max]
+
             If None, the extent is inferred from the input data.
         interp_method : str
             Method to use for interpolation.
@@ -4004,11 +4011,11 @@ class Processing:
         Notes
         -----
         - This function dispatches internally to either
-        `interpolate_points_2d()` or `interpolate_points_3d()`.
+          `interpolate_points_2d()` or `interpolate_points_3d()`.
         - Dimensionality is determined solely by whether `nz` is provided.
         - For large 3D grids, consider using
-        `fast_interpolate_points_3d()` directly for improved
-        performance and memory efficiency.
+          `fast_interpolate_points_3d()` directly for improved
+          performance and memory efficiency.
         """
 
         if nz is not None:
