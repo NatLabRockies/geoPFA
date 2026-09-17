@@ -252,21 +252,23 @@ class GeospatialDataWriters:
         fmt : {"shp", "csv", "both"}, optional
             Output file format.
         level : {"all", "combined", "criteria", "component"}, optional
-            Controls which levels of the PFA favorability hierarchy are exported.
-            - "combined"
-                Export only the final combined favorability model (pfa["pr_norm"] or pfa["pr"]).
-            - "criteria"
-                Export one or more criteria-level models (pfa["criteria"][...]["pr_norm"]).
-                If ``criteria`` is provided, only that criterion is exported; otherwise,
-                all criteria are exported.
-            - "component"
-                Export component-level models within a criterion
-                (pfa["criteria"][...]["components"][...]["pr_norm"]).
-                Requires ``criteria`` to be specified. If ``component`` is provided,
-                only that component is exported; otherwise, all components within the
-                specified criterion are exported.
-            - "all"
-                Export combined, all criteria-level, and all component-level models.
+            Controls which levels of the PFA favorability hierarchy are
+            exported.
+
+            - "combined": Export only the final combined favorability model
+              (pfa["pr_norm"] or pfa["pr"]).
+            - "criteria": Export one or more criteria-level models
+              (pfa["criteria"][...]["pr_norm"]). If ``criteria`` is provided,
+              only that criterion is exported; otherwise, all criteria are
+              exported.
+            - "component": Export component-level models within a criterion
+              (pfa["criteria"][...]["components"][...]["pr_norm"]). Requires
+              ``criteria`` to be specified. If ``component`` is provided, only
+              that component is exported; otherwise, all components within the
+              specified criterion are exported.
+            - "all": Export combined, all criteria-level, and all
+              component-level models.
+
         criteria : str, optional
             If provided, only export this criterion.
         component : str, optional

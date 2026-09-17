@@ -414,7 +414,7 @@ class GeospatialDataPlotters:
         - Subplots are dynamically generated based on active views (1-4).
         - All subplots share consistent axis scaling and styling.
         - Colorbars are rendered at the figure level (not per subplot) to ensure
-        consistent sizing and avoid layout distortion.
+          consistent sizing and avoid layout distortion.
         - The main colorbar is placed above the well colorbar.
         - If no valid data remains after filtering/slicing, the function exits early.
         """
