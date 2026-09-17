@@ -9,7 +9,8 @@
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.022,
-                            "units": "g/cc",
+                            "units": "summed g/cc",
+                            "is_3d": "yes",
                             "data_col": "Anomalous density(g/cc)",
                             "x_col": "East(m)",
                             "y_col": "North(m)",
@@ -18,11 +19,12 @@
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
-                            "model_units": "g/cc"
+                            "model_units": "summed g/cc"
                         },
                         "mt_resistivity_joint_inv": {
                             "weight": 0.112,
-                            "units": "ohm-m",
+                            "units": "summed ohm-m",
+                            "is_3d": "yes",
                             "data_col": "Resistivity(Ohm-m)",
                             "x_col": "East(m)",
                             "y_col": "North(m)",
@@ -31,11 +33,12 @@
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
-                            "model_units": "ohm-m"
+                            "model_units": "summed ohm-m"
                         },
                         "temperature_model_500m": {
                             "weight": 0.204,
-                            "units": "degC",
+                            "units": "summed degC",
+                            "is_3d": "yes",
                             "data_col": "TEMP_all_wells",
                             "x_col": "X",
                             "y_col": "Y",
@@ -44,11 +47,12 @@
                             "transformation_method": null,
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
-                            "model_units": "degC"
+                            "model_units": "summed degC"
                         },
                         "earthquakes": {
                             "weight": 0.085,
-                            "units": "ratio",
+                            "units": "summed ratio",
+                            "is_3d": "yes",
                             "data_col": "Magnitude",
                             "x_col": "X",
                             "y_col": "Y",
@@ -66,40 +70,43 @@
                     "pr0": 0.6,
                     "layers": {
                         "density_joint_inv": {
-                            "weight": 0.032,
-                            "units": "g/cc",
+                            "weight": 0.022,
+                            "units": "summed g/cc",
+                            "is_3d": "yes",
                             "data_col": "Anomalous density(g/cc)",
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
                             "crs": 26910,
-                            "transformation_method": null,
+                            "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
-                            "model_units": "g/cc"
+                            "model_units": "summed g/cc"
                         },
                         "mt_resistivity_joint_inv": {
-                            "weight": 0.044,
-                            "units": "ohm-m",
+                            "weight": 0.112,
+                            "units": "summed ohm-m",
+                            "is_3d": "yes",
                             "data_col": "Resistivity(Ohm-m)",
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
                             "crs": 26910,
-                            "transformation_method": null,
+                            "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
-                            "model_units": "ohm-m"
+                            "model_units": "summed ohm-m"
                         },
                         "earthquakes": {
-                            "weight": 0.179,
-                            "units": "ratio",
+                            "weight": 0.085,
+                            "units": "summed ratio",
+                            "is_3d": "yes",
                             "data_col": "Magnitude",
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
                             "crs": 26910,
-                            "transformation_method": null,
+                            "transformation_method": "negate",
                             "processing_method": "density",
                             "model_data_col": "weighted_point_score",
                             "model_units": "score (0-\u221e)"
@@ -121,34 +128,37 @@
                     "pr0": 0.8,
                     "layers": {
                         "density_joint_inv": {
-                            "weight": 0.112,
-                            "units": "g/cc",
+                            "weight": 0.022,
+                            "units": "summed g/cc",
+                            "is_3d": "yes",
                             "data_col": "Anomalous density(g/cc)",
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
                             "crs": 26910,
-                            "transformation_method": null,
+                            "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
-                            "model_units": "g/cc"
+                            "model_units": "summed g/cc"
                         },
                         "mt_resistivity_joint_inv": {
-                            "weight": 0.071,
-                            "units": "ohm-m",
+                            "weight": 0.112,
+                            "units": "summed ohm-m",
+                            "is_3d": "yes",
                             "data_col": "Resistivity(Ohm-m)",
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
                             "crs": 26910,
-                            "transformation_method": null,
+                            "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
-                            "model_units": "ohm-m"
+                            "model_units": "summed ohm-m"
                         },
                         "earthquakes": {
-                            "weight": 0.049,
-                            "units": "ratio",
+                            "weight": 0.085,
+                            "units": "summed ratio",
+                            "is_3d": "yes",
                             "data_col": "Magnitude",
                             "x_col": "X",
                             "y_col": "Y",
@@ -161,17 +171,17 @@
                         },
                         "temperature_model_500m": {
                             "weight": 0.204,
-                            "units": "degC",
+                            "units": "summed degC",
+                            "is_3d": "yes",
                             "data_col": "TEMP_all_wells",
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
                             "crs": 26910,
-                            "z_meas": "epsg:26910",
-                            "transformation_method": "negate",
+                            "transformation_method": null,
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
-                            "model_units": "degC"
+                            "model_units": "summed degC"
                         }
                     }
                 }
