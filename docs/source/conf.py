@@ -67,6 +67,7 @@ intersphinx_mapping = {
     "scipy": ("https://docs.scipy.org/doc/scipy/", None),
     "matplotlib": ("https://matplotlib.org/stable/", None),
     "shapely": ("https://shapely.readthedocs.io/en/stable/", None),
+    "pyproj": ("https://pyproj4.github.io/pyproj/stable/", None),
 }
 
 # -- Suppress cross-reference warnings for unresolvable types --
