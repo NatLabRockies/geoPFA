@@ -1,10 +1,11 @@
 {
     "criteria": {
         "geologic": {
-            "weight": 1,
+            "weight": 1.0,
             "components": {
                 "heat": {
                     "weight": 0.4,
+                    "pr0": 0.4,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.022,
@@ -14,7 +15,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "interpolate"
                         },
@@ -26,7 +27,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "interpolate"
                         },
@@ -38,28 +39,27 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "transformation_method": "None",
+                            "crs": 26910,
+                            "transformation_method": null,
                             "processing_method": "interpolate"
                         },
                         "earthquakes": {
                             "weight": 0.085,
                             "units": "ratio",
                             "is_3d": "yes",
-                            "needs_flattening": "no",
                             "data_col": "Magnitude",
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "density"
                         }
-                    },
-                    "pr0": 0.4
+                    }
                 },
                 "reservoir": {
                     "weight": 0.4,
+                    "pr0": 0.6,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.032,
@@ -69,8 +69,8 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
-                            "transformation_method": "none",
+                            "crs": 26910,
+                            "transformation_method": null,
                             "processing_method": "interpolate"
                         },
                         "mt_resistivity_joint_inv": {
@@ -81,39 +81,35 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
-                            "transformation_method": "none",
+                            "crs": 26910,
+                            "transformation_method": null,
                             "processing_method": "interpolate"
                         },
                         "earthquakes": {
                             "weight": 0.179,
                             "units": "ratio",
                             "is_3d": "yes",
-                            "needs_flattening": "no",
                             "data_col": "Magnitude",
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "transformation_method": "none",
+                            "crs": 26910,
+                            "transformation_method": null,
                             "processing_method": "density"
                         },
                         "lineaments": {
                             "weight": 0.249,
-                            "units": "None",
-                            "is_3d": "no",
-                            "id_col": "FAULTS_ID",
-                            "needs_flattening": "no",
-                            "data_col": "None",
-                            "crs": "4326",
-                            "transformation_method": "none",
+                            "units": null,
+                            "data_col": null,
+                            "crs": 4326,
+                            "transformation_method": null,
                             "processing_method": "faults"
                         }
-                    },
-                    "pr0": 0.6
+                    }
                 },
                 "insulation": {
                     "weight": 0.2,
+                    "pr0": 0.8,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.112,
@@ -123,8 +119,8 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
-                            "transformation_method": "None",
+                            "crs": 26910,
+                            "transformation_method": null,
                             "processing_method": "interpolate"
                         },
                         "mt_resistivity_joint_inv": {
@@ -135,20 +131,19 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
-                            "transformation_method": "None",
+                            "crs": 26910,
+                            "transformation_method": null,
                             "processing_method": "interpolate"
                         },
                         "earthquakes": {
                             "weight": 0.049,
                             "units": "ratio",
                             "is_3d": "yes",
-                            "needs_flattening": "no",
                             "data_col": "Magnitude",
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "density"
                         },
@@ -160,13 +155,12 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "z_meas": "epsg:26910",
+                            "crs": 26910,
+                            "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "interpolate"
                         }
-                    },
-                    "pr0": 0.8
+                    }
                 }
             }
         }
