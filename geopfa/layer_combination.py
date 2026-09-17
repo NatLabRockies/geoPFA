@@ -189,7 +189,7 @@ class VoterVeto:
             criteria of a resource
         w : numpy.ndarray
             Array of weights for each component or criteria of a resource
-        veto : boolean
+        veto : bool
             Boolean value indicating whether or not the function should set indices
             to zero where one component or criteria does not exist
 

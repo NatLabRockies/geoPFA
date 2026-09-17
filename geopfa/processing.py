@@ -1188,12 +1188,12 @@ class Processing:
 
         Parameters
         ----------
-        gdf_points : GeoDataFrame
+        gdf_points : geopandas.GeoDataFrame
             A GeoDataFrame containing point geometries for which distances will be calculated.
-        tree : STRtree
+        tree : shapely.strtree.STRtree
             A spatial index (STRtree) containing line geometries. This allows for efficient querying of the nearest line
             for each point.
-        intersection_tree : STRtree, optional
+        intersection_tree : shapely.strtree.STRtree, optional
             An optional spatial index (STRtree) containing intersection geometries. If provided, the function calculates
             the nearest distance to intersections as well. If not provided, the intersection distances are set to infinity.
 
@@ -1788,7 +1788,7 @@ class Processing:
 
         Returns
         -------
-        density_gdf : GeoDataFrame
+        density_gdf : geopandas.GeoDataFrame
             GeoDataFrame populated with point density within the specified extent, with
             point geometry.
         """
@@ -2009,7 +2009,7 @@ class Processing:
 
         Parameters
         ----------
-        gdf : GeoDataFrame
+        gdf : geopandas.GeoDataFrame
             A GeoDataFrame containing 3D fault geometries (Point geometries).
         fault_id_col : str
             The column name representing fault IDs to group points into separate faults.
@@ -2416,7 +2416,7 @@ class Processing:
         use_representative_point : bool, optional
             If True, converts Polygon geometries to representative_point()
             before interpolation (faster and safer than centroid for complex shapes).
-        dtype : numpy dtype, optional
+        dtype : numpy.dtype, optional
             Data type used for coordinate and value arrays (default: float32).
             Lower precision reduces memory usage.
 
@@ -3490,14 +3490,14 @@ class Processing:
 
         Parameters
         ----------
-        gdf_points : GeoDataFrame
+        gdf_points : geopandas.GeoDataFrame
             GeoDataFrame containing point data with x, y, z coordinates and fault numbers.
         fault_number_col : str
             Column name in the GeoDataFrame that contains fault numbers.
 
         Returns
         -------
-        gdf_surfaces : GeoDataFrame
+        gdf_surfaces : geopandas.GeoDataFrame
             GeoDataFrame containing surfaces (Polygons or MultiPolygons) for each fault.
         """
         fault_surfaces = []
@@ -3535,7 +3535,7 @@ class Processing:
 
         Parameters
         ----------
-        geom3d : shapely Polygon
+        geom3d : shapely.geometry.Polygon
             3D solid polygon geometry with z-coordinates in its vertices.
         z : float
             Target elevation for slicing the geometry.
@@ -3669,7 +3669,7 @@ class Processing:
 
         Parameters
         ----------
-        gdf_3d : GeoDataFrame
+        gdf_3d : geopandas.GeoDataFrame
             A GeoDataFrame containing 3D fault data with geometries (Polygons or MultiPolygons).
         fault_id_col : str
             The name of the column in `gdf_3d` that uniquely identifies faults.
@@ -3735,7 +3735,7 @@ class Processing:
 
         Parameters
         ----------
-        gdf : GeoDataFrame
+        gdf : geopandas.GeoDataFrame
             A GeoDataFrame containing 3D fault geometries (Point geometries).
         fault_id_col : str
             The column name representing fault IDs to group points into separate faults.
