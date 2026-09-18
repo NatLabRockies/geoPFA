@@ -1,4 +1,4 @@
-# Installing NREL's Geothermal Play Fairway Analysis
+# Installing NLR's Geothermal Play Fairway Analysis
 
 There are several ways to install geoPFA. We strongly recommend using a
 virtual environment to avoid conflicts with other packages and projects
