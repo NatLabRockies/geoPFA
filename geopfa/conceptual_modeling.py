@@ -251,15 +251,7 @@ def _add_well_to_plotter(  # noqa: PLR0913, PLR0917
 
 
 class ConceptualModeling:
-    """Visualization tools for 3D conceptual geothermal resource models.
-
-    Methods
-    -------
-    plot_isosurface
-        Render a single-component iso-surface from a 3D favorability model.
-    plot_conceptual_model
-        Render multi-component iso-surfaces for conceptual model visualization.
-    """
+    """Visualization tools for 3D conceptual geothermal resource models."""
 
     @staticmethod
     def plot_isosurface(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915

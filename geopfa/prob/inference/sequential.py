@@ -47,10 +47,19 @@ class SequentialFitter:
 
         Parameters
         ----------
-        component_data, alpha_result, evidence_config, labels,
-        label_column, spatial_config
-            Standard per-component inputs (see protocol).
-        per_feature_weights, prior_means
+        component_data : dict
+            Component evidence and model-grid data.
+        alpha_result : AlphaCResult
+            Precomputed component prior offset.
+        evidence_config : EvidenceConfig
+            Evidence-model configuration.
+        labels : geopandas.GeoDataFrame
+            Labelled well observations.
+        label_column : str
+            Binary-label column in ``labels``.
+        spatial_config : SpatialFieldConfig
+            Spatial-field configuration.
+        per_feature_weights, prior_means : dict, optional
             Optional explicit per-feature Gaussian-prior parameters.
         """
         # Build a minimal AlphaModeConfig just to call build_fit_kwargs.

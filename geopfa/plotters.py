@@ -111,7 +111,7 @@ class GeospatialDataPlotters:
 
         Parameters
         ----------
-        gdf : pandas geodataframe
+        gdf : geopandas.GeoDataFrame
             Geodataframe containing data to plot, including a geometry column and crs.
         col : str
             Name of column containing data value to plot, if applicable.
@@ -119,9 +119,9 @@ class GeospatialDataPlotters:
             Units of data to plot.
         title : str
             Title to add to plot.
-        area_outline : geodataframe
+        area_outline : geopandas.GeoDataFrame
             Optional, Geodataframe contatining outline of area to overlay on plot.
-        overlay : geodataframe
+        overlay : geopandas.GeoDataFrame
             Optional, Geodataframe containing data locations to plot over map data.
         xlabel, ylabel : str
             Optional, label for x-axis and y-axis.
@@ -318,7 +318,7 @@ class GeospatialDataPlotters:
 
         Parameters
         ----------
-        gdf : GeoDataFrame
+        gdf : geopandas.GeoDataFrame
             Input geospatial dataset containing 3D geometries (Point, Polygon, or MultiPolygon).
             Coordinates are expected to include Z values.
 
@@ -332,12 +332,10 @@ class GeospatialDataPlotters:
         title : str
             Main title for the entire figure (displayed once at the top).
 
-        Overlay and Additional Geometry
-        ------------------------------
-        area_outline : GeoDataFrame, optional
+        area_outline : geopandas.GeoDataFrame, optional
             Polygon geometry plotted as an outline above the data (e.g., study boundary).
 
-        overlay : GeoDataFrame, optional
+        overlay : geopandas.GeoDataFrame, optional
             Additional point data plotted as a secondary scatter layer.
 
         well_path : geometry-like, optional
@@ -347,36 +345,35 @@ class GeospatialDataPlotters:
             Values associated with well points (e.g., temperature). If provided, wells
             are colored by these values; otherwise plotted in black.
 
-        well_units : str, default "Temperature (°C)"
-            Label for the well data colorbar.
+        well_units : str, optional
+            Label for the well data colorbar. Defaults to ``"Temperature
+            (°C)"``.
 
-        well_cmap : str, default "magma"
-            Colormap used for well data.
+        well_cmap : str, optional
+            Colormap used for well data. Defaults to ``"magma"``.
 
         well_vmin, well_vmax : float, optional
             Color scaling bounds for well data.
 
-        show_well_colorbar : bool, default True
-            Whether to display the well colorbar.
+        show_well_colorbar : bool, optional
+            Whether to display the well colorbar. Defaults to ``True``.
 
-        Main Data Styling
-        ----------------
-        cmap : str, default "jet"
-            Colormap for the primary dataset.
+        cmap : str, optional
+            Colormap for the primary dataset. Defaults to ``"jet"``.
 
         vmin, vmax : float, optional
             Color scaling bounds for the primary dataset.
 
-        markersize : float, default 15
-            Marker size for scatter plots.
+        markersize : float, optional
+            Marker size for scatter plots. Defaults to ``15``.
 
-        show_main_colorbar : bool, default True
-            Whether to display the main dataset colorbar.
+        show_main_colorbar : bool, optional
+            Whether to display the main dataset colorbar. Defaults to
+            ``True``.
 
-        Axes, Limits, and Labels
-        ------------------------
-        xlabel, ylabel, zlabel : str or "default"
-            Axis labels. If "default", labels are inferred from CRS when available.
+        xlabel, ylabel, zlabel : str
+            Axis labels. If set to ``"default"``, labels are inferred from
+            the CRS when available.
 
         xlim, ylim, zlim : tuple, optional
             Axis limits for each dimension.
@@ -385,8 +382,6 @@ class GeospatialDataPlotters:
             Combined spatial extent (xmin, ymin, zmin, xmax, ymax, zmax).
             Overrides individual axis limits if provided (except zlim if explicitly set).
 
-        Slicing and Filtering
-        ---------------------
         x_slice, y_slice, z_slice : float, optional
             Maximum coordinate thresholds used to filter data prior to plotting.
             Only points with coordinates <= these values are retained.
@@ -394,8 +389,6 @@ class GeospatialDataPlotters:
         filter_threshold : float, optional
             Minimum value of `col` required for a point to be plotted.
 
-        Views / Camera Angles
-        ---------------------
         view_nw, view_ne, view_sw, view_se : tuple(float, float) or None
             Optional camera angles for rendering directional 3D views, specified as
             (elevation, azimuth) and passed to matplotlib.axes.Axes.view_init.
@@ -404,17 +397,16 @@ class GeospatialDataPlotters:
             (for example, view_nw is a view from the northwest). Any view set to
             None is excluded. At least one view must be provided.
 
-        Figure Layout
-        -------------
-        figsize : tuple, default (12, 10)
-            Base figure size (width, height). Width scales with number of subplots.
+        figsize : tuple, optional
+            Base figure size (width, height). Width scales with number of
+            subplots. Defaults to ``(12, 10)``.
 
         Notes
         -----
         - Subplots are dynamically generated based on active views (1-4).
         - All subplots share consistent axis scaling and styling.
         - Colorbars are rendered at the figure level (not per subplot) to ensure
-        consistent sizing and avoid layout distortion.
+          consistent sizing and avoid layout distortion.
         - The main colorbar is placed above the well colorbar.
         - If no valid data remains after filtering/slicing, the function exits early.
         """

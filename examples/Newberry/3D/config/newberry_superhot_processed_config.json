@@ -1,10 +1,11 @@
 {
     "criteria": {
         "geologic": {
-            "weight": 1,
+            "weight": 1.0,
             "components": {
                 "heat": {
                     "weight": 0.4,
+                    "pr0": 0.4,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.022,
@@ -13,7 +14,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
@@ -27,7 +28,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
@@ -41,9 +42,9 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "z_meas": "epsg:26910",
-                            "transformation_method": "None",
+                            "crs": 26910,
+                            "z_meas": "m-msl",
+                            "transformation_method": null,
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
                             "model_units": "degC"
@@ -55,18 +56,18 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "z_meas": "epsg:26910",
+                            "crs": 26910,
+                            "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "density x magnitude",
                             "model_data_col": "weighted_point_score",
                             "model_units": "score (0-inf)"
                         }
-                    },
-                    "pr0": 0.4
+                    }
                 },
                 "reservoir": {
                     "weight": 0.4,
+                    "pr0": 0.6,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.032,
@@ -75,9 +76,9 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
-                            "transformation_method": "none",
+                            "transformation_method": null,
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
                             "model_units": "g/cc"
@@ -89,9 +90,9 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
-                            "transformation_method": "none",
+                            "transformation_method": null,
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
                             "model_units": "log(ohm-m)"
@@ -103,22 +104,22 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "z_meas": "epsg:26910",
-                            "transformation_method": "none",
+                            "crs": 26910,
+                            "z_meas": "m-msl",
+                            "transformation_method": null,
                             "processing_method": "density x magnitude",
                             "model_data_col": "weighted_point_score",
                             "model_units": "score (0-inf)"
                         },
                         "ring_faults": {
                             "weight": 0.249,
-                            "units": "None",
-                            "data_col": "None",
+                            "units": null,
+                            "data_col": null,
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "z_meas": "epsg:26910",
+                            "crs": 26910,
+                            "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "distance",
                             "model_data_col": "distance",
@@ -127,23 +128,22 @@
                         "lineaments": {
                             "weight": 0.249,
                             "units": "",
-                            "data_col": "None",
+                            "data_col": null,
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "4326",
-                            "is_3d": "no",
+                            "crs": 4326,
                             "transformation_method": "negate",
                             "processing_method": "distance",
                             "z_meas": "m-msl",
                             "model_data_col": "distance",
                             "model_units": "m"
                         }
-                    },
-                    "pr0": 0.6
+                    }
                 },
                 "insulation": {
                     "weight": 0.2,
+                    "pr0": 0.8,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.112,
@@ -152,9 +152,9 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
-                            "transformation_method": "none",
+                            "transformation_method": null,
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
                             "model_units": "g/cc"
@@ -166,7 +166,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Z_m",
-                            "crs": "26910",
+                            "crs": 26910,
                             "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
@@ -180,8 +180,8 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "z_meas": "epsg:26910",
+                            "crs": 26910,
+                            "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "density x magnitude",
                             "model_data_col": "weighted_point_score",
@@ -194,15 +194,14 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "z_meas": "epsg:26910",
+                            "crs": 26910,
+                            "z_meas": "m-msl",
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
                             "model_units": "degC"
                         }
-                    },
-                    "pr0": 0.8
+                    }
                 }
             }
         }

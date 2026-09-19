@@ -1,10 +1,11 @@
 {
     "criteria": {
         "geologic": {
-            "weight": 1,
+            "weight": 1.0,
             "components": {
                 "heat": {
                     "weight": 0.4,
+                    "pr0": 0.4,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.022,
@@ -14,7 +15,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
@@ -28,7 +29,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
@@ -42,32 +43,31 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "transformation_method": "None",
+                            "crs": 26910,
+                            "transformation_method": null,
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
                             "model_units": "summed degC"
                         },
                         "earthquakes": {
                             "weight": 0.085,
-                            "units": "ratio",
+                            "units": "summed ratio",
                             "is_3d": "yes",
-                            "needs_flattening": "no",
                             "data_col": "Magnitude",
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "density",
                             "model_data_col": "weighted_point_score",
                             "model_units": "score (0-\u221e)"
                         }
-                    },
-                    "pr0": 0.4
+                    }
                 },
                 "reservoir": {
                     "weight": 0.4,
+                    "pr0": 0.6,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.022,
@@ -77,7 +77,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
@@ -91,45 +91,41 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
                             "model_units": "summed ohm-m"
                         },
                         "earthquakes": {
-                            "weight": 0.179,
-                            "units": "ratio",
+                            "weight": 0.085,
+                            "units": "summed ratio",
                             "is_3d": "yes",
-                            "needs_flattening": "no",
                             "data_col": "Magnitude",
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "transformation_method": "none",
+                            "crs": 26910,
+                            "transformation_method": "negate",
                             "processing_method": "density",
                             "model_data_col": "weighted_point_score",
                             "model_units": "score (0-\u221e)"
                         },
                         "lineaments": {
                             "weight": 0.249,
-                            "units": "None",
-                            "is_3d": "no",
-                            "id_col": "FAULTS_ID",
-                            "needs_flattening": "no",
-                            "data_col": "None",
-                            "crs": "4326",
-                            "transformation_method": "none",
+                            "units": null,
+                            "data_col": null,
+                            "crs": 4326,
+                            "transformation_method": null,
                             "processing_method": "faults",
                             "model_data_col": "fault score",
                             "model_units": "fault score (0-1)"
                         }
-                    },
-                    "pr0": 0.6
+                    }
                 },
                 "insulation": {
                     "weight": 0.2,
+                    "pr0": 0.8,
                     "layers": {
                         "density_joint_inv": {
                             "weight": 0.022,
@@ -139,7 +135,7 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
@@ -153,22 +149,21 @@
                             "x_col": "East(m)",
                             "y_col": "North(m)",
                             "z_col": "Depth to mean sea level(feet)",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
                             "model_units": "summed ohm-m"
                         },
                         "earthquakes": {
-                            "weight": 0.049,
-                            "units": "ratio",
+                            "weight": 0.085,
+                            "units": "summed ratio",
                             "is_3d": "yes",
-                            "needs_flattening": "no",
                             "data_col": "Magnitude",
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
+                            "crs": 26910,
                             "transformation_method": "negate",
                             "processing_method": "density",
                             "model_data_col": "weighted_point_score",
@@ -182,14 +177,13 @@
                             "x_col": "X",
                             "y_col": "Y",
                             "z_col": "Z",
-                            "crs": "26910",
-                            "transformation_method": "None",
+                            "crs": 26910,
+                            "transformation_method": null,
                             "processing_method": "interpolate",
                             "model_data_col": "value_interpolated",
                             "model_units": "summed degC"
                         }
-                    },
-                    "pr0": 0.8
+                    }
                 }
             }
         }

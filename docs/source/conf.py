@@ -67,6 +67,7 @@ intersphinx_mapping = {
     "scipy": ("https://docs.scipy.org/doc/scipy/", None),
     "matplotlib": ("https://matplotlib.org/stable/", None),
     "shapely": ("https://shapely.readthedocs.io/en/stable/", None),
+    "pyproj": ("https://pyproj4.github.io/pyproj/stable/", None),
 }
 
 # -- Suppress cross-reference warnings for unresolvable types --
@@ -95,7 +96,10 @@ intersphinx_mapping = {
 
 nitpick_ignore_regex = [
     (r"py:class", r"optional"),
+    (r"py:class", r"array-like"),
+    (r"py:class", r"geometry-like"),
     (r"py:class", r"default=.*"),
+    (r"py:class", r'"default"'),
     (r"py:class", r"sequence"),
     (r"py:class", r"NDArray"),
     (r"py:class", r"np\.(ndarray|float64)"),
@@ -106,6 +110,10 @@ nitpick_ignore_regex = [
     (r"py:class", r"GPy\..*"),
     (r"py:class", r"JointResult"),
     (r"py:(class|func|mod)", r"latticekrigx\..*"),
+    (
+        r"py:obj",
+        r"geopfa\.geopfa[23]d\..*",
+    ),
 ]
 
 # -- Napoleon configuration --

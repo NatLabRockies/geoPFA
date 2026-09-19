@@ -189,7 +189,7 @@ class VoterVeto:
             criteria of a resource
         w : numpy.ndarray
             Array of weights for each component or criteria of a resource
-        veto : boolean
+        veto : bool
             Boolean value indicating whether or not the function should set indices
             to zero where one component or criteria does not exist
 
@@ -245,7 +245,7 @@ class VoterVeto:
             Array of shape ``(n_items, *spatial_shape)``, where ``n_items`` is
             the number of layers (at layer→component level), components (at
             component→criteria), or criteria (at criteria→final).
-        nan_mode : {"propagate_shared", "propagate_any"}
+        nan_mode : str
             Strategy for handling NaN values during aggregation:
 
             ``"propagate_shared"``
@@ -368,7 +368,7 @@ class VoterVeto:
             Whether to normalize output favorability GeoDataFrames.
         norm_to : float
             Max value for normalization of favorability in GeoDataFrames.
-        nan_mode : {"propagate_shared", "propagate_any"}
+        nan_mode : str
             Strategy for handling NaN values during aggregation:
 
             ``"propagate_shared"``
