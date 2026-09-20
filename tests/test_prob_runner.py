@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import pickle
 import warnings
 from collections import defaultdict
 from dataclasses import replace
@@ -41,7 +40,6 @@ from geopfa.prob.runner import (
     ProbabilisticResult,
     _apply_scenario,
     run_probabilistic,
-    run_probabilistic_pfa,
 )
 from tests.fixtures.synthetic_prob import make_synthetic_pfa
 
@@ -282,36 +280,6 @@ def test_run_probabilistic_rejects_completed_namespace_without_mutation(
 
     assert (output_dir / "manifest.json").read_bytes() == manifest_before
     assert probability_path.read_bytes() == probability_before
-
-
-def test_run_probabilistic_pfa_loads_and_binds_exact_pickle(
-    tmp_path: Path,
-) -> None:
-    fixture = make_synthetic_pfa(grid_n=6, n_wells=20, seed=45)
-    wells_path = _save_fixture_wells_as_gpkg(tmp_path)
-    cfg = _minimal_config(wells_path, tmp_path / "out")
-    pfa = dict(fixture.pfa)
-    pfa["probabilistic"] = cfg.to_dict()
-    pfa_path = tmp_path / "pfa.pkl"
-    with pfa_path.open("wb") as stream:
-        pickle.dump(pfa, stream)
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        result = run_probabilistic_pfa(pfa_path)
-
-    assert not result.skipped
-    manifest = json.loads((cfg.output_dir / "manifest.json").read_text())
-    pfa_record = next(
-        record
-        for record in manifest["inputs"]
-        if record["name"] == "pfa_pickle"
-    )
-    assert pfa_record["path"] == str(pfa_path.resolve())
-    assert (
-        pfa_record["sha256"]
-        == hashlib.sha256(pfa_path.read_bytes()).hexdigest()
-    )
 
 
 def test_run_probabilistic_allows_explicit_component_subset(

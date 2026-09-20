@@ -9,6 +9,47 @@ import numpy as np
 import pandas as pd
 import rasterio
 
+from geopfa.io.data_readers import GeospatialDataReaders, safe_json_load
+
+
+def load_processed_pfa(
+    config_path: str | Path,
+    data_dir: str | Path,
+    *,
+    crs: str | int,
+) -> tuple[dict, dict[str, Path]]:
+    """Load a processed PFA and return every consumed file for provenance."""
+    config_path = Path(config_path).resolve()
+    data_dir = Path(data_dir).resolve()
+    if not config_path.is_file():
+        raise FileNotFoundError(
+            f"processed PFA config not found: {config_path}"
+        )
+    if not data_dir.is_dir():
+        raise FileNotFoundError(
+            f"processed data directory not found: {data_dir}"
+        )
+    layers = sorted(data_dir.rglob("*_processed.csv"))
+    if not layers:
+        raise FileNotFoundError(
+            f"no *_processed.csv layer files found below {data_dir}"
+        )
+    pfa = GeospatialDataReaders.gather_processed_data(
+        data_dir,
+        safe_json_load(config_path),
+        crs=crs,
+        validate=True,
+        strict=True,
+    )
+    artifacts = {"processed_config": config_path}
+    artifacts.update(
+        {
+            f"processed_data:{path.relative_to(data_dir).as_posix()}": path
+            for path in layers
+        }
+    )
+    return pfa, artifacts
+
 
 def sample_evidence_at_wells(
     gdf: gpd.GeoDataFrame,
@@ -50,4 +91,4 @@ def sample_evidence_at_wells(
     return out
 
 
-__all__ = ["sample_evidence_at_wells"]
+__all__ = ["load_processed_pfa", "sample_evidence_at_wells"]

@@ -97,7 +97,7 @@ from .config import (
 )
 from .cv import SpatialBlockKFold, spatial_block_cv
 from .cv_runner import CVResult, component_oof_predictions, run_block_cv
-from .data import sample_evidence_at_wells
+from .data import load_processed_pfa, sample_evidence_at_wells
 from .decision_metrics import (
     ConfusionAtThreshold,
     DecisionClassRow,
@@ -164,7 +164,6 @@ from .plotting import (
 from .runner import (
     ProbabilisticResult,
     run_probabilistic,
-    run_probabilistic_pfa,
 )
 from .scenario import (
     CoordinateTrendScenarioSpec,
@@ -254,6 +253,7 @@ __all__ = [
     "load_labels",
     "load_posterior_draw_state",
     "load_probabilistic_config",
+    "load_processed_pfa",
     "log_loss",
     "maximum_calibration_error",
     "plot_component_panel",
@@ -269,7 +269,6 @@ __all__ = [
     "run_coordinate_trend_sensitivity",
     "run_gblk_calibration_cv",
     "run_probabilistic",
-    "run_probabilistic_pfa",
     "run_site_selection_analysis",
     "sample_evidence_at_wells",
     "save_frozen_gblk_forward_state",

@@ -43,7 +43,7 @@ of results.
 
 ## Probabilistic method (`geopfa.prob`)
 
-geoPFA includes an experimental probabilistic PFA workflow in `geopfa.prob`.
+geoPFA includes a probabilistic PFA workflow in `geopfa.prob`.
 The default GBLK backend combines physics-informed priors, penalized evidence
 effects, and LatticeKrig spatial fields. It supports Bernoulli component
 outcomes and continuous Gaussian heat observations, which are converted to a
@@ -116,13 +116,13 @@ geoPFA package release requires that LatticeKrigX revision to be published
 first; geoPFA declares the compatible package version in its distribution
 metadata and does not fall back to a different model.
 
-Raw study downloads, evidence rasters, prepared grids, labels, serialized
-`pfa.pkl` caches, and generated run directories are deliberately excluded from
-Git. The three study notebooks contain their complete probabilistic
-configurations and identify the required local inputs. Notebooks are committed
-without cell outputs; no fitted models, result tables, summaries, or generated
-figures are version-controlled. The repository gate also rejects tracked files
-of 10 MiB or larger so generated artifacts cannot enter release history.
+Raw study downloads, evidence rasters, prepared grids, labels, processed layer
+trees, and generated run directories are deliberately excluded from Git. The
+three study notebooks contain their complete probabilistic configurations and
+identify the required local inputs. Notebooks are committed without cell
+outputs; no fitted models, result tables, summaries, or generated figures are
+version-controlled. The repository gate also rejects tracked files of 10 MiB
+or larger so generated artifacts cannot enter release history.
 
 Each completed run owns its untracked output directory. Completed output
 namespaces are immutable and are never accepted for another execution, even
@@ -134,7 +134,17 @@ requires a fresh output directory. Study notebooks display comparisons
 directly and do not contain committed execution output.
 
 ```python
-from geopfa.prob import ProbabilisticConfig, run_probabilistic
+from geopfa.prob import (
+    ProbabilisticConfig,
+    load_processed_pfa,
+    run_probabilistic,
+)
+
+pfa, input_artifacts = load_processed_pfa(
+    "path/to/config.json",
+    "path/to/processed/data",
+    crs="EPSG:26911",
+)
 
 cfg = ProbabilisticConfig.from_dict({
     "enabled": True,
@@ -158,7 +168,7 @@ cfg = ProbabilisticConfig.from_dict({
     "calibration": {"method": "none"},
     "outputs": {"format": ["geotiff", "csv"]},
 })
-result = run_probabilistic(pfa, cfg)
+result = run_probabilistic(pfa, cfg, input_artifacts=input_artifacts)
 # result.components["heat"].probability  — GeoDataFrame with 'probability' column
 # result.combined                         — combined resource probability surface
 # run_gblk_calibration_cv(...)             — explicit raw block-CV diagnostics

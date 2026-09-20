@@ -4,7 +4,7 @@ This module is the geoPFA *application adapter* onto the generic,
 application-agnostic :mod:`latticekrigx.glk` engine.  It maps geoPFA-native
 inputs -- per-component well labels, physics-informed prior offsets
 (``alpha_c``), and a prediction grid -- onto the generic joint multivariate GLM
-:func:`latticekrigx.glk.joint.fit_joint`, which fits all components **jointly**
+:func:`latticekrigx.glk.joint.fit_joint`, which fits same-family components jointly
 (coupled through a scale-specific cross-component correlation matrix ``Omega``
 and shared hyperparameters) rather than independently.
 

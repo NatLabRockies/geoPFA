@@ -141,7 +141,6 @@ The whole pipeline is driven by a single JSON config. Drop a `probabilistic` blo
 ```javascript
 {
   "criteria": { ... },             // your existing PFA config (unchanged)
-  "pfa_pickle": "outputs/pfa.pkl", // (optional) pre-processed PFA dict from geoPFA
   "probabilistic": {
     "enabled": true,
     "output_dir": "outputs/probabilistic/",
@@ -193,21 +192,25 @@ The whole pipeline is driven by a single JSON config. Drop a `probabilistic` blo
 Then run:
 
 ```bash
-pixi run -e dev-gblk geopfa-prob run --config path/to/config.json
+pixi run -e dev-gblk geopfa-prob run \
+  --config path/to/config.json \
+  --processed-data-dir path/to/processed/data \
+  --crs EPSG:26911
 ```
 
-All relative paths in the JSON—including `pfa_pickle`, `output_dir`, label,
-thermal, uncertainty, and candidate-frame paths—are resolved relative to the
-config file, not the shell's working directory. The run manifest records the
-resolved inputs with byte counts and SHA-256 digests, the full effective config,
-the producing geoPFA and LatticeKrigX versions, and a SHA-256 fingerprint of
-both runtime source trees. Completed output namespaces are immutable and are
-never accepted for another execution, even when their manifests still verify.
-Only a verified incomplete posterior workspace with a valid progress record
-may resume its completed block prefix. Use a fresh directory when the config or
-implementation changes, or when abrupt termination leaves an incompletely
-published state or derived product, so artifacts from different runs cannot
-mix.
+The processed-data directory must contain the standard
+`criteria/component/*_processed.csv` layer tree. The CRS is explicit because
+CSV geometry does not carry that metadata. Relative `output_dir`, label,
+thermal, uncertainty, and candidate-frame paths in the JSON are resolved
+relative to the config file, not the shell's working directory. The manifest
+binds the config and every consumed processed layer by byte count and SHA-256,
+along with the effective config and the geoPFA/LatticeKrigX runtime identities.
+Completed output namespaces are immutable and are never accepted for another
+execution, even when their manifests still verify. Only a verified incomplete
+posterior workspace with a valid progress record may resume its completed
+block prefix. Use a fresh directory when the config or implementation changes,
+or when abrupt termination leaves an incompletely published state or derived
+product, so artifacts from different runs cannot mix.
 The runner also compares its start/end runtime fingerprints and rejects an
 artifact if either source tree changes while the model is executing.
 
@@ -236,6 +239,32 @@ That call:
    either dimension. Optional products include paired Bayesian probability
    blocks. The run also writes `alpha_provenance.json` and `manifest.json`
    (input/output SHA-256 hashes + config and implementation hashes + run id).
+
+## Study notebooks
+
+The three probabilistic study notebooks start from the standard processed
+config and `*_processed.csv` layer tree. They do not repeat the educational
+cleaning and feature-processing walkthroughs in the voter-veto notebooks. Each
+notebook runs `VoterVeto` on those processed inputs, runs the probabilistic
+model, and compares the two final surfaces (`pfa_vv["pr_norm"]` and
+`result.combined`). Generated outputs remain outside Git.
+
+Local paths use documented defaults and can be overridden without editing the
+notebooks:
+
+| Input | Environment variable |
+| --- | --- |
+| output root shared by all demos | `GEOPFA_DEMO_OUTPUT_ROOT` |
+| Newberry processed config and layer tree | `GEOPFA_NEWBERRY_PROCESSED_CONFIG`, `GEOPFA_NEWBERRY_PROCESSED_DATA` |
+| Nevada processed config and layer tree | `GEOPFA_NEVADA_PROCESSED_CONFIG`, `GEOPFA_NEVADA_PROCESSED_DATA` |
+| Nevada conventional labels | `GEOPFA_NEVADA_LABELS` |
+| Nevada 3-km thermal mean and standard deviation | `GEOPFA_NEVADA_3KM_MEAN`, `GEOPFA_NEVADA_3KM_SD` |
+| Nevada 7-km thermal mean and standard deviation | `GEOPFA_NEVADA_7KM_MEAN`, `GEOPFA_NEVADA_7KM_SD` |
+
+The Newberry notebook is an illustrative run, not the publication convergence
+campaign. It retains full-grid posterior summaries but disables raw full-grid
+draw blocks. Publication runs must predeclare both a Monte Carlo convergence
+gate and the retained-draw cell subset or other storage contract.
 
 ## Config reference
 
@@ -681,8 +710,9 @@ probability surfaces.
 
 The GBLK method is implemented and is the default backend. Current limitations:
 
-- **3D plotter helpers** — depth-slice panel, isosurface via
-  `ConceptualModeling.plot_isosurface`, vertical cross-section.
+- **3D visualization scope** — the helper API provides static depth slices and
+  vertical cross-sections. Interactive volume rendering remains outside the
+  probabilistic plotting API.
 - **GBLK post-hoc calibration application** — raw block-CV diagnostics are
   available, but calibrated GBLK map export is not yet implemented.
 - **Joint upstream uncertainty** — the sole Bayesian GBLK path jointly samples
@@ -710,28 +740,37 @@ deprecated and retained only for explicitly supported diagnostics such as nnPU.
 
 ### GBLK is now the default backend
 
-`inference.backend` defaults to `"gblk"`. The GBLK method fits all components
-jointly via `latticekrigx.glk.joint.fit_joint`, replacing the sequential
-per-component logistic plus standalone spatial-smoother path. No config change
-is needed if you did not previously set `inference.backend` explicitly.
+`inference.backend` defaults to `"gblk"`. The GBLK method fits each
+same-family component group jointly via
+`latticekrigx.glk.joint.fit_joint`; Gaussian and Bernoulli components remain
+separate likelihood groups. This replaces the sequential per-component
+logistic plus standalone spatial-smoother path. No config change is needed if
+you did not previously set `inference.backend` explicitly.
 
 The `sequential` backend is deprecated: a `DeprecationWarning` is emitted when
 it is used. Remove `inference.backend="sequential"` from any existing configs.
 
-### `run_probabilistic_pfa(pfa_pickle)` — single-file entry point
+### Processed-input entry point
 
-The recommended way to run the workflow when a serialized geoPFA dictionary
-already contains a ``"probabilistic"`` config block:
+Load the standard processed config and layer tree, then call the canonical
+runner:
 
 ```python
-from geopfa.prob import run_probabilistic_pfa
+from geopfa.prob import load_processed_pfa, load_probabilistic_config
+from geopfa.prob import run_probabilistic
 
-result = run_probabilistic_pfa("outputs/pfa.pkl")
+config_path = "path/to/config.json"
+pfa, artifacts = load_processed_pfa(
+    config_path,
+    "path/to/processed/data",
+    crs="EPSG:26911",
+)
+config = load_probabilistic_config(config_path)
+result = run_probabilistic(pfa, config, input_artifacts=artifacts)
 ```
 
-The function loads the trusted pickle, reads its embedded configuration with
-`ProbabilisticConfig.from_pfa(pfa)`, calls `run_probabilistic(pfa, cfg)`, and
-binds the exact pickle into the run manifest.
+`load_processed_pfa` validates the processed layers and returns the complete
+input-artifact mapping used by the run manifest.
 
 ### `ProbabilisticConfig.from_pfa(pfa)` — pfa-dict integration
 

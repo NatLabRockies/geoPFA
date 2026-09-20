@@ -16,16 +16,17 @@ probabilistic backend (`inference.backend="gblk"`). This guide covers:
 ### What changed
 
 The `sequential` backend fits one component at a time with an independent
-penalized logistic regression and standalone spatial smoother. The `gblk` backend
-fits **all components jointly** in a single multivariate Bernoulli-logit model via
+penalized logistic regression and standalone spatial smoother. The `gblk`
+backend fits each **same-family component group jointly** via
 `latticekrigx.glk.joint.fit_joint`, estimating the cross-component correlation
-$\Omega$ among component-specific LatticeKrig latent fields.
+$\Omega$ among component-specific LatticeKrig latent fields. Gaussian and
+Bernoulli responses remain separate likelihood groups.
 
 Key differences:
 
 | Aspect | `sequential` (deprecated) | `gblk` (default) |
 |---|---|---|
-| Fit | Per-component penalized logistic model + spatial smoother | Joint multivariate GBLK |
+| Fit | Per-component penalized logistic model + spatial smoother | Same-family multivariate GBLK groups |
 | Spatial field | Independent RBF or LatticeKrig field (`spatial_field.backend`) | Shared LatticeKrig multiresolution basis |
 | Cross-component dependence | Assumed independent | Estimated $\Omega$ |
 | combined surface | Product of independently fit marginals | Product of marginals estimated by the joint fit (conditional plug-in co-occurrence) |
@@ -88,7 +89,10 @@ published first. Use `dev-gblk` for a complete authenticated developer
 environment:
 
 ```bash
-pixi run -e dev-gblk geopfa-prob run --config my_config.json
+pixi run -e dev-gblk geopfa-prob run \
+  --config my_config.json \
+  --processed-data-dir path/to/processed/data \
+  --crs EPSG:26911
 ```
 
 Or programmatically:
@@ -149,7 +153,14 @@ from geopfa.prob import (
     InferenceConfig,
     EvidenceConfig,
     OutputsConfig,
+    load_processed_pfa,
     run_probabilistic,
+)
+
+pfa, input_artifacts = load_processed_pfa(
+    "my_config.json",
+    "path/to/processed/data",
+    crs="EPSG:26911",
 )
 
 cfg = ProbabilisticConfig(
@@ -171,7 +182,7 @@ cfg = ProbabilisticConfig(
     outputs=OutputsConfig(format=("geotiff", "csv")),
 )
 
-result = run_probabilistic(pfa, cfg)
+result = run_probabilistic(pfa, cfg, input_artifacts=input_artifacts)
 for name, surface in result.components.items():
     print(f"{name}: mean p = {surface.probability['probability'].mean():.3f}")
 print(f"combined surface shape: {result.combined.shape}")
@@ -181,7 +192,6 @@ print(f"combined surface shape: {result.combined.shape}")
 
 ```jsonc
 {
-  "pfa_pickle": "outputs/pfa.pkl",
   "probabilistic": {
     "enabled": true,
     "output_dir": "outputs/probabilistic/",
@@ -208,16 +218,21 @@ print(f"combined surface shape: {result.combined.shape}")
 Then run:
 
 ```bash
-pixi run -e dev-gblk geopfa-prob run --config my_config.json
+pixi run -e dev-gblk geopfa-prob run \
+  --config my_config.json \
+  --processed-data-dir path/to/processed/data \
+  --crs EPSG:26911
 ```
 
 ### Key differences from the Stage-1 demo
 
-1. **`pfa_pickle` is required** for the CLI — the CLI loads a serialised PFA dict.
+1. **Processed layers are explicit CLI inputs** — provide the config, standard
+   processed layer tree, and the layer CRS. The manifest binds each file.
 2. **`alpha` is per-component** — each component has its own alpha mode.
-3. **`inference.backend="gblk"` is the default** — components are fit jointly; no
-   `spatial_field` block is needed when its defaults are appropriate. When
-   present, only the documented LatticeKrigX controls are accepted.
+3. **`inference.backend="gblk"` is the default** — same-family components are
+   fit jointly; no `spatial_field` block is needed when its defaults are
+   appropriate. When present, only the documented LatticeKrigX controls are
+   accepted.
 4. **Calibration and CV** — GBLK config-driven runs require
    `calibration.method="none"`. Use `run_gblk_calibration_cv` explicitly for raw
    blocked or buffered cross-validation diagnostics.

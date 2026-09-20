@@ -12,7 +12,6 @@ alignment, spatial fitting, blocked validation, and output generation.
 
 from __future__ import annotations
 
-import pickle  # noqa: S403 -- trusted geoPFA preprocessing artifact
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
@@ -583,8 +582,9 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
         Criteria key to operate on. Defaults to ``"geologic"``.
     input_artifacts
         Optional named source files to bind into ``manifest.json``. The CLI
-        supplies the config and PFA pickle automatically; programmatic callers
-        should provide any serialized PFA source needed to reproduce the run.
+        supplies the processed config and layer files automatically.
+        Programmatic callers should provide every external source needed to
+        reproduce the assembled PFA.
 
     Returns
     -------
@@ -871,56 +871,4 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
     )
 
 
-def run_probabilistic_pfa(
-    pfa_pickle: str | Path,
-    *,
-    criteria: str = "geologic",
-) -> ProbabilisticResult:
-    """Load and run one serialized PFA artifact with embedded configuration.
-
-    This is the provenance-bound integration point with the existing geoPFA
-    pipeline. The trusted pickle must contain a PFA dict with a
-    ``"probabilistic"`` key alongside the usual ``"criteria"`` structure.
-    The exact serialized artifact loaded here is recorded in ``manifest.json``.
-
-    Example configuration structure::
-
-        pfa = {
-            "criteria": {"geologic": {"components": {...}}},
-            "probabilistic": {
-                "enabled": True,
-                "labels": {"source": "wells.gpkg", ...},
-                ...,
-            },
-        }
-
-    Parameters
-    ----------
-    pfa_pickle : str or pathlib.Path
-        Path to the trusted serialized geoPFA dict produced by preprocessing.
-    criteria : str
-        Criteria key to operate on.  Defaults to ``"geologic"``.
-
-    Returns
-    -------
-    ProbabilisticResult
-        Fitted component and combined probability surfaces with diagnostics.
-    """
-    source = Path(pfa_pickle).resolve()
-    if not source.is_file():
-        raise FileNotFoundError(f"PFA pickle does not exist: {source}")
-    with source.open("rb") as stream:
-        pfa = pickle.load(stream)  # noqa: S301 -- trusted preprocessing input
-    if not isinstance(pfa, dict):
-        raise TypeError("PFA pickle must contain a dict")
-
-    config = ProbabilisticConfig.from_pfa(pfa)
-    return run_probabilistic(
-        pfa,
-        config,
-        criteria=criteria,
-        input_artifacts={"pfa_pickle": source},
-    )
-
-
-__all__ = ["ProbabilisticResult", "run_probabilistic", "run_probabilistic_pfa"]
+__all__ = ["ProbabilisticResult", "run_probabilistic"]

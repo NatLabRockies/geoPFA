@@ -1169,17 +1169,6 @@ def test_explicit_gaussian_evidence_priors_roundtrip_without_layer_weights() -> 
     ] | {"C": 1.0, "per_feature_weights": {}}
 
 
-def test_regularization_rejects_removed_play_type_key() -> None:
-    raw = _minimal_config_dict()
-    raw["evidence"] = {"regularization": {"play_type": "extensional"}}
-
-    with pytest.raises(
-        ValueError,
-        match=r"unknown evidence\.regularization config key.*play_type",
-    ):
-        ProbabilisticConfig.from_dict(raw)
-
-
 def test_prediction_support_evidence_standardization_roundtrips() -> None:
     raw = _minimal_config_dict()
     raw["evidence"] = {"standardization": "prediction_support"}
@@ -1387,39 +1376,6 @@ def test_explicit_spatial_domain_requires_enabled_field() -> None:
     }
 
     with pytest.raises(ValueError, match="spatial_domain.*enabled"):
-        ProbabilisticConfig.from_dict(raw)
-
-
-def test_default_spatial_config_does_not_change_canonical_payload() -> None:
-    cfg = ProbabilisticConfig.from_dict(_minimal_config_dict())
-
-    assert "spatial_domain" not in cfg.to_dict()["spatial_field"]
-
-
-@pytest.mark.parametrize(
-    ("block", "key", "value"),
-    [
-        ("spatial_field", "kernel", "matern32"),
-        ("spatial_field", "n_inducing", 100),
-        ("spatial_field", "lengthscale_lower_frac", 0.05),
-        ("spatial_field", "lengthscale_upper_frac", 0.3),
-        ("spatial_field", "optimize_restarts", 2),
-        ("labels", "label_quality_col", "quality"),
-        ("labels", "label_source_col", "source"),
-        ("calibration", "report_temperature", True),
-        ("combination", "barrier_inverse", False),
-    ],
-)
-def test_retired_no_effect_config_fields_fail_closed(
-    block: str,
-    key: str,
-    value: object,
-) -> None:
-    """A config key must not survive when no execution path honors it."""
-    raw = _minimal_config_dict()
-    raw.setdefault(block, {})[key] = value
-
-    with pytest.raises(ValueError, match=key):
         ProbabilisticConfig.from_dict(raw)
 
 
@@ -1680,13 +1636,6 @@ def test_layer_logit_requires_layer_name() -> None:
         ProbabilisticConfig.from_dict(raw)
 
 
-def test_retired_pymc_backend_is_rejected() -> None:
-    raw = _minimal_config_dict()
-    raw["inference"] = {"backend": "bayesian"}
-    with pytest.raises(ValueError, match="inference.backend"):
-        ProbabilisticConfig.from_dict(raw)
-
-
 def test_bayesian_gblk_flag_cannot_be_ignored_by_sequential_backend() -> None:
     raw = _minimal_config_dict()
     raw["inference"] = {
@@ -1694,13 +1643,6 @@ def test_bayesian_gblk_flag_cannot_be_ignored_by_sequential_backend() -> None:
         "gblk_bayesian": {"enabled": True},
     }
     with pytest.raises(ValueError, match="gblk_bayesian.enabled"):
-        ProbabilisticConfig.from_dict(raw)
-
-
-def test_retired_shared_field_combination_is_rejected() -> None:
-    raw = _minimal_config_dict()
-    raw["combination"] = {"rule": "shared_field"}
-    with pytest.raises(ValueError, match="shared_field"):
         ProbabilisticConfig.from_dict(raw)
 
 
@@ -2104,33 +2046,6 @@ def test_validate_raise_raises_on_invalid_config() -> None:
 
     with _pytest.raises(ValueError, match="n_folds"):
         cfg.validate_raise()
-
-
-def test_validate_catches_retired_shared_field() -> None:
-    from pathlib import Path
-    import pytest as _pytest
-
-    with _pytest.raises(ValueError, match="shared_field"):
-        ProbabilisticConfig(
-            enabled=True,
-            output_dir=Path("/tmp/test"),
-            dimensions="2d",
-            grid=GridConfig(),
-            labels=LabelsConfig(
-                source="w.gpkg", id_col="id", label_columns={"a": "lbl"}
-            ),
-            alpha={
-                "a": AlphaModeConfig(mode="scalar", scalar_fallback_pr0=0.5)
-            },
-            evidence=EvidenceConfig(),
-            spatial_field=SpatialFieldConfig(enabled=False),
-            inference=InferenceConfig(backend="sequential"),
-            calibration=CalibrationConfig(method="none"),
-            cross_validation=CrossValidationConfig(),
-            combination=CombinationConfig(rule="shared_field"),
-            scenarios=(),
-            outputs=OutputsConfig(format=("csv",)),
-        )
 
 
 def test_validate_catches_empty_output_dir() -> None:

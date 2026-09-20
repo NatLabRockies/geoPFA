@@ -16,7 +16,6 @@ without crashes, and that the output files have the expected structure.
 from __future__ import annotations
 
 import json
-import pickle
 from pathlib import Path
 
 import pytest
@@ -25,7 +24,10 @@ import pytest
 # Fixtures
 # ---------------------------------------------------------------------------
 
-_PFA_PICKLE = Path("examples/Newberry/2D/notebooks/fpa.pkl")
+_PFA_CONFIG = Path(
+    "examples/Newberry/2D/config/newberry_superhot_processed_config.json"
+)
+_PROCESSED_DATA = Path("examples/Newberry/2D/data")
 _WELLS_FILE = Path("data/raw/wells.gpkg")  # update to your local path
 
 
@@ -33,9 +35,9 @@ _WELLS_FILE = Path("data/raw/wells.gpkg")  # update to your local path
 def test_prob_workflow_on_newberry_pfa(
     tmp_path: pytest.TempPathFactory,
 ) -> None:
-    """Smoke test: run run_probabilistic on the cached Newberry PFA dict."""
-    if not _PFA_PICKLE.exists():
-        pytest.skip(f"Newberry PFA pickle not found at {_PFA_PICKLE}")
+    """Smoke test: run from Newberry's processed config and layer tree."""
+    if not _PFA_CONFIG.is_file() or not _PROCESSED_DATA.is_dir():
+        pytest.skip("Newberry processed config or local layer tree is absent")
 
     from geopfa.prob import (
         AlphaModeConfig,
@@ -51,9 +53,18 @@ def test_prob_workflow_on_newberry_pfa(
         SpatialFieldConfig,
         run_probabilistic,
     )
+    from geopfa.io.data_readers import (  # noqa: PLC0415
+        GeospatialDataReaders,
+        safe_json_load,
+    )
 
-    with _PFA_PICKLE.open("rb") as fh:
-        pfa = pickle.load(fh)  # noqa: S301
+    pfa = GeospatialDataReaders.gather_processed_data(
+        _PROCESSED_DATA,
+        safe_json_load(_PFA_CONFIG),
+        crs="EPSG:26910",
+        validate=True,
+        strict=True,
+    )
 
     # Determine the first two component names from the PFA dict.
     components = list(pfa["criteria"]["geologic"]["components"].keys())
@@ -63,7 +74,7 @@ def test_prob_workflow_on_newberry_pfa(
     out_dir = tmp_path / "prob_outputs"
 
     # Locate a usable labeled wells file. Requires a GeoPackage (self-describing CRS).
-    _nb_wells_gpkg = _PFA_PICKLE.parent / "wells.gpkg"
+    _nb_wells_gpkg = _PROCESSED_DATA / "wells.gpkg"
     if _nb_wells_gpkg.exists():
         wells_source = str(_nb_wells_gpkg)
     elif _WELLS_FILE.exists():

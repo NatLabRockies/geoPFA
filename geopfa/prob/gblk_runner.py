@@ -3290,7 +3290,7 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     """Run the joint GBLK probabilistic method end-to-end.
 
     Assembles per-component inputs (labels, alpha offsets, evidence),
-    fits all components jointly via the GBLK engine, and packages the
+    fits each same-family component group jointly via the GBLK engine, and packages the
     result into a :class:`~geopfa.prob.runner.ProbabilisticResult` with Q
     per-component probability surfaces and a joint combined surface.
 

@@ -9,21 +9,7 @@ import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import Point
 
-from geopfa.prob.data import sample_evidence_at_wells
-
-
-def test_probabilistic_public_api_has_one_canonical_data_and_draw_path() -> (
-    None
-):
-    import geopfa.prob as probability
-
-    for obsolete_name in (
-        "construct_alpha_c",
-        "load_labeled_wells",
-        "prepare_component_arrays",
-        "write_posterior_draw_blocks",
-    ):
-        assert not hasattr(probability, obsolete_name)
+from geopfa.prob.data import load_processed_pfa, sample_evidence_at_wells
 
 
 def test_sample_evidence_at_wells_samples_expected_values(
@@ -63,3 +49,40 @@ def test_sample_evidence_requires_crs_and_at_least_one_raster() -> None:
     point = point.set_crs("EPSG:4326")
     with pytest.raises(ValueError, match="cannot be empty"):
         sample_evidence_at_wells(point, {})
+
+
+def test_load_processed_pfa_returns_complete_file_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"criteria": {}}')
+    layer = tmp_path / "data/geologic/heat/thermal_processed.csv"
+    layer.parent.mkdir(parents=True)
+    layer.write_text("geometry,value\nPOINT (0 0),1\n")
+    parsed = {"criteria": {}}
+    monkeypatch.setattr(
+        "geopfa.prob.data.safe_json_load", lambda _path: parsed
+    )
+    monkeypatch.setattr(
+        "geopfa.prob.data.GeospatialDataReaders.gather_processed_data",
+        lambda root, pfa, crs, validate, strict: {
+            "root": root,
+            "pfa": pfa,
+            "crs": crs,
+            "validate": validate,
+            "strict": strict,
+        },
+    )
+
+    pfa, artifacts = load_processed_pfa(
+        config_path, tmp_path / "data", crs="EPSG:32611"
+    )
+
+    assert pfa["root"] == (tmp_path / "data").resolve()
+    assert pfa["pfa"] is parsed
+    assert pfa["crs"] == "EPSG:32611"
+    assert pfa["validate"] is True and pfa["strict"] is True
+    assert artifacts == {
+        "processed_config": config_path.resolve(),
+        "processed_data:geologic/heat/thermal_processed.csv": layer.resolve(),
+    }

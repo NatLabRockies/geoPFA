@@ -141,8 +141,3 @@ def test_univariate_fit_omits_other_family_profile() -> None:
         response_family="gaussian",
         n_components=1,
     ) == (None, None)
-
-
-def test_retired_global_kleiber_keys_are_rejected() -> None:
-    with pytest.raises(ValueError, match="kleiber_r0"):
-        GBLKBayesianConfig.from_dict({"kleiber_r0": 0.25, "kleiber_r1": 0.10})

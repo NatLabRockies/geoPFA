@@ -6,7 +6,6 @@ Validates the full pipeline: alpha_c → sequential fitting → calibration → 
 
 from __future__ import annotations
 
-import pickle
 import warnings
 from pathlib import Path
 
@@ -111,10 +110,10 @@ def test_run_probabilistic_3d_combined_surface(
     assert combined_probs.std() > 0.001
 
 
-def test_run_probabilistic_pfa_integration(tmp_path: Path, fixture_3d) -> None:
-    """run_probabilistic_pfa reads config from pfa['probabilistic'] key."""
-    from geopfa.prob.runner import run_probabilistic_pfa  # noqa: PLC0415
-
+def test_embedded_probabilistic_config_integration(
+    tmp_path: Path, fixture_3d
+) -> None:
+    """An embedded config parses and runs through the canonical API."""
     wells_path = tmp_path / "wells.gpkg"
     fixture_3d.wells.to_file(wells_path, layer="wells", driver="GPKG")
 
@@ -137,13 +136,12 @@ def test_run_probabilistic_pfa_integration(tmp_path: Path, fixture_3d) -> None:
         "combination": {"rule": "product"},
     }
 
-    pfa_path = tmp_path / "pfa.pkl"
-    with pfa_path.open("wb") as stream:
-        pickle.dump(pfa_with_config, stream)
-
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        result = run_probabilistic_pfa(pfa_path)
+        result = run_probabilistic(
+            pfa_with_config,
+            ProbabilisticConfig.from_pfa(pfa_with_config),
+        )
 
     assert not result.skipped
     assert "component_a" in result.components

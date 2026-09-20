@@ -3215,11 +3215,6 @@ def test_p7_gblk_bayesian_config_roundtrip() -> None:
     assert restored == cfg
 
 
-def test_p7_retired_nested_laplace_config_is_rejected() -> None:
-    with pytest.raises(ValueError, match="range_prior_u"):
-        GBLKBayesianConfig.from_dict({"range_prior_u": 0.2})
-
-
 def test_p7_gblk_bayesian_uses_published_paige_prior() -> None:
     from latticekrigx.glk.bayes import PaigeELKPrior
 

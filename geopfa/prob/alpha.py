@@ -69,10 +69,6 @@ def _logit(p: np.ndarray | float) -> np.ndarray | float:
     return np.log(p / (1.0 - p))
 
 
-def _scalar_offset(pr0: float) -> np.ndarray:
-    return np.asarray(_logit(pr0))
-
-
 def _rescale_to_logit(
     values: np.ndarray, *, p_min: float, p_max: float
 ) -> np.ndarray:

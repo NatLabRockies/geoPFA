@@ -44,6 +44,14 @@ def _setup_dir(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _save(fig: plt.Figure, path: Path) -> Path:
+    """Write and close one completed figure."""
+    _setup_dir(path)
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    return path
+
+
 def _scatter_with_probability(  # noqa: PLR0913
     ax: plt.Axes,
     gdf: gpd.GeoDataFrame,
@@ -142,10 +150,7 @@ def plot_component_panel(
         title=f"{component_name}: final probability",
     )
     plt.tight_layout()
-    _setup_dir(path)
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return path
+    return _save(fig, path)
 
 
 def plot_well_overlay(
@@ -196,10 +201,7 @@ def plot_well_overlay(
         )
     ax.legend(loc="upper right")
     plt.tight_layout()
-    _setup_dir(path)
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return path
+    return _save(fig, path)
 
 
 def plot_reliability_diagram(
@@ -235,10 +237,7 @@ def plot_reliability_diagram(
     ax.set_ylim(0, 1)
     ax.legend(loc="lower right")
     plt.tight_layout()
-    _setup_dir(path)
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return path
+    return _save(fig, path)
 
 
 def plot_decision_class_bar(
@@ -275,10 +274,7 @@ def plot_decision_class_bar(
     ax.set_title("decision-class accuracy")
     ax.legend()
     plt.tight_layout()
-    _setup_dir(path)
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return path
+    return _save(fig, path)
 
 
 def plot_top_n_curve(
@@ -304,10 +300,7 @@ def plot_top_n_curve(
     ax.set_title("top-N targeting curve")
     ax.legend()
     plt.tight_layout()
-    _setup_dir(path)
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return path
+    return _save(fig, path)
 
 
 def plot_confusion_matrix(
@@ -331,10 +324,7 @@ def plot_confusion_matrix(
     ax.set_title(f"confusion matrix @ threshold = {threshold}")
     plt.colorbar(im, ax=ax, fraction=0.046)
     plt.tight_layout()
-    _setup_dir(path)
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return path
+    return _save(fig, path)
 
 
 # ---------------------------------------------------------------------------
@@ -411,10 +401,7 @@ def plot_depth_slices(
         ax.axis("off")
 
     plt.tight_layout()
-    _setup_dir(path)
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return path
+    return _save(fig, path)
 
 
 def plot_vertical_cross_section(  # noqa: PLR0913
@@ -483,10 +470,7 @@ def plot_vertical_cross_section(  # noqa: PLR0913
         ax.set_ylabel("z")
 
     plt.tight_layout()
-    _setup_dir(path)
-    fig.savefig(path, dpi=150)
-    plt.close(fig)
-    return path
+    return _save(fig, path)
 
 
 __all__ = [

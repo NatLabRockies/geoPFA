@@ -533,26 +533,6 @@ def _posterior_grid_coordinates(
     return coordinates, coordinate_columns, crs
 
 
-def _validated_probability_array(
-    values: np.ndarray,
-    *,
-    name: str,
-) -> np.ndarray:
-    """Validate one draw-by-cell probability array without changing precision."""
-    array = np.asarray(values)
-    if array.ndim != _DRAW_ARRAY_DIMENSIONS:
-        raise ValueError(f"{name} must have shape (n_draws, n_cells)")
-    if np.issubdtype(array.dtype, np.bool_) or not np.issubdtype(
-        array.dtype, np.number
-    ):
-        raise ValueError(f"{name} must contain numeric probabilities")
-    if not np.isfinite(array).all():
-        raise ValueError(f"{name} must contain only finite probabilities")
-    if np.any(array < 0.0) or np.any(array > 1.0):
-        raise ValueError(f"{name} probabilities must lie in [0, 1]")
-    return array
-
-
 def _combined_draw_estimand(
     component_block: np.ndarray,
     *,

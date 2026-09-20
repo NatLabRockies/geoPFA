@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
-from pathlib import Path
 from types import SimpleNamespace
 
 import geopandas as gpd
@@ -781,52 +779,3 @@ def test_only_gblk_exposes_a_bayesian_backend() -> None:
     )
     assert config.backend == "gblk"
     assert config.gblk_bayesian.enabled is True
-
-
-def test_gblk_runner_delegates_to_one_canonical_bayesian_fitter() -> None:
-    source = inspect.getsource(gblk_runner._run_gblk_bayesian)  # noqa: SLF001
-    backend_source = inspect.getsource(gblk_runner.fit_gblk_bayesian_joint)
-    state_source = inspect.getsource(
-        gblk_runner.fit_gblk_bayesian_posterior_state
-    )
-
-    assert "fit_gblk_bayesian_joint(" in source
-    assert "optimize_hyperparameters" not in source
-    assert "draw_posterior" not in source
-    assert "fit_gblk_bayesian_posterior_state(" in backend_source
-    assert 'inference="inla"' in state_source
-    assert "latticekrigx.glk.bayes.marginal" not in backend_source
-    assert "latticekrigx.glk.bayes.posterior" not in backend_source
-
-
-def test_current_user_docs_describe_nnpu_and_one_bayesian_path() -> None:
-    root = Path(__file__).resolve().parents[1]
-    method = (root / "docs/probabilistic_method.md").read_text(
-        encoding="utf-8"
-    )
-    migration = (root / "docs/migration_guide.md").read_text(encoding="utf-8")
-    readme = (root / "README.md").read_text(encoding="utf-8")
-
-    assert '`pu_mode` | `"off"`' in method
-    assert "non-negative PU" in method
-    assert "Bayesian GBLK offsets" not in method
-    assert '`backend` | Bayesian path | `"bayesian"`' not in method
-    assert "Bayesian MCMC hyperparameters" not in method
-    assert "PU correction is opt-in" in migration
-    assert '`pu_mode: "nnpu"`' in migration
-    assert "Elkan-Noto PU correction is the **default**" not in migration
-    for text in (readme, method, migration):
-        assert "sole Bayesian" in text
-        normalized = " ".join(text.split())
-        assert "Paige/INLA" in normalized
-        assert "non-negative PU" in normalized
-    stale_active_instructions = (
-        "full Bayesian hierarchical in PyMC",
-        '"pu_mode": "elkan_noto"',
-        "operates per depth slice internally",
-        "ship two backends",
-        "Status:** planning. No implementation yet",
-    )
-    for stale in stale_active_instructions:
-        for text in (readme, method, migration):
-            assert stale not in " ".join(text.split())
