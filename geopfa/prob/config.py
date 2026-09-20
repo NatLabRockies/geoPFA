@@ -16,8 +16,8 @@ Design choices
 * Cross-block validation lives in ``ProbabilisticConfig.__post_init__`` so any
   consumer that builds a ``ProbabilisticConfig`` (tests, programmatic
   callers, JSON loader) gets identical validation.
-* Unknown top-level keys are rejected; this catches typos in user-facing
-  config files early.
+* Unknown keys are rejected at every parsed config level; this catches typos
+  in user-facing config files early.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
@@ -235,6 +235,12 @@ def _require_json_integer(
     )
 
 
+def _require_optional_integer_value(value: Any, *, context: str) -> int | None:
+    if value is None:
+        return None
+    return _require_integer_value(value, context=context)
+
+
 def _require_finite_real_value(value: Any, *, context: str) -> float:
     """Return a finite real number without accepting numeric strings/bools."""
 
@@ -394,6 +400,117 @@ def _require_json_string(
     return value
 
 
+def _parse_config_fields(
+    raw: Mapping[str, Any],
+    *,
+    defaults: Any,
+    schema: Mapping[str, str],
+    context: str,
+    hint: str | None = None,
+) -> dict[str, Any]:
+    """Parse common scalar config fields with strict JSON types."""
+    _reject_unknown_keys(
+        raw,
+        set(schema),
+        context=context,
+        hint=hint,
+    )
+    parsers = {
+        "raw": raw.get,
+        "bool": lambda name, default: _require_json_bool(
+            raw, name, default, context=context
+        ),
+        "int": lambda name, default: _require_json_integer(
+            raw, name, default, context=context
+        ),
+        "optional_int": lambda name, default: (
+            _require_optional_integer_value(
+                raw.get(name, default), context=f"{context}.{name}"
+            )
+        ),
+        "real": lambda name, default: _require_json_real(
+            raw, name, default, context=context
+        ),
+        "optional_real": lambda name, _default: _require_optional_json_real(
+            raw, name, context=context
+        ),
+        "optional_string": lambda name, default: _require_json_string(
+            raw, name, default, context=context, allow_none=True
+        ),
+        "string": lambda name, default: _require_json_string(
+            raw, name, default, context=context
+        ),
+        "string_array": lambda name, default: _require_json_string_array(
+            raw, name, default, context=context
+        ),
+        "optional_string_array": lambda name, default: (
+            _require_json_string_array(
+                raw, name, default, context=context, allow_none=True
+            )
+        ),
+        "real_array": lambda name, default: _require_json_real_array(
+            raw, name, default, context=context
+        ),
+        "real_mapping": lambda name, default: {
+            str(key): _require_finite_real_value(
+                value, context=f"{context}.{name}.{key}"
+            )
+            for key, value in dict(raw.get(name, default)).items()
+        },
+        "spatial_domain": lambda name, default: _require_spatial_domain(
+            raw.get(name, default)
+        ),
+    }
+    parsed: dict[str, Any] = {}
+    for name, kind in schema.items():
+        if kind == "skip":
+            continue
+        parser = parsers.get(kind)
+        if parser is None:  # pragma: no cover - internal schema definition
+            raise RuntimeError(f"unknown config parser kind {kind!r}")
+        parsed[name] = parser(name, getattr(defaults, name))
+    return parsed
+
+
+def _json_config_value(value: Any) -> Any:
+    """Convert nested immutable config values to JSON-compatible values."""
+    if isinstance(value, Path):
+        return str(value)
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    if isinstance(value, Mapping):
+        return {
+            str(key): _json_config_value(item) for key, item in value.items()
+        }
+    if isinstance(value, tuple):
+        return [_json_config_value(item) for item in value]
+    return value
+
+
+def _config_to_dict(
+    config: Any,
+    *,
+    omit_none: frozenset[str] = frozenset(),
+    omit_empty: frozenset[str] = frozenset(),
+    omit_defaults: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Serialize one config dataclass without repeating field plumbing."""
+    defaults = {} if omit_defaults is None else omit_defaults
+    payload: dict[str, Any] = {}
+    for config_field in fields(config):
+        name = config_field.name
+        value = getattr(config, name)
+        if name in omit_none and value is None:
+            continue
+        if name in omit_empty and not value:
+            continue
+        if name in defaults and value == defaults[name]:
+            continue
+        payload[name] = _json_config_value(value)
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Sub-dataclasses
 # ---------------------------------------------------------------------------
@@ -419,25 +536,19 @@ class GridConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(
-            raw, {"nx", "ny", "nz", "extent", "crs"}, context="grid"
-        )
         extent = raw.get("extent")
         return cls(
-            nx=(
-                _require_integer_value(raw["nx"], context="grid.nx")
-                if raw.get("nx") is not None
-                else None
-            ),
-            ny=(
-                _require_integer_value(raw["ny"], context="grid.ny")
-                if raw.get("ny") is not None
-                else None
-            ),
-            nz=(
-                _require_integer_value(raw["nz"], context="grid.nz")
-                if raw.get("nz") is not None
-                else None
+            **_parse_config_fields(
+                raw,
+                defaults=cls(),
+                schema={
+                    "nx": "optional_int",
+                    "ny": "optional_int",
+                    "nz": "optional_int",
+                    "extent": "skip",
+                    "crs": "raw",
+                },
+                context="grid",
             ),
             extent=(
                 tuple(
@@ -449,18 +560,11 @@ class GridConfig:
                 if extent is not None
                 else None
             ),
-            crs=raw.get("crs"),
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
-            "nx": self.nx,
-            "ny": self.ny,
-            "nz": self.nz,
-            "extent": list(self.extent) if self.extent is not None else None,
-            "crs": self.crs,
-        }
+        return _config_to_dict(self)
 
 
 @dataclass(frozen=True)
@@ -514,10 +618,7 @@ class ObservationModelConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        payload: dict[str, Any] = {"family": self.family}
-        if self.response_scale is not None:
-            payload["response_scale"] = self.response_scale
-        return payload
+        return _config_to_dict(self, omit_none=frozenset({"response_scale"}))
 
 
 @dataclass(frozen=True)
@@ -714,29 +815,6 @@ class LabelsConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(
-            raw,
-            {
-                "source",
-                "id_col",
-                "label_columns",
-                "source_crs",
-                "x_col",
-                "y_col",
-                "z_col",
-                "depth_col",
-                "observation_models",
-                "prior_response_mean_columns",
-                "prior_response_sd_columns",
-                "observation_weight_columns",
-                "observation_weight_semantics",
-                "layer",
-                "min_wells_for_fit",
-                "pu_mode",
-                "pu_class_prior",
-            },
-            context="labels",
-        )
         label_columns = raw.get("label_columns", {})
         if not isinstance(label_columns, Mapping):
             raise TypeError("labels.label_columns must be a JSON object")
@@ -757,39 +835,32 @@ class LabelsConfig:
             raise TypeError(
                 "labels.observation_weight_columns must be a JSON object"
             )
-        pu_mode = raw.get("pu_mode", "off")
-        if pu_mode not in ALLOWED_PU_MODES:
-            allowed = ", ".join(ALLOWED_PU_MODES)
-            raise ValueError(
-                f"labels.pu_mode must be one of: {allowed} (got {pu_mode!r})",
-            )
         return cls(
-            source=_require_json_string(
-                raw, "source", None, context="labels", allow_none=True
-            ),
-            id_col=_require_json_string(
-                raw, "id_col", None, context="labels", allow_none=True
+            **_parse_config_fields(
+                raw,
+                defaults=cls(),
+                schema={
+                    "source": "optional_string",
+                    "id_col": "optional_string",
+                    "label_columns": "skip",
+                    "source_crs": "optional_string",
+                    "x_col": "optional_string",
+                    "y_col": "optional_string",
+                    "z_col": "optional_string",
+                    "depth_col": "optional_string",
+                    "observation_models": "skip",
+                    "prior_response_mean_columns": "skip",
+                    "prior_response_sd_columns": "skip",
+                    "observation_weight_columns": "skip",
+                    "observation_weight_semantics": "optional_string",
+                    "layer": "raw",
+                    "min_wells_for_fit": "int",
+                    "pu_mode": "raw",
+                    "pu_class_prior": "skip",
+                },
+                context="labels",
             ),
             label_columns=dict(label_columns),
-            source_crs=_require_json_string(
-                raw,
-                "source_crs",
-                None,
-                context="labels",
-                allow_none=True,
-            ),
-            x_col=_require_json_string(
-                raw, "x_col", None, context="labels", allow_none=True
-            ),
-            y_col=_require_json_string(
-                raw, "y_col", None, context="labels", allow_none=True
-            ),
-            z_col=_require_json_string(
-                raw, "z_col", None, context="labels", allow_none=True
-            ),
-            depth_col=_require_json_string(
-                raw, "depth_col", None, context="labels", allow_none=True
-            ),
             observation_models={
                 str(name): ObservationModelConfig.from_dict(model, str(name))
                 for name, model in dict(
@@ -799,18 +870,6 @@ class LabelsConfig:
             prior_response_mean_columns=dict(prior_response_mean_columns),
             prior_response_sd_columns=dict(prior_response_sd_columns),
             observation_weight_columns=dict(observation_weight_columns),
-            observation_weight_semantics=_require_json_string(
-                raw,
-                "observation_weight_semantics",
-                None,
-                context="labels",
-                allow_none=True,
-            ),
-            layer=raw.get("layer"),
-            min_wells_for_fit=_require_json_integer(
-                raw, "min_wells_for_fit", 4, context="labels"
-            ),
-            pu_mode=pu_mode,
             pu_class_prior=(
                 dict(raw["pu_class_prior"])
                 if isinstance(raw.get("pu_class_prior"), Mapping)
@@ -840,40 +899,10 @@ class LabelsConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        payload = {
-            "source": self.source,
-            "id_col": self.id_col,
-            "label_columns": dict(self.label_columns),
-            "source_crs": self.source_crs,
-            "x_col": self.x_col,
-            "y_col": self.y_col,
-            "z_col": self.z_col,
-            "depth_col": self.depth_col,
-            "observation_models": {
-                name: model.to_dict()
-                for name, model in self.observation_models.items()
-            },
-            "prior_response_mean_columns": dict(
-                self.prior_response_mean_columns
-            ),
-            "prior_response_sd_columns": dict(self.prior_response_sd_columns),
-            "observation_weight_columns": dict(
-                self.observation_weight_columns
-            ),
-            "layer": self.layer,
-            "min_wells_for_fit": self.min_wells_for_fit,
-            "pu_mode": self.pu_mode,
-            "pu_class_prior": (
-                dict(self.pu_class_prior)
-                if isinstance(self.pu_class_prior, Mapping)
-                else self.pu_class_prior
-            ),
-        }
-        if self.observation_weight_columns:
-            payload["observation_weight_semantics"] = (
-                self.observation_weight_semantics
-            )
-        return payload
+        return _config_to_dict(
+            self,
+            omit_none=frozenset({"observation_weight_semantics"}),
+        )
 
 
 @dataclass(frozen=True)
@@ -1191,57 +1220,23 @@ class RegularizationConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(
-            raw,
-            {
-                "C",
-                "per_feature_weights",
-                "prior_means",
-                "prior_precisions",
-            },
-            context="evidence.regularization",
-        )
         return cls(
-            C=_require_json_real(
-                raw, "C", 1.0, context="evidence.regularization"
-            ),
-            per_feature_weights={
-                str(name): _require_finite_real_value(
-                    value,
-                    context=f"evidence.regularization.per_feature_weights.{name}",
-                )
-                for name, value in dict(
-                    raw.get("per_feature_weights", {})
-                ).items()
-            },
-            prior_means={
-                str(name): _require_finite_real_value(
-                    value,
-                    context=f"evidence.regularization.prior_means.{name}",
-                )
-                for name, value in dict(raw.get("prior_means", {})).items()
-            },
-            prior_precisions={
-                str(name): _require_finite_real_value(
-                    value,
-                    context=(
-                        f"evidence.regularization.prior_precisions.{name}"
-                    ),
-                )
-                for name, value in dict(
-                    raw.get("prior_precisions", {})
-                ).items()
-            },
+            **_parse_config_fields(
+                raw,
+                defaults=cls(),
+                schema={
+                    "C": "real",
+                    "per_feature_weights": "real_mapping",
+                    "prior_means": "real_mapping",
+                    "prior_precisions": "real_mapping",
+                },
+                context="evidence.regularization",
+            )
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
-            "C": self.C,
-            "per_feature_weights": dict(self.per_feature_weights),
-            "prior_means": dict(self.prior_means),
-            "prior_precisions": dict(self.prior_precisions),
-        }
+        return _config_to_dict(self)
 
 
 @dataclass(frozen=True)
@@ -1303,69 +1298,33 @@ class EvidenceFeatureExpansionConfig:
     ) -> EvidenceFeatureExpansionConfig:
         """Build one component expansion from a parsed JSON mapping."""
         context = f"evidence.feature_expansions.{component_name}"
-        _reject_unknown_keys(
-            raw,
-            {
-                "degree",
-                "coordinate_degree",
-                "include_pairwise_interactions",
-                "coordinate_axes",
-                "include_evidence_coordinate_interactions",
-            },
-            context=context,
-        )
-        axes = _require_json_string_array(
-            raw,
-            "coordinate_axes",
-            (),
-            context=context,
-        )
-        if axes is None:  # pragma: no cover - helper contract
-            raise RuntimeError(
-                "coordinate_axes parser returned an invalid value"
-            )
         return cls(
-            degree=_require_json_integer(
+            **_parse_config_fields(
                 raw,
-                "degree",
-                1,
+                defaults=cls(),
+                schema={
+                    "degree": "int",
+                    "coordinate_degree": "int",
+                    "include_pairwise_interactions": "bool",
+                    "coordinate_axes": "string_array",
+                    "include_evidence_coordinate_interactions": "bool",
+                },
                 context=context,
-            ),
-            coordinate_degree=_require_json_integer(
-                raw,
-                "coordinate_degree",
-                1,
-                context=context,
-            ),
-            include_pairwise_interactions=_require_json_bool(
-                raw,
-                "include_pairwise_interactions",
-                False,
-                context=context,
-            ),
-            coordinate_axes=axes,
-            include_evidence_coordinate_interactions=_require_json_bool(
-                raw,
-                "include_evidence_coordinate_interactions",
-                False,
-                context=context,
-            ),
+            )
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return the compact user-visible representation."""
-        payload: dict[str, Any] = {}
-        if self.degree != 1:
-            payload["degree"] = self.degree
-        if self.coordinate_degree != 1:
-            payload["coordinate_degree"] = self.coordinate_degree
-        if self.include_pairwise_interactions:
-            payload["include_pairwise_interactions"] = True
-        if self.coordinate_axes:
-            payload["coordinate_axes"] = list(self.coordinate_axes)
-        if self.include_evidence_coordinate_interactions:
-            payload["include_evidence_coordinate_interactions"] = True
-        return payload
+        return _config_to_dict(
+            self,
+            omit_defaults={
+                "degree": 1,
+                "coordinate_degree": 1,
+                "include_pairwise_interactions": False,
+                "coordinate_axes": (),
+                "include_evidence_coordinate_interactions": False,
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -1426,46 +1385,6 @@ class EvidenceConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(
-            raw,
-            {
-                "regularization",
-                "include_layers",
-                "exclude_layers",
-                "sparse_binary_threshold",
-                "coordinate_blacklist",
-                "standardization",
-                "feature_expansions",
-            },
-            context="evidence",
-        )
-        include = _require_json_string_array(
-            raw,
-            "include_layers",
-            None,
-            context="evidence",
-            allow_none=True,
-        )
-        exclude = _require_json_string_array(
-            raw,
-            "exclude_layers",
-            (),
-            context="evidence",
-        )
-        coordinate_blacklist = _require_json_string_array(
-            raw,
-            "coordinate_blacklist",
-            DEFAULT_COORD_BLACKLIST,
-            context="evidence",
-        )
-        if exclude is None:  # pragma: no cover - helper contract
-            raise RuntimeError(
-                "evidence.exclude_layers parser returned an invalid value"
-            )
-        if coordinate_blacklist is None:  # pragma: no cover - helper contract
-            raise RuntimeError(
-                "evidence.coordinate_blacklist parser returned an invalid value"
-            )
         feature_expansions = raw.get("feature_expansions", {})
         if not isinstance(feature_expansions, Mapping):
             raise TypeError(
@@ -1479,23 +1398,22 @@ class EvidenceConfig:
                 "evidence.feature_expansions values must be JSON objects"
             )
         return cls(
+            **_parse_config_fields(
+                raw,
+                defaults=cls(),
+                schema={
+                    "regularization": "skip",
+                    "include_layers": "optional_string_array",
+                    "exclude_layers": "string_array",
+                    "sparse_binary_threshold": "real",
+                    "coordinate_blacklist": "string_array",
+                    "standardization": "string",
+                    "feature_expansions": "skip",
+                },
+                context="evidence",
+            ),
             regularization=RegularizationConfig.from_dict(
                 raw.get("regularization")
-            ),
-            include_layers=include,
-            exclude_layers=exclude,
-            sparse_binary_threshold=_require_json_real(
-                raw,
-                "sparse_binary_threshold",
-                0.90,
-                context="evidence",
-            ),
-            coordinate_blacklist=coordinate_blacklist,
-            standardization=_require_json_string(
-                raw,
-                "standardization",
-                "observed_labels",
-                context="evidence",
             ),
             feature_expansions={
                 str(name): EvidenceFeatureExpansionConfig.from_dict(
@@ -1508,24 +1426,10 @@ class EvidenceConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        payload: dict[str, Any] = {
-            "regularization": self.regularization.to_dict(),
-            "include_layers": (
-                list(self.include_layers)
-                if self.include_layers is not None
-                else None
-            ),
-            "exclude_layers": list(self.exclude_layers),
-            "sparse_binary_threshold": self.sparse_binary_threshold,
-            "coordinate_blacklist": list(self.coordinate_blacklist),
-            "standardization": self.standardization,
-        }
-        if self.feature_expansions:
-            payload["feature_expansions"] = {
-                name: expansion.to_dict()
-                for name, expansion in self.feature_expansions.items()
-            }
-        return payload
+        return _config_to_dict(
+            self,
+            omit_empty=frozenset({"feature_expansions"}),
+        )
 
 
 @dataclass(frozen=True)
@@ -1564,65 +1468,28 @@ class SpatialFieldConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(
-            raw,
-            {
-                "enabled",
-                "backend",
-                "n_levels",
-                "lattice_centers_per_dimension",
-                "coordinate_scaling",
-                "spatial_domain",
-            },
-            context="spatial_field",
-        )
-        backend = raw.get("backend", "latticekrigx")
-        if backend not in ALLOWED_SPATIAL_BACKENDS:
-            allowed = ", ".join(ALLOWED_SPATIAL_BACKENDS)
-            raise ValueError(
-                f"spatial_field.backend must be one of: {allowed} (got {backend!r})",
-            )
-        coordinate_scaling = raw.get("coordinate_scaling", "axis_range")
-        if coordinate_scaling not in ALLOWED_COORDINATE_SCALINGS:
-            allowed = ", ".join(ALLOWED_COORDINATE_SCALINGS)
-            raise ValueError(
-                "spatial_field.coordinate_scaling must be one of: "
-                f"{allowed} (got {coordinate_scaling!r})"
-            )
         return cls(
-            enabled=_require_json_bool(
-                raw, "enabled", True, context="spatial_field"
-            ),
-            backend=backend,
-            n_levels=_require_json_integer(
-                raw, "n_levels", 2, context="spatial_field"
-            ),
-            lattice_centers_per_dimension=_require_json_integer(
+            **_parse_config_fields(
                 raw,
-                "lattice_centers_per_dimension",
-                6,
+                defaults=cls(),
+                schema={
+                    "enabled": "bool",
+                    "backend": "raw",
+                    "n_levels": "int",
+                    "lattice_centers_per_dimension": "int",
+                    "coordinate_scaling": "raw",
+                    "spatial_domain": "spatial_domain",
+                },
                 context="spatial_field",
-            ),
-            coordinate_scaling=coordinate_scaling,
-            spatial_domain=_require_spatial_domain(raw.get("spatial_domain")),
+            )
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        payload = {
-            "enabled": self.enabled,
-            "backend": self.backend,
-            "n_levels": self.n_levels,
-            "lattice_centers_per_dimension": (
-                self.lattice_centers_per_dimension
-            ),
-            "coordinate_scaling": self.coordinate_scaling,
-        }
-        if self.spatial_domain is not None:
-            payload["spatial_domain"] = [
-                list(bounds) for bounds in self.spatial_domain
-            ]
-        return payload
+        return _config_to_dict(
+            self,
+            omit_none=frozenset({"spatial_domain"}),
+        )
 
 
 @dataclass(frozen=True)
@@ -1723,99 +1590,28 @@ class SiteSelectionConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(
-            raw,
-            {
-                "mode",
-                "candidate_source",
-                "id_col",
-                "selected_col",
-                "outcome_feature_columns",
-                "selection_feature_columns",
-                "outcome_selection_log_odds",
-                "outcome_penalty",
-                "selection_penalty",
-            },
-            context="site_selection",
-        )
-        outcome_features = _require_json_string_array(
-            raw,
-            "outcome_feature_columns",
-            (),
-            context="site_selection",
-        )
-        selection_features = _require_json_string_array(
-            raw,
-            "selection_feature_columns",
-            (),
-            context="site_selection",
-        )
-        if outcome_features is None:  # pragma: no cover - helper contract
-            raise RuntimeError(
-                "site_selection outcome-feature parser returned an invalid value"
-            )
-        if selection_features is None:  # pragma: no cover - helper contract
-            raise RuntimeError(
-                "site_selection selection-feature parser returned an invalid value"
-            )
         return cls(
-            mode=_require_json_string(
-                raw, "mode", "off", context="site_selection"
-            ),
-            candidate_source=_require_json_string(
+            **_parse_config_fields(
                 raw,
-                "candidate_source",
-                None,
+                defaults=cls(),
+                schema={
+                    "mode": "string",
+                    "candidate_source": "optional_string",
+                    "id_col": "optional_string",
+                    "selected_col": "string",
+                    "outcome_feature_columns": "string_array",
+                    "selection_feature_columns": "string_array",
+                    "outcome_selection_log_odds": "real_array",
+                    "outcome_penalty": "real",
+                    "selection_penalty": "real",
+                },
                 context="site_selection",
-                allow_none=True,
-            ),
-            id_col=_require_json_string(
-                raw,
-                "id_col",
-                None,
-                context="site_selection",
-                allow_none=True,
-            ),
-            selected_col=_require_json_string(
-                raw, "selected_col", "selected", context="site_selection"
-            ),
-            outcome_feature_columns=outcome_features,
-            selection_feature_columns=selection_features,
-            outcome_selection_log_odds=_require_json_real_array(
-                raw,
-                "outcome_selection_log_odds",
-                (0.0,),
-                context="site_selection",
-            ),
-            outcome_penalty=_require_json_real(
-                raw,
-                "outcome_penalty",
-                1e-4,
-                context="site_selection",
-            ),
-            selection_penalty=_require_json_real(
-                raw,
-                "selection_penalty",
-                1e-4,
-                context="site_selection",
-            ),
+            )
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
-            "mode": self.mode,
-            "candidate_source": self.candidate_source,
-            "id_col": self.id_col,
-            "selected_col": self.selected_col,
-            "outcome_feature_columns": list(self.outcome_feature_columns),
-            "selection_feature_columns": list(self.selection_feature_columns),
-            "outcome_selection_log_odds": list(
-                self.outcome_selection_log_odds
-            ),
-            "outcome_penalty": self.outcome_penalty,
-            "selection_penalty": self.selection_penalty,
-        }
+        return _config_to_dict(self)
 
 
 @dataclass(frozen=True)
@@ -1861,7 +1657,7 @@ class KleiberProfileConfig:
 
     def to_dict(self) -> dict[str, float]:
         """Return a plain-dict representation."""
-        return {"r0": self.r0, "r1": self.r1}
+        return _config_to_dict(self)
 
 
 @dataclass(frozen=True)
@@ -1913,24 +1709,6 @@ class GBLKBayesianConfig:
         """Build from a parsed-JSON mapping (None → defaults)."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(
-            raw,
-            {
-                "enabled",
-                "n_draws",
-                "seed",
-                "ci_level",
-                "cor_scale_median",
-                "spatial_sd_u",
-                "spatial_sd_tail_probability",
-                "dirichlet_concentration",
-                "separate_ranges",
-                "kleiber_profiles",
-                "cluster_effect",
-                "validate_inla",
-            },
-            context="inference.gblk_bayesian",
-        )
         profiles_raw = raw.get("kleiber_profiles", {})
         if not isinstance(profiles_raw, Mapping):
             raise GEOPFAValueError(
@@ -1951,82 +1729,31 @@ class GBLKBayesianConfig:
                 profile_raw, family=family
             )
         return cls(
-            enabled=_require_json_bool(
-                raw, "enabled", False, context="inference.gblk_bayesian"
-            ),
-            n_draws=_require_json_integer(
-                raw, "n_draws", 200, context="inference.gblk_bayesian"
-            ),
-            seed=_require_json_integer(
-                raw, "seed", 0, context="inference.gblk_bayesian"
-            ),
-            ci_level=_require_json_real(
-                raw, "ci_level", 0.9, context="inference.gblk_bayesian"
-            ),
-            cor_scale_median=_require_json_real(
+            **_parse_config_fields(
                 raw,
-                "cor_scale_median",
-                0.10,
-                context="inference.gblk_bayesian",
-            ),
-            spatial_sd_u=_require_json_real(
-                raw,
-                "spatial_sd_u",
-                1.0,
-                context="inference.gblk_bayesian",
-            ),
-            spatial_sd_tail_probability=_require_json_real(
-                raw,
-                "spatial_sd_tail_probability",
-                0.05,
-                context="inference.gblk_bayesian",
-            ),
-            dirichlet_concentration=_require_json_real(
-                raw,
-                "dirichlet_concentration",
-                1.5,
-                context="inference.gblk_bayesian",
-            ),
-            separate_ranges=_require_json_bool(
-                raw,
-                "separate_ranges",
-                False,
+                defaults=cls(),
+                schema={
+                    "enabled": "bool",
+                    "n_draws": "int",
+                    "seed": "int",
+                    "ci_level": "real",
+                    "cor_scale_median": "real",
+                    "spatial_sd_u": "real",
+                    "spatial_sd_tail_probability": "real",
+                    "dirichlet_concentration": "real",
+                    "separate_ranges": "bool",
+                    "cluster_effect": "bool",
+                    "validate_inla": "bool",
+                    "kleiber_profiles": "skip",
+                },
                 context="inference.gblk_bayesian",
             ),
             kleiber_profiles=profiles,
-            cluster_effect=_require_json_bool(
-                raw,
-                "cluster_effect",
-                True,
-                context="inference.gblk_bayesian",
-            ),
-            validate_inla=_require_json_bool(
-                raw,
-                "validate_inla",
-                True,
-                context="inference.gblk_bayesian",
-            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
-            "enabled": self.enabled,
-            "n_draws": self.n_draws,
-            "seed": self.seed,
-            "ci_level": self.ci_level,
-            "cor_scale_median": self.cor_scale_median,
-            "spatial_sd_u": self.spatial_sd_u,
-            "spatial_sd_tail_probability": self.spatial_sd_tail_probability,
-            "dirichlet_concentration": self.dirichlet_concentration,
-            "separate_ranges": self.separate_ranges,
-            "kleiber_profiles": {
-                family: profile.to_dict()
-                for family, profile in self.kleiber_profiles.items()
-            },
-            "cluster_effect": self.cluster_effect,
-            "validate_inla": self.validate_inla,
-        }
+        return _config_to_dict(self)
 
 
 @dataclass(frozen=True)
@@ -2082,11 +1809,6 @@ class PredictiveStackingConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(
-            raw,
-            {"enabled", "validation_depths_m", "minimum_training_wells"},
-            context="inference.predictive_stacking",
-        )
         raw_depths = raw.get("validation_depths_m", {})
         if not isinstance(raw_depths, Mapping):
             raise TypeError(
@@ -2094,10 +1816,14 @@ class PredictiveStackingConfig:
                 "an object"
             )
         return cls(
-            enabled=_require_json_bool(
+            **_parse_config_fields(
                 raw,
-                "enabled",
-                False,
+                defaults=cls(),
+                schema={
+                    "enabled": "bool",
+                    "minimum_training_wells": "optional_int",
+                    "validation_depths_m": "skip",
+                },
                 context="inference.predictive_stacking",
             ),
             validation_depths_m={
@@ -2110,26 +1836,15 @@ class PredictiveStackingConfig:
                 )
                 for component, depth in raw_depths.items()
             },
-            minimum_training_wells=(
-                None
-                if raw.get("minimum_training_wells") is None
-                else _require_integer_value(
-                    raw["minimum_training_wells"],
-                    context=(
-                        "inference.predictive_stacking.minimum_training_wells"
-                    ),
-                )
-            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        output: dict[str, Any] = {"enabled": self.enabled}
-        if self.validation_depths_m:
-            output["validation_depths_m"] = dict(self.validation_depths_m)
-        if self.minimum_training_wells is not None:
-            output["minimum_training_wells"] = self.minimum_training_wells
-        return output
+        return _config_to_dict(
+            self,
+            omit_none=frozenset({"minimum_training_wells"}),
+            omit_empty=frozenset({"validation_depths_m"}),
+        )
 
 
 @dataclass(frozen=True)
@@ -2158,19 +1873,17 @@ class InferenceConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(
-            raw,
-            {"backend", "gblk_bayesian", "predictive_stacking"},
-            context="inference",
-        )
-        backend = raw.get("backend", "gblk")
-        if backend not in ALLOWED_INFERENCE_BACKENDS:
-            allowed = ", ".join(ALLOWED_INFERENCE_BACKENDS)
-            raise ValueError(
-                f"inference.backend must be one of: {allowed} (got {backend!r})",
-            )
         return cls(
-            backend=backend,
+            **_parse_config_fields(
+                raw,
+                defaults=cls(),
+                schema={
+                    "backend": "raw",
+                    "gblk_bayesian": "skip",
+                    "predictive_stacking": "skip",
+                },
+                context="inference",
+            ),
             gblk_bayesian=GBLKBayesianConfig.from_dict(
                 raw.get("gblk_bayesian")
             ),
@@ -2181,11 +1894,7 @@ class InferenceConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
-            "backend": self.backend,
-            "gblk_bayesian": self.gblk_bayesian.to_dict(),
-            "predictive_stacking": self.predictive_stacking.to_dict(),
-        }
+        return _config_to_dict(self)
 
 
 @dataclass(frozen=True)
@@ -2216,40 +1925,23 @@ class CalibrationConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        known_keys = {"method", "fit_on", "n_bins"}
-        _reject_unknown_keys(
-            raw,
-            known_keys,
-            context="calibration",
-            hint="use 'fit_on', not 'fit'",
-        )
-        method = raw.get("method", "none")
-        if method not in ALLOWED_CALIBRATION_METHODS:
-            allowed = ", ".join(ALLOWED_CALIBRATION_METHODS)
-            raise ValueError(
-                f"calibration.method must be one of: {allowed} (got {method!r})",
-            )
-        fit_on = raw.get("fit_on", "block_cv")
-        if fit_on not in ALLOWED_CALIBRATION_FITS:
-            allowed = ", ".join(ALLOWED_CALIBRATION_FITS)
-            raise ValueError(
-                f"calibration.fit_on must be one of: {allowed} (got {fit_on!r})",
-            )
         return cls(
-            method=method,
-            fit_on=fit_on,
-            n_bins=_require_json_integer(
-                raw, "n_bins", 5, context="calibration"
-            ),
+            **_parse_config_fields(
+                raw,
+                defaults=cls(),
+                schema={
+                    "method": "raw",
+                    "fit_on": "raw",
+                    "n_bins": "int",
+                },
+                context="calibration",
+                hint="use 'fit_on', not 'fit'",
+            )
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
-            "method": self.method,
-            "fit_on": self.fit_on,
-            "n_bins": self.n_bins,
-        }
+        return _config_to_dict(self)
 
 
 @dataclass(frozen=True)
@@ -2276,51 +1968,25 @@ class CrossValidationConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        known_keys = {
-            "n_folds",
-            "block_type",
-            "block_size_km",
-            "grid_size",
-            "buffer_km",
-        }
-        _reject_unknown_keys(
-            raw,
-            known_keys,
-            context="cross_validation",
-            hint="use 'n_folds', not 'n_splits'",
-        )
-        block_type = raw.get("block_type", "grid")
-        if block_type not in ALLOWED_BLOCK_TYPES:
-            allowed = ", ".join(ALLOWED_BLOCK_TYPES)
-            raise ValueError(
-                f"cross_validation.block_type must be one of: {allowed} "
-                f"(got {block_type!r})",
-            )
         return cls(
-            n_folds=_require_json_integer(
-                raw, "n_folds", 5, context="cross_validation"
-            ),
-            block_type=block_type,
-            block_size_km=_require_optional_json_real(
-                raw, "block_size_km", context="cross_validation"
-            ),
-            grid_size=_require_json_integer(
-                raw, "grid_size", 4, context="cross_validation"
-            ),
-            buffer_km=_require_json_real(
-                raw, "buffer_km", 0.0, context="cross_validation"
-            ),
+            **_parse_config_fields(
+                raw,
+                defaults=cls(),
+                schema={
+                    "n_folds": "int",
+                    "block_type": "raw",
+                    "block_size_km": "optional_real",
+                    "grid_size": "int",
+                    "buffer_km": "real",
+                },
+                context="cross_validation",
+                hint="use 'n_folds', not 'n_splits'",
+            )
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
-            "n_folds": self.n_folds,
-            "block_type": self.block_type,
-            "block_size_km": self.block_size_km,
-            "grid_size": self.grid_size,
-            "buffer_km": self.buffer_km,
-        }
+        return _config_to_dict(self)
 
 
 @dataclass(frozen=True)
@@ -2343,18 +2009,18 @@ class CombinationConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(raw, {"rule"}, context="combination")
-        rule = raw.get("rule", "product")
-        if rule not in ALLOWED_COMBINATION_RULES:
-            allowed = ", ".join(ALLOWED_COMBINATION_RULES)
-            raise ValueError(
-                f"combination.rule must be one of: {allowed} (got {rule!r})",
+        return cls(
+            **_parse_config_fields(
+                raw,
+                defaults=cls(),
+                schema={"rule": "raw"},
+                context="combination",
             )
-        return cls(rule=rule)
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {"rule": self.rule}
+        return _config_to_dict(self)
 
 
 @dataclass(frozen=True)
@@ -2425,12 +2091,7 @@ class ScenarioConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return {
-            "name": self.name,
-            "include_priors": self.include_priors,
-            "include_spatial": self.include_spatial,
-            "drop_layers": list(self.drop_layers),
-        }
+        return _config_to_dict(self)
 
 
 @dataclass(frozen=True)
@@ -2512,100 +2173,37 @@ class OutputsConfig:
         """Build from a parsed-JSON mapping."""
         if raw is None:
             return cls()
-        _reject_unknown_keys(
-            raw,
-            {
-                "probability_rasters",
-                "uncertainty_rasters",
-                "calibration_artifacts",
-                "decision_artifacts",
-                "scenarios",
-                "posterior_draw_blocks",
-                "posterior_draw_block_size",
-                "posterior_draw_cell_indices_source",
-                "posterior_draw_cell_indices_sha256",
-                "format",
-            },
-            context="outputs",
-        )
-        formats = _require_json_string_array(
-            raw,
-            "format",
-            ("geotiff", "csv"),
-            context="outputs",
-        )
-        if formats is None:  # pragma: no cover - helper contract
-            raise RuntimeError(
-                "outputs.format parser returned an invalid value"
-            )
-        for fmt in formats:
-            if fmt not in ALLOWED_OUTPUT_FORMATS:
-                allowed = ", ".join(ALLOWED_OUTPUT_FORMATS)
-                raise ValueError(
-                    f"outputs.format entry {fmt!r} must be one of: {allowed}",
-                )
         return cls(
-            probability_rasters=_require_json_bool(
-                raw, "probability_rasters", True, context="outputs"
-            ),
-            uncertainty_rasters=_require_json_bool(
-                raw, "uncertainty_rasters", True, context="outputs"
-            ),
-            calibration_artifacts=_require_json_bool(
-                raw, "calibration_artifacts", True, context="outputs"
-            ),
-            decision_artifacts=_require_json_bool(
-                raw, "decision_artifacts", True, context="outputs"
-            ),
-            scenarios=_require_json_bool(
-                raw, "scenarios", True, context="outputs"
-            ),
-            posterior_draw_blocks=_require_json_bool(
-                raw, "posterior_draw_blocks", False, context="outputs"
-            ),
-            posterior_draw_block_size=_require_json_integer(
+            **_parse_config_fields(
                 raw,
-                "posterior_draw_block_size",
-                20,
+                defaults=cls(),
+                schema={
+                    "probability_rasters": "bool",
+                    "uncertainty_rasters": "bool",
+                    "calibration_artifacts": "bool",
+                    "decision_artifacts": "bool",
+                    "scenarios": "bool",
+                    "posterior_draw_blocks": "bool",
+                    "posterior_draw_block_size": "int",
+                    "posterior_draw_cell_indices_source": "optional_string",
+                    "posterior_draw_cell_indices_sha256": "optional_string",
+                    "format": "string_array",
+                },
                 context="outputs",
-            ),
-            posterior_draw_cell_indices_source=_require_json_string(
-                raw,
-                "posterior_draw_cell_indices_source",
-                None,
-                context="outputs",
-                allow_none=True,
-            ),
-            posterior_draw_cell_indices_sha256=_require_json_string(
-                raw,
-                "posterior_draw_cell_indices_sha256",
-                None,
-                context="outputs",
-                allow_none=True,
-            ),
-            format=formats,
+            )
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        result = {
-            "probability_rasters": self.probability_rasters,
-            "uncertainty_rasters": self.uncertainty_rasters,
-            "calibration_artifacts": self.calibration_artifacts,
-            "decision_artifacts": self.decision_artifacts,
-            "scenarios": self.scenarios,
-            "posterior_draw_blocks": self.posterior_draw_blocks,
-            "posterior_draw_block_size": self.posterior_draw_block_size,
-            "format": list(self.format),
-        }
-        if self.posterior_draw_cell_indices_source is not None:
-            result["posterior_draw_cell_indices_source"] = (
-                self.posterior_draw_cell_indices_source
-            )
-            result["posterior_draw_cell_indices_sha256"] = (
-                self.posterior_draw_cell_indices_sha256
-            )
-        return result
+        return _config_to_dict(
+            self,
+            omit_none=frozenset(
+                {
+                    "posterior_draw_cell_indices_source",
+                    "posterior_draw_cell_indices_sha256",
+                }
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2631,6 +2229,677 @@ _TOP_LEVEL_KEYS: frozenset[str] = frozenset(
         "outputs",
     },
 )
+
+
+def _validate_output_contract(
+    config: ProbabilisticConfig,
+    errors: list[str],
+) -> None:
+    """Validate output and posterior-state controls."""
+    if str(config.output_dir).strip() in {"", "."}:
+        errors.append(
+            "output_dir is empty or '.'; provide an explicit output path to avoid "
+            "writing probabilistic outputs into the current working directory"
+        )
+    if (
+        config.outputs.posterior_draw_blocks
+        and not config.inference.gblk_bayesian.enabled
+    ):
+        errors.append(
+            "outputs.posterior_draw_blocks requires Bayesian GBLK inference "
+            "(inference.backend='gblk' and "
+            "inference.gblk_bayesian.enabled=true)"
+        )
+    if (
+        config.outputs.posterior_draw_blocks
+        and config.inference.gblk_bayesian.cluster_effect
+    ):
+        errors.append(
+            "outputs.posterior_draw_blocks requires "
+            "inference.gblk_bayesian.cluster_effect=false so grid prediction "
+            "is projected in bounded draw blocks rather than materialized by INLA"
+        )
+    if (
+        config.outputs.posterior_draw_blocks
+        and config.inference.predictive_stacking.enabled
+    ):
+        errors.append(
+            "inference.predictive_stacking currently requires "
+            "outputs.posterior_draw_blocks=false"
+        )
+    if (
+        config.outputs.posterior_draw_cell_indices_source is not None
+        and not config.outputs.posterior_draw_blocks
+    ):
+        errors.append(
+            "outputs.posterior_draw_cell_indices_source requires "
+            "outputs.posterior_draw_blocks=true"
+        )
+    if (
+        config.inference.gblk_bayesian.enabled
+        and config.alpha
+        and all(
+            alpha.force_prior_predictive and not alpha.use_evidence_prior
+            for alpha in config.alpha.values()
+        )
+    ):
+        errors.append(
+            "inference.gblk_bayesian.enabled=True has no stochastic "
+            "components: every component is a fixed prior prediction"
+        )
+
+
+def _validate_grid_contract(
+    config: ProbabilisticConfig,
+    errors: list[str],
+) -> None:
+    """Validate the reserved prediction-grid contract."""
+    for axis_name, size in (
+        ("nx", config.grid.nx),
+        ("ny", config.grid.ny),
+        ("nz", config.grid.nz),
+    ):
+        if size is not None and size < 1:
+            errors.append(f"grid.{axis_name} must be >= 1 (got {size})")
+    if config.grid.extent is not None:
+        expected_extent_length = 4 if config.dimensions == "2d" else 6
+        if len(config.grid.extent) != expected_extent_length:
+            errors.append(
+                "grid.extent must contain "
+                f"{expected_extent_length} values for {config.dimensions} "
+                f"(got {len(config.grid.extent)})"
+            )
+        else:
+            half = expected_extent_length // 2
+            if any(
+                lower >= upper
+                for lower, upper in zip(
+                    config.grid.extent[:half],
+                    config.grid.extent[half:],
+                    strict=True,
+                )
+            ):
+                errors.append(
+                    "grid.extent lower bounds must be strictly less than "
+                    "the corresponding upper bounds"
+                )
+    if any(
+        value is not None
+        for value in (
+            config.grid.nx,
+            config.grid.ny,
+            config.grid.nz,
+            config.grid.extent,
+            config.grid.crs,
+        )
+    ):
+        errors.append(
+            "grid overrides are not implemented by the probabilistic "
+            "workflow; leave grid fields null to use the canonical PFA "
+            "component grid"
+        )
+
+
+def _validate_backend_dimension_contract(
+    config: ProbabilisticConfig,
+    errors: list[str],
+) -> None:
+    """Validate backend and dimensional compatibility."""
+    if (
+        config.inference.backend == "gblk"
+        and config.spatial_field.enabled
+        and config.spatial_field.backend != "latticekrigx"
+    ):
+        errors.append(
+            "inference.backend='gblk' with spatial_field.enabled=true "
+            "requires spatial_field.backend='latticekrigx'"
+        )
+    if (
+        config.inference.backend == "gblk"
+        and config.calibration.method != "none"
+    ):
+        errors.append(
+            "GBLK requires calibration.method='none'; use the explicit "
+            "raw cross-validation workflow for diagnostics"
+        )
+    if config.dimensions == "3d" and "geotiff" in config.outputs.format:
+        errors.append(
+            "GeoTIFF output is not defined for 3-D probability volumes; "
+            "request VTK, CSV, or Parquet"
+        )
+    if config.dimensions == "2d" and "vtk" in config.outputs.format:
+        errors.append(
+            "VTK output is reserved for 3-D probability volumes; request "
+            "GeoTIFF, CSV, or Parquet for 2-D analyses"
+        )
+
+    raster_thermal_components = {
+        name
+        for name, alpha in config.alpha.items()
+        if alpha.mode == "thermal_exceedance"
+    }
+    if config.dimensions == "3d" and raster_thermal_components:
+        errors.append(
+            "alpha.mode='thermal_exceedance' samples only x/y from a "
+            "2-D raster and cannot define a 3-D thermal prior; use "
+            "alpha.mode='thermal_layer_exceedance' with a 3-D PFA layer "
+            "for component(s): " + ", ".join(sorted(raster_thermal_components))
+        )
+
+
+@dataclass(frozen=True)
+class _ValidationComponents:
+    """Component-family sets shared by cross-field validators."""
+
+    label: frozenset[str]
+    alpha: frozenset[str]
+    observation_model: frozenset[str]
+    data_informed: frozenset[str]
+    bernoulli_label: frozenset[str]
+    gaussian: frozenset[str]
+    fitted_gaussian: frozenset[str]
+    fitted_bernoulli: frozenset[str]
+    prior_only_gaussian: frozenset[str]
+
+
+def _validation_components(
+    config: ProbabilisticConfig,
+) -> _ValidationComponents:
+    """Derive component families once for all cross-field checks."""
+    label = frozenset(config.labels.label_columns)
+    alpha = frozenset(config.alpha)
+    observation_model = frozenset(config.labels.observation_models)
+    data_informed = frozenset(
+        name
+        for name, alpha_config in config.alpha.items()
+        if not alpha_config.force_prior_predictive
+    )
+    bernoulli_label = frozenset(
+        name
+        for name in label
+        if config.labels.observation_model_for(name).family == "bernoulli"
+    )
+    gaussian = frozenset(
+        name
+        for name, model in config.labels.observation_models.items()
+        if model.family == "gaussian"
+    )
+    fitted_gaussian = frozenset(
+        name
+        for name in gaussian & label & alpha
+        if not config.alpha[name].force_prior_predictive
+    )
+    fitted_bernoulli = (data_informed & label & alpha) - gaussian
+    prior_only_gaussian = frozenset(
+        name
+        for name in gaussian & alpha
+        if config.alpha[name].force_prior_predictive
+    )
+    return _ValidationComponents(
+        label=label,
+        alpha=alpha,
+        observation_model=observation_model,
+        data_informed=data_informed,
+        bernoulli_label=bernoulli_label,
+        gaussian=gaussian,
+        fitted_gaussian=fitted_gaussian,
+        fitted_bernoulli=fitted_bernoulli,
+        prior_only_gaussian=prior_only_gaussian,
+    )
+
+
+def _validate_label_contract(
+    config: ProbabilisticConfig,
+    components: _ValidationComponents,
+    errors: list[str],
+) -> None:
+    """Validate label and observation-family membership contracts."""
+    try:
+        validate_surface_names(
+            (*config.labels.label_columns, *config.alpha),
+            context="probabilistic component",
+            reserved=("combined",),
+        )
+    except GEOPFAValueError as exc:
+        errors.append(str(exc))
+
+    labels_contract_complete = (
+        config.labels.source is not None
+        and config.labels.id_col is not None
+        and bool(components.label)
+    )
+    if components.data_informed and not labels_contract_complete:
+        errors.append(
+            "data-informed components require labels.source, "
+            "labels.id_col, and non-empty labels.label_columns"
+        )
+    if config.site_selection.mode != "off" and not labels_contract_complete:
+        errors.append(
+            "site_selection requires labels.source, labels.id_col, and "
+            "non-empty labels.label_columns"
+        )
+    if (
+        config.site_selection.mode != "off"
+        and labels_contract_complete
+        and not components.bernoulli_label
+    ):
+        errors.append(
+            "site_selection requires at least one Bernoulli component; "
+            "continuous Gaussian outcomes are not binary selection events"
+        )
+
+    unknown_observation_models = components.observation_model - (
+        components.label | components.alpha
+    )
+    if unknown_observation_models:
+        errors.append(
+            "labels.observation_models contains unknown component(s): "
+            + ", ".join(sorted(unknown_observation_models))
+        )
+    implicit_prior_observation_models = {
+        name
+        for name in components.observation_model - components.label
+        if name not in config.alpha
+        or not config.alpha[name].force_prior_predictive
+    }
+    if implicit_prior_observation_models:
+        errors.append(
+            "labels.observation_models components without label mappings "
+            "must have an alpha configuration with "
+            "force_prior_predictive=True; offending components: "
+            + ", ".join(sorted(implicit_prior_observation_models))
+        )
+
+
+def _validate_gaussian_component_contract(
+    config: ProbabilisticConfig,
+    components: _ValidationComponents,
+    errors: list[str],
+) -> None:
+    """Validate continuous-observation and thermal-prior contracts."""
+    gaussian_prior_response_scales = {
+        name
+        for name in components.prior_only_gaussian
+        if config.labels.observation_models[name].response_scale is not None
+    }
+    if gaussian_prior_response_scales:
+        errors.append(
+            "Gaussian prior-only components must omit response_scale "
+            "because their configured thermal moments are already in "
+            "physical units; offending components: "
+            + ", ".join(sorted(gaussian_prior_response_scales))
+        )
+    gaussian_prior_evidence = {
+        name
+        for name in components.prior_only_gaussian
+        if config.alpha[name].use_evidence_prior
+    }
+    if gaussian_prior_evidence:
+        errors.append(
+            "Gaussian prior-only components cannot use "
+            "alpha.use_evidence_prior because that update is defined on "
+            "the Bernoulli logit scale; offending components: "
+            + ", ".join(sorted(gaussian_prior_evidence))
+        )
+    gaussian_prior_missing_raster_uncertainty = {
+        name
+        for name in components.prior_only_gaussian
+        if config.alpha[name].mode == "thermal_exceedance"
+        and config.alpha[name].uncertainty_raster is None
+    }
+    if gaussian_prior_missing_raster_uncertainty:
+        errors.append(
+            "Gaussian prior-only thermal_exceedance components require "
+            "uncertainty_raster; offending components: "
+            + ", ".join(sorted(gaussian_prior_missing_raster_uncertainty))
+        )
+    gaussian_prior_missing_layer_uncertainty = {
+        name
+        for name in components.prior_only_gaussian
+        if config.alpha[name].mode == "thermal_layer_exceedance"
+        and config.alpha[name].uncertainty_column is None
+    }
+    if gaussian_prior_missing_layer_uncertainty:
+        errors.append(
+            "Gaussian prior-only thermal_layer_exceedance components "
+            "require uncertainty_column; offending components: "
+            + ", ".join(sorted(gaussian_prior_missing_layer_uncertainty))
+        )
+    gaussian_fit_missing_response_scale = {
+        name
+        for name in components.fitted_gaussian
+        if config.labels.observation_models[name].response_scale is None
+    }
+    if gaussian_fit_missing_response_scale:
+        errors.append(
+            "Fitted Gaussian observation models require response_scale; "
+            "offending components: "
+            + ", ".join(sorted(gaussian_fit_missing_response_scale))
+        )
+    if components.fitted_gaussian and not (
+        config.inference.backend == "gblk"
+        and config.inference.gblk_bayesian.enabled
+    ):
+        errors.append(
+            "Gaussian component observations require Bayesian GBLK inference"
+        )
+    if components.fitted_gaussian and config.labels.pu_mode != "off":
+        errors.append(
+            "Gaussian component observations require labels.pu_mode='off'"
+        )
+    if config.labels.observation_weight_columns and not (
+        config.inference.backend == "gblk"
+        and config.inference.gblk_bayesian.enabled
+    ):
+        errors.append(
+            "configured observation weights require Bayesian GBLK inference"
+        )
+
+    invalid_gaussian_alpha = {
+        name
+        for name in components.gaussian
+        if config.alpha.get(name) is None
+        or config.alpha[name].mode
+        not in {"thermal_exceedance", "thermal_layer_exceedance"}
+    }
+    if invalid_gaussian_alpha:
+        errors.append(
+            "Gaussian heat components require a thermal exceedance alpha "
+            "with a continuous prior mean; offending components: "
+            + ", ".join(sorted(invalid_gaussian_alpha))
+        )
+    gaussian_stacking_without_uncertainty = {
+        name
+        for name in components.fitted_gaussian - invalid_gaussian_alpha
+        if config.inference.predictive_stacking.enabled
+        and not config.alpha[name].force_prior_predictive
+        and (
+            (
+                config.alpha[name].mode == "thermal_exceedance"
+                and config.alpha[name].uncertainty_raster is None
+            )
+            or (
+                config.alpha[name].mode == "thermal_layer_exceedance"
+                and config.alpha[name].uncertainty_column is None
+            )
+        )
+    }
+    if gaussian_stacking_without_uncertainty:
+        errors.append(
+            "Gaussian predictive stacking requires prior predictive "
+            "uncertainty; offending components: "
+            + ", ".join(sorted(gaussian_stacking_without_uncertainty))
+        )
+
+
+def _validate_data_fit_contract(
+    config: ProbabilisticConfig,
+    components: _ValidationComponents,
+    errors: list[str],
+) -> None:
+    """Validate requirements shared by all data-informed components."""
+    if (
+        config.inference.gblk_bayesian.enabled
+        and components.data_informed
+        and not config.spatial_field.enabled
+    ):
+        errors.append(
+            "Bayesian GBLK with data-informed components requires "
+            "spatial_field.enabled=True"
+        )
+    minimum_allowed = 1 if config.inference.gblk_bayesian.enabled else 2
+    if (
+        components.data_informed
+        and config.labels.min_wells_for_fit < minimum_allowed
+    ):
+        errors.append(
+            "labels.min_wells_for_fit must be >= "
+            f"{minimum_allowed} for the selected inference mode "
+            f"(got {config.labels.min_wells_for_fit})"
+        )
+
+
+def _validate_alpha_contract(
+    config: ProbabilisticConfig,
+    components: _ValidationComponents,
+    errors: list[str],
+) -> None:
+    """Validate component-prior coverage and probability bounds."""
+    if not config.alpha:
+        errors.append(
+            "alpha is empty; configure at least one component's prior offset"
+        )
+
+    missing_alpha = components.label - components.alpha
+    if missing_alpha:
+        errors.append(
+            "every labels.label_columns component requires an alpha "
+            "configuration; missing: " + ", ".join(sorted(missing_alpha))
+        )
+    unlabeled_alpha = components.alpha - components.label
+    implicit_prior_only = {
+        name
+        for name in unlabeled_alpha
+        if not config.alpha[name].force_prior_predictive
+    }
+    if implicit_prior_only:
+        errors.append(
+            "alpha components without label mappings must set "
+            "force_prior_predictive=True; offending components: "
+            + ", ".join(sorted(implicit_prior_only))
+        )
+    if config.inference.backend == "sequential" and unlabeled_alpha:
+        errors.append(
+            "inference.backend='sequential' does not support alpha-only "
+            "components; add label mappings or use the GBLK prior-predictive "
+            "path: " + ", ".join(sorted(unlabeled_alpha))
+        )
+
+    for component_name, alpha_config in config.alpha.items():
+        prior_probability = alpha_config.scalar_fallback_pr0
+        if not 0.0 < prior_probability < 1.0:
+            errors.append(
+                f"alpha.{component_name}.scalar_fallback_pr0="
+                f"{prior_probability} must be strictly in (0, 1)"
+            )
+        if alpha_config.mode == "scalar":
+            continue
+        if not 0.0 < alpha_config.p_min < 0.5:  # noqa: PLR2004
+            errors.append(
+                f"alpha.{component_name}.p_min must be in (0, 0.5) "
+                f"(got {alpha_config.p_min})"
+            )
+        if not 0.5 < alpha_config.p_max < 1.0:  # noqa: PLR2004
+            errors.append(
+                f"alpha.{component_name}.p_max must be in (0.5, 1) "
+                f"(got {alpha_config.p_max})"
+            )
+        if alpha_config.p_min >= alpha_config.p_max:
+            errors.append(
+                f"alpha.{component_name}.p_min ({alpha_config.p_min}) must be "
+                f"< p_max ({alpha_config.p_max})"
+            )
+
+
+def _validate_evidence_contract(
+    config: ProbabilisticConfig,
+    errors: list[str],
+) -> None:
+    """Validate evidence regularization and prior-update controls."""
+    regularization = config.evidence.regularization
+    if regularization.C <= 0:
+        errors.append(
+            f"evidence.regularization.C must be > 0 (got {regularization.C})"
+        )
+    for name, weight in regularization.per_feature_weights.items():
+        if weight < 0.0:
+            errors.append(
+                "evidence.regularization.per_feature_weights values must "
+                f"be non-negative (got {name}={weight})"
+            )
+    for name, precision in regularization.prior_precisions.items():
+        if precision <= 0.0:
+            errors.append(
+                "evidence.regularization.prior_precisions values must be "
+                f"strictly positive (got {name}={precision})"
+            )
+    evidence_prior_components = {
+        name
+        for name, alpha_config in config.alpha.items()
+        if alpha_config.use_evidence_prior
+    }
+    if (
+        evidence_prior_components
+        and not config.inference.gblk_bayesian.enabled
+    ):
+        errors.append(
+            "alpha.use_evidence_prior requires "
+            "inference.gblk_bayesian.enabled=True; offending components: "
+            + ", ".join(sorted(evidence_prior_components))
+        )
+    if not 0.0 < config.evidence.sparse_binary_threshold <= 1.0:
+        errors.append(
+            "evidence.sparse_binary_threshold must be in (0, 1] "
+            f"(got {config.evidence.sparse_binary_threshold})"
+        )
+
+
+def _validate_diagnostics_contract(
+    config: ProbabilisticConfig,
+    errors: list[str],
+) -> None:
+    """Validate cross-validation and calibration controls."""
+    cross_validation = config.cross_validation
+    if cross_validation.n_folds < 2:  # noqa: PLR2004
+        errors.append(
+            "cross_validation.n_folds must be >= 2 "
+            f"(got {cross_validation.n_folds})"
+        )
+    if cross_validation.grid_size < 1:
+        errors.append(
+            "cross_validation.grid_size must be >= 1 "
+            f"(got {cross_validation.grid_size})"
+        )
+    if cross_validation.buffer_km < 0.0:
+        errors.append(
+            "cross_validation.buffer_km must be non-negative "
+            f"(got {cross_validation.buffer_km})"
+        )
+    if (
+        cross_validation.block_size_km is not None
+        and cross_validation.block_size_km <= 0.0
+    ):
+        errors.append(
+            "cross_validation.block_size_km must be > 0 when provided "
+            f"(got {cross_validation.block_size_km})"
+        )
+    if (
+        cross_validation.block_type != "grid"
+        and cross_validation.block_size_km is not None
+    ):
+        errors.append(
+            "cross_validation.block_size_km is only defined for "
+            "block_type='grid'"
+        )
+    if config.calibration.n_bins < 1:
+        errors.append(
+            f"calibration.n_bins must be >= 1 (got {config.calibration.n_bins})"
+        )
+
+
+def _validate_bayesian_contract(
+    config: ProbabilisticConfig,
+    components: _ValidationComponents,
+    errors: list[str],
+) -> None:
+    """Validate Bayesian controls and fitted-family dimensions."""
+    bayesian = config.inference.gblk_bayesian
+    if bayesian.n_draws < 1:
+        errors.append(
+            "inference.gblk_bayesian.n_draws must be >= 1 "
+            f"(got {bayesian.n_draws})"
+        )
+    if not 0.0 < bayesian.ci_level < 1.0:
+        errors.append(
+            "inference.gblk_bayesian.ci_level must be in (0, 1) "
+            f"(got {bayesian.ci_level})"
+        )
+    for name, value in (
+        ("cor_scale_median", bayesian.cor_scale_median),
+        ("spatial_sd_u", bayesian.spatial_sd_u),
+        ("dirichlet_concentration", bayesian.dirichlet_concentration),
+    ):
+        if not math.isfinite(value) or value <= 0.0:
+            errors.append(
+                f"inference.gblk_bayesian.{name} must be finite and > 0"
+            )
+    if not 0.0 < bayesian.spatial_sd_tail_probability < 1.0:
+        errors.append(
+            "inference.gblk_bayesian.spatial_sd_tail_probability "
+            "must be in (0, 1)"
+        )
+    if not bayesian.enabled:
+        return
+    for family, component_names in (
+        ("bernoulli", components.fitted_bernoulli),
+        ("gaussian", components.fitted_gaussian),
+    ):
+        count = len(component_names)
+        profile_configured = family in bayesian.kleiber_profiles
+        if count > 2:  # noqa: PLR2004
+            errors.append(
+                "Bayesian GBLK supports at most two fitted "
+                f"{family} components; got {count}: "
+                + ", ".join(sorted(component_names))
+            )
+        if count == 2 and not profile_configured:  # noqa: PLR2004
+            errors.append(
+                f"bivariate {family} Bayesian GBLK requires "
+                "inference.gblk_bayesian.kleiber_profiles."
+                f"{family}"
+            )
+        if count != 2 and profile_configured:  # noqa: PLR2004
+            errors.append(
+                "inference.gblk_bayesian.kleiber_profiles."
+                f"{family} is valid only for exactly two fitted "
+                f"{family} components; got {count}"
+            )
+
+
+def _validate_spatial_scenario_contract(
+    config: ProbabilisticConfig,
+    errors: list[str],
+) -> None:
+    """Validate spatial controls and scenario compatibility."""
+    spatial = config.spatial_field
+    if spatial.n_levels < 1:
+        errors.append(
+            f"spatial_field.n_levels must be >= 1 (got {spatial.n_levels})"
+        )
+    if spatial.lattice_centers_per_dimension < 1:
+        errors.append(
+            "spatial_field.lattice_centers_per_dimension must be >= 1 "
+            f"(got {spatial.lattice_centers_per_dimension})"
+        )
+    if config.labels.pu_mode == "nnpu" and config.inference.backend != (
+        "sequential"
+    ):
+        errors.append(
+            "labels.pu_mode='nnpu' currently requires "
+            "inference.backend='sequential'"
+        )
+    if spatial.enabled and spatial.backend == "none":
+        errors.append("spatial_field.enabled=True requires a spatial backend")
+    scenario_names = [scenario.name for scenario in config.scenarios]
+    if len(set(scenario_names)) != len(scenario_names):
+        errors.append("scenarios[*].name values must be unique")
+    if config.inference.gblk_bayesian.enabled and any(
+        not scenario.include_spatial for scenario in config.scenarios
+    ):
+        errors.append(
+            "Bayesian GBLK scenarios must set include_spatial=True; "
+            "the sole Bayesian fitter has no nonspatial latent-field mode"
+        )
 
 
 @dataclass(frozen=True)
@@ -2851,23 +3120,7 @@ class ProbabilisticConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Round-trip serialization back to a plain dict."""
-        return {
-            "enabled": self.enabled,
-            "output_dir": str(self.output_dir),
-            "dimensions": self.dimensions,
-            "grid": self.grid.to_dict(),
-            "labels": self.labels.to_dict(),
-            "alpha": {name: sub.to_dict() for name, sub in self.alpha.items()},
-            "evidence": self.evidence.to_dict(),
-            "spatial_field": self.spatial_field.to_dict(),
-            "inference": self.inference.to_dict(),
-            "calibration": self.calibration.to_dict(),
-            "cross_validation": self.cross_validation.to_dict(),
-            "combination": self.combination.to_dict(),
-            "scenarios": [s.to_dict() for s in self.scenarios],
-            "outputs": self.outputs.to_dict(),
-            "site_selection": self.site_selection.to_dict(),
-        }
+        return _config_to_dict(self)
 
     @classmethod
     def from_pfa(cls, pfa: Mapping[str, Any]) -> ProbabilisticConfig:
@@ -2896,589 +3149,26 @@ class ProbabilisticConfig:
             )
         return cls.from_dict(pfa["probabilistic"])
 
-    def validate(self) -> list[str]:  # noqa: PLR0912, PLR0914, PLR0915
+    def validate(self) -> list[str]:
         """Validate cross-field constraints and numeric hyperparameter ranges.
 
         Returns a list of error strings; empty list means the config is valid.
         Call :meth:`validate_raise` to raise :class:`ValueError` on first error.
         """
         errors: list[str] = []
+        _validate_output_contract(self, errors)
+        _validate_grid_contract(self, errors)
+        _validate_backend_dimension_contract(self, errors)
 
-        # output_dir must be non-empty (Path("") resolves to cwd)
-        if str(self.output_dir).strip() in {"", "."}:
-            errors.append(
-                "output_dir is empty or '.'; provide an explicit output path to avoid "
-                "writing probabilistic outputs into the current working directory"
-            )
-        if (
-            self.outputs.posterior_draw_blocks
-            and not self.inference.gblk_bayesian.enabled
-        ):
-            errors.append(
-                "outputs.posterior_draw_blocks requires Bayesian GBLK inference "
-                "(inference.backend='gblk' and "
-                "inference.gblk_bayesian.enabled=true)"
-            )
-        if (
-            self.outputs.posterior_draw_blocks
-            and self.inference.gblk_bayesian.cluster_effect
-        ):
-            errors.append(
-                "outputs.posterior_draw_blocks requires "
-                "inference.gblk_bayesian.cluster_effect=false so grid prediction "
-                "is projected in bounded draw blocks rather than materialized by INLA"
-            )
-        if (
-            self.outputs.posterior_draw_blocks
-            and self.inference.predictive_stacking.enabled
-        ):
-            errors.append(
-                "inference.predictive_stacking currently requires "
-                "outputs.posterior_draw_blocks=false"
-            )
-        if (
-            self.outputs.posterior_draw_cell_indices_source is not None
-            and not self.outputs.posterior_draw_blocks
-        ):
-            errors.append(
-                "outputs.posterior_draw_cell_indices_source requires "
-                "outputs.posterior_draw_blocks=true"
-            )
-        if (
-            self.inference.gblk_bayesian.enabled
-            and self.alpha
-            and all(
-                alpha.force_prior_predictive and not alpha.use_evidence_prior
-                for alpha in self.alpha.values()
-            )
-        ):
-            errors.append(
-                "inference.gblk_bayesian.enabled=True has no stochastic "
-                "components: every component is a fixed prior prediction"
-            )
-
-        for axis_name, size in (
-            ("nx", self.grid.nx),
-            ("ny", self.grid.ny),
-            ("nz", self.grid.nz),
-        ):
-            if size is not None and size < 1:
-                errors.append(f"grid.{axis_name} must be >= 1 (got {size})")
-        if self.grid.extent is not None:
-            expected_extent_length = 4 if self.dimensions == "2d" else 6
-            if len(self.grid.extent) != expected_extent_length:
-                errors.append(
-                    "grid.extent must contain "
-                    f"{expected_extent_length} values for {self.dimensions} "
-                    f"(got {len(self.grid.extent)})"
-                )
-            else:
-                half = expected_extent_length // 2
-                if any(
-                    lower >= upper
-                    for lower, upper in zip(
-                        self.grid.extent[:half],
-                        self.grid.extent[half:],
-                        strict=True,
-                    )
-                ):
-                    errors.append(
-                        "grid.extent lower bounds must be strictly less than "
-                        "the corresponding upper bounds"
-                    )
-        if any(
-            value is not None
-            for value in (
-                self.grid.nx,
-                self.grid.ny,
-                self.grid.nz,
-                self.grid.extent,
-                self.grid.crs,
-            )
-        ):
-            errors.append(
-                "grid overrides are not implemented by the probabilistic "
-                "workflow; leave grid fields null to use the canonical PFA "
-                "component grid"
-            )
-        if (
-            self.inference.backend == "gblk"
-            and self.spatial_field.enabled
-            and self.spatial_field.backend != "latticekrigx"
-        ):
-            errors.append(
-                "inference.backend='gblk' with spatial_field.enabled=true "
-                "requires spatial_field.backend='latticekrigx'"
-            )
-        if (
-            self.inference.backend == "gblk"
-            and self.calibration.method != "none"
-        ):
-            errors.append(
-                "GBLK requires calibration.method='none'; use the explicit "
-                "raw cross-validation workflow for diagnostics"
-            )
-        if self.dimensions == "3d" and "geotiff" in self.outputs.format:
-            errors.append(
-                "GeoTIFF output is not defined for 3-D probability volumes; "
-                "request VTK, CSV, or Parquet"
-            )
-        if self.dimensions == "2d" and "vtk" in self.outputs.format:
-            errors.append(
-                "VTK output is reserved for 3-D probability volumes; request "
-                "GeoTIFF, CSV, or Parquet for 2-D analyses"
-            )
-
-        raster_thermal_components = {
-            name
-            for name, alpha in self.alpha.items()
-            if alpha.mode == "thermal_exceedance"
-        }
-        if self.dimensions == "3d" and raster_thermal_components:
-            errors.append(
-                "alpha.mode='thermal_exceedance' samples only x/y from a "
-                "2-D raster and cannot define a 3-D thermal prior; use "
-                "alpha.mode='thermal_layer_exceedance' with a 3-D PFA layer "
-                "for component(s): "
-                + ", ".join(sorted(raster_thermal_components))
-            )
-
-        label_components = set(self.labels.label_columns)
-        alpha_components = set(self.alpha)
-        observation_model_components = set(self.labels.observation_models)
-        try:
-            validate_surface_names(
-                (*self.labels.label_columns, *self.alpha),
-                context="probabilistic component",
-                reserved=("combined",),
-            )
-        except GEOPFAValueError as exc:
-            errors.append(str(exc))
-        data_informed_components = {
-            name
-            for name, alpha in self.alpha.items()
-            if not alpha.force_prior_predictive
-        }
-        labels_contract_complete = (
-            self.labels.source is not None
-            and self.labels.id_col is not None
-            and bool(label_components)
-        )
-        if data_informed_components and not labels_contract_complete:
-            errors.append(
-                "data-informed components require labels.source, "
-                "labels.id_col, and non-empty labels.label_columns"
-            )
-        if self.site_selection.mode != "off" and not labels_contract_complete:
-            errors.append(
-                "site_selection requires labels.source, labels.id_col, and "
-                "non-empty labels.label_columns"
-            )
-        bernoulli_label_components = {
-            name
-            for name in label_components
-            if self.labels.observation_model_for(name).family == "bernoulli"
-        }
-        if (
-            self.site_selection.mode != "off"
-            and labels_contract_complete
-            and not bernoulli_label_components
-        ):
-            errors.append(
-                "site_selection requires at least one Bernoulli component; "
-                "continuous Gaussian outcomes are not binary selection events"
-            )
-        unknown_observation_models = observation_model_components - (
-            label_components | alpha_components
-        )
-        if unknown_observation_models:
-            errors.append(
-                "labels.observation_models contains unknown component(s): "
-                + ", ".join(sorted(unknown_observation_models))
-            )
-        implicit_prior_observation_models = {
-            name
-            for name in observation_model_components - label_components
-            if name not in self.alpha
-            or not self.alpha[name].force_prior_predictive
-        }
-        if implicit_prior_observation_models:
-            errors.append(
-                "labels.observation_models components without label mappings "
-                "must have an alpha configuration with "
-                "force_prior_predictive=True; offending components: "
-                + ", ".join(sorted(implicit_prior_observation_models))
-            )
-        gaussian_components = {
-            name
-            for name, model in self.labels.observation_models.items()
-            if model.family == "gaussian"
-        }
-        fitted_gaussian_components = {
-            name
-            for name in gaussian_components
-            & label_components
-            & alpha_components
-            if not self.alpha[name].force_prior_predictive
-        }
-        fitted_bernoulli_components = (
-            data_informed_components
-            & label_components
-            & alpha_components - gaussian_components
-        )
-        prior_only_gaussian_components = {
-            name
-            for name in gaussian_components & alpha_components
-            if self.alpha[name].force_prior_predictive
-        }
-        gaussian_prior_response_scales = {
-            name
-            for name in prior_only_gaussian_components
-            if self.labels.observation_models[name].response_scale is not None
-        }
-        if gaussian_prior_response_scales:
-            errors.append(
-                "Gaussian prior-only components must omit response_scale "
-                "because their configured thermal moments are already in "
-                "physical units; offending components: "
-                + ", ".join(sorted(gaussian_prior_response_scales))
-            )
-        gaussian_prior_evidence = {
-            name
-            for name in prior_only_gaussian_components
-            if self.alpha[name].use_evidence_prior
-        }
-        if gaussian_prior_evidence:
-            errors.append(
-                "Gaussian prior-only components cannot use "
-                "alpha.use_evidence_prior because that update is defined on "
-                "the Bernoulli logit scale; offending components: "
-                + ", ".join(sorted(gaussian_prior_evidence))
-            )
-        gaussian_prior_missing_raster_uncertainty = {
-            name
-            for name in prior_only_gaussian_components
-            if self.alpha[name].mode == "thermal_exceedance"
-            and self.alpha[name].uncertainty_raster is None
-        }
-        if gaussian_prior_missing_raster_uncertainty:
-            errors.append(
-                "Gaussian prior-only thermal_exceedance components require "
-                "uncertainty_raster; offending components: "
-                + ", ".join(sorted(gaussian_prior_missing_raster_uncertainty))
-            )
-        gaussian_prior_missing_layer_uncertainty = {
-            name
-            for name in prior_only_gaussian_components
-            if self.alpha[name].mode == "thermal_layer_exceedance"
-            and self.alpha[name].uncertainty_column is None
-        }
-        if gaussian_prior_missing_layer_uncertainty:
-            errors.append(
-                "Gaussian prior-only thermal_layer_exceedance components "
-                "require uncertainty_column; offending components: "
-                + ", ".join(sorted(gaussian_prior_missing_layer_uncertainty))
-            )
-        gaussian_fit_missing_response_scale = {
-            name
-            for name in fitted_gaussian_components
-            if self.labels.observation_models[name].response_scale is None
-        }
-        if gaussian_fit_missing_response_scale:
-            errors.append(
-                "Fitted Gaussian observation models require response_scale; "
-                "offending components: "
-                + ", ".join(sorted(gaussian_fit_missing_response_scale))
-            )
-        if fitted_gaussian_components and not (
-            self.inference.backend == "gblk"
-            and self.inference.gblk_bayesian.enabled
-        ):
-            errors.append(
-                "Gaussian component observations require Bayesian GBLK inference"
-            )
-        if fitted_gaussian_components and self.labels.pu_mode != "off":
-            errors.append(
-                "Gaussian component observations require labels.pu_mode='off'"
-            )
-        if self.labels.observation_weight_columns and not (
-            self.inference.backend == "gblk"
-            and self.inference.gblk_bayesian.enabled
-        ):
-            errors.append(
-                "configured observation weights require Bayesian GBLK inference"
-            )
-        invalid_gaussian_alpha = {
-            name
-            for name in gaussian_components
-            if self.alpha.get(name) is None
-            or self.alpha[name].mode
-            not in {"thermal_exceedance", "thermal_layer_exceedance"}
-        }
-        if invalid_gaussian_alpha:
-            errors.append(
-                "Gaussian heat components require a thermal exceedance alpha "
-                "with a continuous prior mean; offending components: "
-                + ", ".join(sorted(invalid_gaussian_alpha))
-            )
-        gaussian_stacking_without_uncertainty = {
-            name
-            for name in fitted_gaussian_components - invalid_gaussian_alpha
-            if self.inference.predictive_stacking.enabled
-            and not self.alpha[name].force_prior_predictive
-            and (
-                (
-                    self.alpha[name].mode == "thermal_exceedance"
-                    and self.alpha[name].uncertainty_raster is None
-                )
-                or (
-                    self.alpha[name].mode == "thermal_layer_exceedance"
-                    and self.alpha[name].uncertainty_column is None
-                )
-            )
-        }
-        if gaussian_stacking_without_uncertainty:
-            errors.append(
-                "Gaussian predictive stacking requires prior predictive "
-                "uncertainty; offending components: "
-                + ", ".join(sorted(gaussian_stacking_without_uncertainty))
-            )
-        if (
-            self.inference.gblk_bayesian.enabled
-            and data_informed_components
-            and not self.spatial_field.enabled
-        ):
-            errors.append(
-                "Bayesian GBLK with data-informed components requires "
-                "spatial_field.enabled=True"
-            )
-        minimum_allowed = 1 if self.inference.gblk_bayesian.enabled else 2
-        if (
-            data_informed_components
-            and self.labels.min_wells_for_fit < minimum_allowed
-        ):
-            errors.append(
-                "labels.min_wells_for_fit must be >= "
-                f"{minimum_allowed} for the selected inference mode "
-                f"(got {self.labels.min_wells_for_fit})"
-            )
-
-        # alpha dict must be non-empty
-        if not self.alpha:
-            errors.append(
-                "alpha is empty; configure at least one component's prior offset"
-            )
-
-        missing_alpha = label_components - alpha_components
-        if missing_alpha:
-            errors.append(
-                "every labels.label_columns component requires an alpha "
-                "configuration; missing: " + ", ".join(sorted(missing_alpha))
-            )
-        unlabeled_alpha = alpha_components - label_components
-        implicit_prior_only = {
-            name
-            for name in unlabeled_alpha
-            if not self.alpha[name].force_prior_predictive
-        }
-        if implicit_prior_only:
-            errors.append(
-                "alpha components without label mappings must set "
-                "force_prior_predictive=True; offending components: "
-                + ", ".join(sorted(implicit_prior_only))
-            )
-        if self.inference.backend == "sequential" and unlabeled_alpha:
-            errors.append(
-                "inference.backend='sequential' does not support alpha-only "
-                "components; add label mappings or use the GBLK prior-predictive "
-                "path: " + ", ".join(sorted(unlabeled_alpha))
-            )
-
-        # Per-component alpha validation
-        for comp_name, alpha_cfg in self.alpha.items():
-            pr0 = alpha_cfg.scalar_fallback_pr0
-            if not (0.0 < pr0 < 1.0):
-                errors.append(
-                    f"alpha.{comp_name}.scalar_fallback_pr0={pr0} must be strictly in (0, 1)"
-                )
-            if alpha_cfg.mode == "scalar":
-                continue
-            if not (0.0 < alpha_cfg.p_min < 0.5):  # noqa: PLR2004
-                errors.append(
-                    f"alpha.{comp_name}.p_min must be in (0, 0.5) "
-                    f"(got {alpha_cfg.p_min})"
-                )
-            if not (0.5 < alpha_cfg.p_max < 1.0):  # noqa: PLR2004
-                errors.append(
-                    f"alpha.{comp_name}.p_max must be in (0.5, 1) "
-                    f"(got {alpha_cfg.p_max})"
-                )
-            if not (alpha_cfg.p_min < alpha_cfg.p_max):
-                errors.append(
-                    f"alpha.{comp_name}.p_min ({alpha_cfg.p_min}) must be "
-                    f"< p_max ({alpha_cfg.p_max})"
-                )
-
-        # Numeric range guards
-        if self.evidence.regularization.C <= 0:
-            errors.append(
-                f"evidence.regularization.C must be > 0 "
-                f"(got {self.evidence.regularization.C})"
-            )
-        for (
-            name,
-            weight,
-        ) in self.evidence.regularization.per_feature_weights.items():
-            if weight < 0.0:
-                errors.append(
-                    "evidence.regularization.per_feature_weights values must "
-                    f"be non-negative (got {name}={weight})"
-                )
-        for (
-            name,
-            precision,
-        ) in self.evidence.regularization.prior_precisions.items():
-            if precision <= 0.0:
-                errors.append(
-                    "evidence.regularization.prior_precisions values must be "
-                    f"strictly positive (got {name}={precision})"
-                )
-        evidence_prior_components = {
-            name
-            for name, alpha_cfg in self.alpha.items()
-            if alpha_cfg.use_evidence_prior
-        }
-        if (
-            evidence_prior_components
-            and not self.inference.gblk_bayesian.enabled
-        ):
-            errors.append(
-                "alpha.use_evidence_prior requires "
-                "inference.gblk_bayesian.enabled=True; offending components: "
-                + ", ".join(sorted(evidence_prior_components))
-            )
-        if not 0.0 < self.evidence.sparse_binary_threshold <= 1.0:
-            errors.append(
-                "evidence.sparse_binary_threshold must be in (0, 1] "
-                f"(got {self.evidence.sparse_binary_threshold})"
-            )
-        if self.cross_validation.n_folds < 2:  # noqa: PLR2004
-            errors.append(
-                f"cross_validation.n_folds must be >= 2 (got {self.cross_validation.n_folds})"
-            )
-        if self.cross_validation.grid_size < 1:
-            errors.append(
-                f"cross_validation.grid_size must be >= 1 (got {self.cross_validation.grid_size})"
-            )
-        if self.cross_validation.buffer_km < 0.0:
-            errors.append(
-                "cross_validation.buffer_km must be non-negative "
-                f"(got {self.cross_validation.buffer_km})"
-            )
-        if (
-            self.cross_validation.block_size_km is not None
-            and self.cross_validation.block_size_km <= 0.0
-        ):
-            errors.append(
-                "cross_validation.block_size_km must be > 0 when provided "
-                f"(got {self.cross_validation.block_size_km})"
-            )
-        if (
-            self.cross_validation.block_type != "grid"
-            and self.cross_validation.block_size_km is not None
-        ):
-            errors.append(
-                "cross_validation.block_size_km is only defined for "
-                "block_type='grid'"
-            )
-        if self.calibration.n_bins < 1:
-            errors.append(
-                f"calibration.n_bins must be >= 1 (got {self.calibration.n_bins})"
-            )
-        if self.inference.gblk_bayesian.n_draws < 1:
-            errors.append(
-                "inference.gblk_bayesian.n_draws must be >= 1 "
-                f"(got {self.inference.gblk_bayesian.n_draws})"
-            )
-        if not 0.0 < self.inference.gblk_bayesian.ci_level < 1.0:
-            errors.append(
-                "inference.gblk_bayesian.ci_level must be in (0, 1) "
-                f"(got {self.inference.gblk_bayesian.ci_level})"
-            )
-        bayes = self.inference.gblk_bayesian
-        for name, value in (
-            ("cor_scale_median", bayes.cor_scale_median),
-            ("spatial_sd_u", bayes.spatial_sd_u),
-            ("dirichlet_concentration", bayes.dirichlet_concentration),
-        ):
-            if not math.isfinite(value) or value <= 0.0:
-                errors.append(
-                    f"inference.gblk_bayesian.{name} must be finite and > 0"
-                )
-        if not 0.0 < bayes.spatial_sd_tail_probability < 1.0:
-            errors.append(
-                "inference.gblk_bayesian.spatial_sd_tail_probability "
-                "must be in (0, 1)"
-            )
-        if bayes.enabled:
-            fitted_by_family = {
-                "bernoulli": fitted_bernoulli_components,
-                "gaussian": fitted_gaussian_components,
-            }
-            for family, component_names in fitted_by_family.items():
-                count = len(component_names)
-                profile_configured = family in bayes.kleiber_profiles
-                if count > 2:  # noqa: PLR2004
-                    errors.append(
-                        "Bayesian GBLK supports at most two fitted "
-                        f"{family} components; got {count}: "
-                        + ", ".join(sorted(component_names))
-                    )
-                if count == 2 and not profile_configured:  # noqa: PLR2004
-                    errors.append(
-                        f"bivariate {family} Bayesian GBLK requires "
-                        "inference.gblk_bayesian.kleiber_profiles."
-                        f"{family}"
-                    )
-                if count != 2 and profile_configured:  # noqa: PLR2004
-                    errors.append(
-                        "inference.gblk_bayesian.kleiber_profiles."
-                        f"{family} is valid only for exactly two fitted "
-                        f"{family} components; got {count}"
-                    )
-        if self.spatial_field.n_levels < 1:
-            errors.append(
-                f"spatial_field.n_levels must be >= 1 "
-                f"(got {self.spatial_field.n_levels})"
-            )
-        if self.spatial_field.lattice_centers_per_dimension < 1:
-            errors.append(
-                "spatial_field.lattice_centers_per_dimension must be >= 1 "
-                f"(got {self.spatial_field.lattice_centers_per_dimension})"
-            )
-        # Cross-field constraints
-        if (
-            self.labels.pu_mode == "nnpu"
-            and self.inference.backend != "sequential"
-        ):
-            errors.append(
-                "labels.pu_mode='nnpu' currently requires "
-                "inference.backend='sequential'"
-            )
-        if self.spatial_field.enabled and self.spatial_field.backend == "none":
-            errors.append(
-                "spatial_field.enabled=True requires a spatial backend"
-            )
-        scenario_names = [scenario.name for scenario in self.scenarios]
-        if len(set(scenario_names)) != len(scenario_names):
-            errors.append("scenarios[*].name values must be unique")
-        if self.inference.gblk_bayesian.enabled and any(
-            not scenario.include_spatial for scenario in self.scenarios
-        ):
-            errors.append(
-                "Bayesian GBLK scenarios must set include_spatial=True; "
-                "the sole Bayesian fitter has no nonspatial latent-field mode"
-            )
+        components = _validation_components(self)
+        _validate_label_contract(self, components, errors)
+        _validate_gaussian_component_contract(self, components, errors)
+        _validate_data_fit_contract(self, components, errors)
+        _validate_alpha_contract(self, components, errors)
+        _validate_evidence_contract(self, errors)
+        _validate_diagnostics_contract(self, errors)
+        _validate_bayesian_contract(self, components, errors)
+        _validate_spatial_scenario_contract(self, errors)
         return errors
 
     def validate_raise(self) -> None:

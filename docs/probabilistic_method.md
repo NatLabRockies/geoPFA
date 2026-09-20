@@ -265,6 +265,16 @@ The Newberry notebook is an illustrative run. It retains full-grid posterior
 summaries but disables raw full-grid draw blocks. Large analyses should choose
 a retained-draw cell subset or another storage contract before execution.
 
+### Persistence boundary
+
+Run manifests, posterior indexes, checksums, and incomplete-run markers are
+runtime correctness records, not manuscript or presentation deliverables and
+not a second public modeling API. They let production-size Bayesian runs write
+bounded draw blocks, verify every persisted input and output, and resume an
+authenticated completed-block prefix without refitting. Normal users interact
+with them through `run_probabilistic` and the documented output directory; the
+lower-level persistence helpers remain internal.
+
 ## Config reference
 
 The complete schema is enforced by `ProbabilisticConfig`; the principal fields

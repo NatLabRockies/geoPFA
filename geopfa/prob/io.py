@@ -1,4 +1,4 @@
-"""Output writers for the probabilistic-method runner.
+"""Output and persistence internals for the probabilistic-method runner.
 
 Supports GeoTIFF (2D rasters via point-grid rasterisation), Parquet (long-form
 per-cell tables), and VTK (3D point clouds via PyVista). All writers operate
@@ -6,7 +6,9 @@ on per-component GeoDataFrames with a ``probability`` column (and optional
 uncertainty / spatial-residual columns) — the same shape the runner produces.
 
 A :func:`write_manifest` helper records every file written, the config hash,
-and a run id so downstream tooling can verify reproducibility.
+and a run id so downstream tooling can verify reproducibility. The posterior
+block writer and run-resume guard are internal correctness mechanisms for
+large Bayesian runs; they are not a separate public artifact workflow.
 """
 
 from __future__ import annotations

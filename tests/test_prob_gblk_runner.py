@@ -862,7 +862,9 @@ def test_bayesian_mixed_outcome_and_prior_components_combine_within_draw(
     )
     fitted_draws_seen: dict[str, np.ndarray] = {}
 
-    def fake_bayesian_fit(assembled, grid_gdf, bayes_cfg, **_kwargs):
+    def fake_bayesian_fit(fit, grid_gdf):
+        assembled = fit.assembled
+        bayes_cfg = fit.bayes_config
         assert assembled.component_names == ("component_a",)
         assert int(assembled.observed_mask.sum()) == 1
         fitted = np.broadcast_to(
