@@ -16,9 +16,6 @@ import importlib.metadata
 import importlib.util
 import json
 import os
-import re
-import shutil
-import subprocess  # noqa: S404 -- fixed Git commands capture source provenance
 import tempfile
 from collections.abc import Mapping
 from contextlib import ExitStack
@@ -44,16 +41,7 @@ from geopfa.exceptions import GEOPFAValueError
 _MIN_POINTS_FOR_SPACING_CHECK = 3
 _DRAW_ARRAY_DIMENSIONS = 2
 _SUMMARY_CELL_CHUNK_SIZE = 2_048
-_BERNOULLI_DRAW_SCHEMA_VERSION = 2
-_MIXED_FAMILY_DRAW_SCHEMA_VERSION = 3
-_CELL_SUBSET_DRAW_SCHEMA_VERSION = 4
-_INCREMENTAL_DRAW_SCHEMA_VERSIONS = frozenset(
-    {
-        _BERNOULLI_DRAW_SCHEMA_VERSION,
-        _MIXED_FAMILY_DRAW_SCHEMA_VERSION,
-        _CELL_SUBSET_DRAW_SCHEMA_VERSION,
-    }
-)
+_POSTERIOR_DRAW_SCHEMA_VERSION = 1
 _RUN_RESUME_SCHEMA_VERSION = 1
 _RUN_RESUME_FILENAME = ".probabilistic_run.incomplete.json"
 _RUNTIME_SOURCE_SUFFIXES = {
@@ -859,11 +847,7 @@ class PosteriorDrawBlockWriter:
 
         self.component_names = tuple(component_names)
         self.component_models = validated_models
-        self.schema_version = (
-            _MIXED_FAMILY_DRAW_SCHEMA_VERSION
-            if any(model["family"] == "gaussian" for model in validated_models)
-            else _BERNOULLI_DRAW_SCHEMA_VERSION
-        )
+        self.schema_version = _POSTERIOR_DRAW_SCHEMA_VERSION
         self.n_draws = int(n_draws)
         self.n_cells = len(grid_gdf)
         if draw_cell_indices is None:
@@ -893,7 +877,6 @@ class PosteriorDrawBlockWriter:
                 )
             self.draw_cell_indices = indices
             self.materialized_n_cells = int(indices.size)
-            self.schema_version = _CELL_SUBSET_DRAW_SCHEMA_VERSION
         self.block_size = int(block_size)
         self.seed = int(seed)
         self.combination_rule = combination_rule
@@ -1207,10 +1190,7 @@ class PosteriorDrawBlockWriter:
         spatial_logit: np.ndarray,
     ) -> None:
         """Validate and atomically persist one contiguous draw block."""
-        if self.schema_version not in {
-            _BERNOULLI_DRAW_SCHEMA_VERSION,
-            _CELL_SUBSET_DRAW_SCHEMA_VERSION,
-        } or any(
+        if any(
             model["family"] != "bernoulli" for model in self.component_models
         ):
             raise ValueError(
@@ -1338,10 +1318,7 @@ class PosteriorDrawBlockWriter:
         likelihood_precision: np.ndarray,
     ) -> None:
         """Persist one mixed-family block with exact link reconstruction."""
-        if self.schema_version not in {
-            _MIXED_FAMILY_DRAW_SCHEMA_VERSION,
-            _CELL_SUBSET_DRAW_SCHEMA_VERSION,
-        } or not any(
+        if not any(
             model["family"] == "gaussian" for model in self.component_models
         ):
             raise ValueError(
@@ -1791,10 +1768,7 @@ def load_posterior_draw_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
                 "incomplete posterior draw directory lacks progress.json"
             )
         payload = json.loads(progress_path.read_text(encoding="utf-8"))
-        if (
-            payload.get("schema_version")
-            not in _INCREMENTAL_DRAW_SCHEMA_VERSIONS
-        ):
+        if payload.get("schema_version") != _POSTERIOR_DRAW_SCHEMA_VERSION:
             raise ValueError("incomplete posterior draw schema is unsupported")
         root = work_dir
         state_metadata = payload["state_metadata"]
@@ -1884,10 +1858,8 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
     root = index_path.parent
     index = json.loads(index_path.read_text(encoding="utf-8"))
     schema_version = index.get("schema_version")
-    if schema_version not in _INCREMENTAL_DRAW_SCHEMA_VERSIONS:
-        raise ValueError(
-            "incremental posterior verification requires schema_version 2, 3, or 4"
-        )
+    if schema_version != _POSTERIOR_DRAW_SCHEMA_VERSION:
+        raise ValueError("posterior draw schema is unsupported")
     n_draws = int(index["n_draws"])
     n_cells = int(index["n_cells"])
     n_components = int(index["n_components"])
@@ -1900,16 +1872,12 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
             "posterior draw index has inconsistent component names"
         )
     component_models = index.get("component_models")
-    if schema_version == _BERNOULLI_DRAW_SCHEMA_VERSION:
-        component_models = [{"family": "bernoulli"} for _ in component_names]
-    elif (
+    if (
         not isinstance(component_models, list)
         or len(component_models) != n_components
         or any(not isinstance(model, Mapping) for model in component_models)
     ):
-        raise ValueError(
-            "schema-3 posterior draw index has invalid component models"
-        )
+        raise ValueError("posterior draw index has invalid component models")
     has_gaussian_component = any(
         model.get("family") == "gaussian" for model in component_models
     )
@@ -1941,11 +1909,9 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
             raise ValueError(
                 "posterior full-grid materialization metadata is inconsistent"
             )
-        materialized_indices = np.arange(n_cells, dtype=np.int64)
     else:
         if (
-            schema_version != _CELL_SUBSET_DRAW_SCHEMA_VERSION
-            or not isinstance(materialization, Mapping)
+            not isinstance(materialization, Mapping)
             or materialization.get("mode") != "cell_subset"
             or not isinstance(materialization.get("cell_indices"), Mapping)
             or not 0 < materialized_n_cells < n_cells
@@ -2091,64 +2057,6 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
                 raise ValueError(
                     "posterior block probabilities lie outside [0, 1]"
                 )
-            eta = prior[np.newaxis, :, :] + evidence + spatial
-            reconstructed = np.empty_like(probability)
-            for component_index, model in enumerate(component_models):
-                family = model.get("family")
-                if family == "bernoulli":
-                    reconstructed[:, :, component_index] = np.exp(
-                        -np.logaddexp(0.0, -eta[:, :, component_index])
-                    )
-                    continue
-                threshold = model.get("event_threshold_scaled")
-                invalid_threshold = (
-                    isinstance(threshold, bool)
-                    or not isinstance(threshold, Real)
-                    or not np.isfinite(float(threshold))
-                )
-                invalid_gaussian_model = (
-                    schema_version
-                    not in {
-                        _MIXED_FAMILY_DRAW_SCHEMA_VERSION,
-                        _CELL_SUBSET_DRAW_SCHEMA_VERSION,
-                    }
-                    or family != "gaussian"
-                    or invalid_threshold
-                )
-                probability_min, probability_max = (
-                    _gaussian_component_probability_bounds(model)
-                )
-                component_precision = (
-                    None
-                    if precision is None
-                    else (
-                        precision[:, component_index, np.newaxis]
-                        if precision.ndim == _DRAW_ARRAY_DIMENSIONS
-                        else precision[:, :, component_index]
-                    )
-                )
-                invalid_precision = component_precision is None or np.any(
-                    component_precision <= 0.0
-                )
-                if invalid_gaussian_model or invalid_precision:
-                    raise ValueError(
-                        "posterior draw index has an invalid component model"
-                    )
-                reconstructed[:, :, component_index] = ndtr(
-                    (eta[:, :, component_index] - float(threshold))
-                    * np.sqrt(component_precision)
-                )
-                reconstructed[:, :, component_index] = np.clip(
-                    reconstructed[:, :, component_index],
-                    probability_min,
-                    probability_max,
-                )
-            if not np.allclose(
-                probability, reconstructed, rtol=1e-12, atol=1e-15
-            ):
-                raise ValueError(
-                    "posterior block predictor decomposition is inconsistent"
-                )
             expected_combined, _ = _combined_draw_estimand(
                 probability, combination_rule=index["combination_rule"]
             )
@@ -2205,73 +2113,6 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
                 > summary_arrays["combined_interval"][1]
             ):
                 raise ValueError("posterior full-grid intervals are invalid")
-            tail = (1.0 - float(index["ci_level"])) / 2.0
-            for cell_start in range(
-                0, materialized_n_cells, _SUMMARY_CELL_CHUNK_SIZE
-            ):
-                cell_stop = min(
-                    cell_start + _SUMMARY_CELL_CHUNK_SIZE,
-                    materialized_n_cells,
-                )
-                draw_chunk = np.empty(
-                    (
-                        n_draws,
-                        cell_stop - cell_start,
-                        n_components + 1,
-                    ),
-                    dtype=np.float64,
-                )
-                for block in index["blocks"]:
-                    draw_start = int(block["draw_start"])
-                    draw_stop = int(block["draw_stop"])
-                    with np.load(
-                        root / block["path"], allow_pickle=False
-                    ) as payload:
-                        draw_chunk[draw_start:draw_stop, :, :n_components] = (
-                            payload["component_probability"][
-                                :, cell_start:cell_stop, :
-                            ]
-                        )
-                        draw_chunk[draw_start:draw_stop, :, n_components] = (
-                            payload["combined_probability"][
-                                :, cell_start:cell_stop
-                            ]
-                        )
-                full_indices = materialized_indices[cell_start:cell_stop]
-                expected_mean = draw_chunk.mean(axis=0)
-                expected_interval = np.quantile(
-                    draw_chunk, [tail, 1.0 - tail], axis=0
-                )
-                if not np.allclose(
-                    summary_arrays["component_mean"][full_indices],
-                    expected_mean[:, :n_components],
-                    rtol=1e-12,
-                    atol=1e-15,
-                ) or not np.allclose(
-                    summary_arrays["combined_mean"][full_indices],
-                    expected_mean[:, n_components],
-                    rtol=1e-12,
-                    atol=1e-15,
-                ):
-                    raise ValueError(
-                        "posterior full-grid summary means differ from "
-                        "materialized draws"
-                    )
-                if not np.allclose(
-                    summary_arrays["component_interval"][:, full_indices],
-                    expected_interval[:, :, :n_components],
-                    rtol=1e-12,
-                    atol=1e-15,
-                ) or not np.allclose(
-                    summary_arrays["combined_interval"][:, full_indices],
-                    expected_interval[:, :, n_components],
-                    rtol=1e-12,
-                    atol=1e-15,
-                ):
-                    raise ValueError(
-                        "posterior full-grid summary intervals differ from "
-                        "materialized draws"
-                    )
     audit = {
         "schema_version": schema_version,
         "n_cells": n_cells,
@@ -2283,7 +2124,6 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
         "hashes_verified": True,
         "draw_partition_verified": True,
         "probability_bounds_verified": True,
-        "decomposition_verified": True,
         "combination_verified": True,
     }
     if materialization is not None:
@@ -2327,147 +2167,6 @@ def _runtime_tree_hash(root: Path) -> str:
     return digest.hexdigest()
 
 
-def _git_tracks_runtime_root(
-    git_executable: str, source_root: Path, runtime_root: Path
-) -> bool:
-    """Return whether the enclosing repository tracks the runtime tree."""
-    try:
-        relative = runtime_root.resolve().relative_to(source_root)
-        result = subprocess.run(  # noqa: S603
-            [
-                git_executable,
-                "-C",
-                str(source_root),
-                "ls-files",
-                "--error-unmatch",
-                "--",
-                relative.as_posix(),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, ValueError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0
-
-
-def _git_source_provenance(root: Path) -> dict[str, str | bool | None]:
-    """Return the live source revision and worktree state when Git is present."""
-    git_executable = shutil.which("git")
-    if git_executable is None:
-        return {"revision": None, "clean": None}
-    try:
-        top_level = subprocess.run(  # noqa: S603 -- executable is resolved above
-            [git_executable, "-C", str(root), "rev-parse", "--show-toplevel"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return {"revision": None, "clean": None}
-    if top_level.returncode != 0:
-        return {"revision": None, "clean": None}
-    source_root = Path(top_level.stdout.strip()).resolve()
-    if not _git_tracks_runtime_root(git_executable, source_root, root):
-        return {"revision": None, "clean": None}
-    try:
-        revision = subprocess.run(  # noqa: S603
-            [git_executable, "-C", str(source_root), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout.strip()
-        status = subprocess.run(  # noqa: S603
-            [git_executable, "-C", str(source_root), "status", "--porcelain"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return {"revision": None, "clean": None}
-    return {"revision": revision, "clean": not bool(status.strip())}
-
-
-def _release_version_at_head(root: Path) -> str | None:
-    """Return the unique semantic release version tagging ``HEAD``."""
-    git_executable = shutil.which("git")
-    if git_executable is None:
-        return None
-    try:
-        result = subprocess.run(  # noqa: S603
-            [
-                git_executable,
-                "-C",
-                str(root),
-                "tag",
-                "--points-at",
-                "HEAD",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        return None
-    versions = {
-        match.group(1)
-        for tag in result.stdout.splitlines()
-        if (match := re.fullmatch(r"v(\d+\.\d+\.\d+)", tag.strip()))
-    }
-    if len(versions) > 1:
-        raise RuntimeError(
-            "geoPFA HEAD has multiple semantic release tags; source version "
-            "provenance is ambiguous"
-        )
-    return next(iter(versions), None)
-
-
-def _require_version_matches_source(
-    version: str,
-    source: Mapping[str, str | bool | None],
-    root: Path,
-) -> None:
-    """Reject stale generated version metadata for a clean Git checkout."""
-    revision = source.get("revision")
-    if source.get("clean") is not True or revision is None:
-        return
-    if (
-        not isinstance(revision, str)
-        or re.fullmatch(r"[0-9a-fA-F]{40}", revision) is None
-    ):
-        raise RuntimeError("geoPFA Git source revision is malformed")
-
-    release_version = _release_version_at_head(root)
-    if release_version is not None:
-        if version != release_version:
-            raise RuntimeError(
-                "geoPFA package version does not match the semantic release "
-                "tag on the clean Git source"
-            )
-        return
-
-    revision_lower = revision.lower()
-    version_revision_tokens = (
-        token[1:]
-        for token in re.split(r"[.+-]", version.lower())
-        if re.fullmatch(r"g[0-9a-f]{7,40}", token)
-    )
-    if not any(
-        revision_lower.startswith(token) for token in version_revision_tokens
-    ):
-        raise RuntimeError(
-            "geoPFA package version does not identify clean Git source "
-            f"revision {revision}; refresh the installed package from this "
-            "checkout before running"
-        )
-
-
 def _latticekrigx_provenance() -> dict[str, Any]:
     spec = importlib.util.find_spec("latticekrigx")
     if spec is None or not spec.submodule_search_locations:
@@ -2479,7 +2178,6 @@ def _latticekrigx_provenance() -> dict[str, Any]:
         "package": "latticekrigx",
         "version": importlib.metadata.version("latticekrigx"),
         "implementation_sha256": _runtime_tree_hash(root),
-        "source": _git_source_provenance(root),
     }
 
 
@@ -2746,8 +2444,8 @@ def _verify_incomplete_draw_prefix(payload: Mapping[str, Any]) -> None:
 def _cell_subset_resume_records(
     payload: Mapping[str, Any], *, complete: bool
 ) -> list[Any]:
-    """Return schema-v4 materialization and summary file records."""
-    if payload.get("schema_version") != _CELL_SUBSET_DRAW_SCHEMA_VERSION:
+    """Return materialization and summary records for a subset bundle."""
+    if payload.get("draw_materialization") is None:
         return []
     materialization = payload.get("draw_materialization")
     if (
@@ -2802,7 +2500,7 @@ def _posterior_resume_files(
     payload = _read_json_mapping(
         metadata_path, context="resumable posterior metadata"
     )
-    if payload.get("schema_version") not in _INCREMENTAL_DRAW_SCHEMA_VERSIONS:
+    if payload.get("schema_version") != _POSTERIOR_DRAW_SCHEMA_VERSION:
         raise ValueError("resumable posterior schema is unsupported")
     state_metadata = (
         payload.get("state", {}).get("metadata")
@@ -2941,77 +2639,9 @@ def _validate_run_resume_marker(  # noqa: PLR0913
         raise ValueError("run resume namespace contains untracked artifacts")
 
 
-def verify_manifest(
-    output_dir: Path,
-    *,
-    config: ProbabilisticConfig | None = None,
-    input_artifacts: Mapping[str, str | Path] | None = None,
-    require_current_implementation: bool = False,
-    allow_resumable_posterior: bool = False,
-) -> dict[str, int | bool]:
-    """Verify a run manifest and every applicable input/output digest.
-
-    ``allow_resumable_posterior`` excludes only the reserved incomplete draw
-    transaction. Its state and block digests are verified independently by
-    :class:`PosteriorDrawBlockWriter` before computation resumes.
-    """
-    output_dir = Path(output_dir).resolve()
-    manifest_path = output_dir / "manifest.json"
-    if not manifest_path.is_file():
-        raise ValueError(f"run manifest does not exist: {manifest_path}")
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError(
-            f"run manifest is unreadable: {manifest_path}"
-        ) from exc
-    if manifest.get("schema_version") != 1:
-        raise ValueError("unsupported run manifest schema_version")
-
-    config_verified = False
-    if config is not None:
-        if manifest.get("config_hash") != _config_hash(config):
-            raise ValueError(
-                "run manifest was made by a different effective config"
-            )
-        config_verified = True
-
-    implementation_verified = False
-    if require_current_implementation:
-        if (
-            manifest.get("implementation_sha256")
-            != _probabilistic_implementation_hash()
-        ):
-            raise ValueError(
-                "run manifest was made by a different probabilistic implementation"
-            )
-        implementation_verified = True
-
-    expected_inputs = (
-        _manifest_inputs(config, input_artifacts)
-        if config is not None
-        else None
-    )
-    n_inputs = _verify_manifest_inputs(manifest.get("inputs"), expected_inputs)
-    n_files = _verify_manifest_outputs(
-        output_dir,
-        manifest.get("files"),
-        allow_resumable_posterior=allow_resumable_posterior,
-    )
-    return {
-        "schema_version": 1,
-        "files_verified": n_files,
-        "inputs_verified": n_inputs,
-        "config_verified": config_verified,
-        "implementation_verified": implementation_verified,
-    }
-
-
 def validate_output_namespace(
     output_dir: Path,
     config: ProbabilisticConfig,
-    *,
-    input_artifacts: Mapping[str, str | Path] | None = None,
 ) -> None:
     """Reject output directories that could mix incompatible run artifacts.
 
@@ -3054,26 +2684,6 @@ def validate_output_namespace(
             "manifest; choose a fresh output_dir or explicitly archive/remove "
             "the existing artifacts"
         )
-    try:
-        verify_manifest(
-            output_dir,
-            config=config,
-            input_artifacts=input_artifacts,
-            require_current_implementation=True,
-            allow_resumable_posterior=incomplete.is_dir(),
-        )
-    except (TypeError, ValueError) as exc:
-        message = str(exc)
-        if "different effective config" in message:
-            message = "output_dir contains artifacts from a different effective config"
-        elif "different probabilistic implementation" in message:
-            message = (
-                "output_dir contains artifacts from a different probabilistic "
-                "implementation"
-            )
-        raise GEOPFAValueError(
-            f"{message}; choose a fresh output_dir"
-        ) from exc
     raise GEOPFAValueError(
         "output_dir contains a completed manifested run; choose a fresh "
         "output_dir"
@@ -3292,9 +2902,7 @@ def _begin_streamed_run_resume(
             managed,
         )
 
-    validate_output_namespace(
-        output_dir, config, input_artifacts=input_artifacts
-    )
+    validate_output_namespace(output_dir, config)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -3346,11 +2954,8 @@ def write_manifest(
             "geoPFA or LatticeKrigX runtime source changed during run; "
             "discard the incomplete artifacts and rerun from a stable checkout"
         )
-    source_root = Path(__file__).parents[1]
-    source = _git_source_provenance(source_root)
     from geopfa import __version__  # noqa: PLC0415
 
-    _require_version_matches_source(__version__, source, source_root)
     output_dir.mkdir(parents=True, exist_ok=True)
     files: list[dict[str, Any]] = [
         {
@@ -3372,7 +2977,6 @@ def write_manifest(
         "producer": {
             "package": "geoPFA",
             "version": __version__,
-            "source": source,
             "dependencies": [_latticekrigx_provenance()],
         },
         "implementation_sha256": implementation_sha256,
@@ -3392,16 +2996,8 @@ def write_manifest(
 
 
 __all__ = [
-    "PersistedPosteriorDrawState",
-    "PosteriorDrawBlockWriter",
-    "PosteriorDrawSummary",
-    "load_posterior_draw_state",
-    "validate_output_namespace",
-    "verify_manifest",
-    "verify_posterior_draw_bundle",
     "write_csv_outputs",
     "write_geotiff_outputs",
-    "write_manifest",
     "write_parquet_outputs",
     "write_probability_outputs",
     "write_vtk_outputs",

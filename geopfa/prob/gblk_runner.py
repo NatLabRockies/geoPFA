@@ -45,7 +45,6 @@ from geopfa.prob.config import (
 from geopfa.prob.cv import spatial_block_cv
 from geopfa.prob.fitting import ComponentProbability
 from geopfa.prob.fitting import _fit_offset_logit
-from geopfa.prob.forward import FrozenGBLKForwardState
 from geopfa.prob.gblk_assemble import (
     AssembledInputs,
     _component_values_on_reference,
@@ -3796,185 +3795,6 @@ def run_gblk_probabilistic(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
     )
 
 
-def freeze_gblk_forward_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
-    pfa: dict,
-    cfg: ProbabilisticConfig,
-    result: ProbabilisticResult,
-    *,
-    criteria: str = "geologic",
-    coordinate_units: str,
-    structural_scenario: str,
-) -> FrozenGBLKForwardState:
-    """Decompose a deterministic GBLK result for downstream evaluation.
-
-    The returned state reconstructs the fitted MAP probabilities from the
-    declared prior offset, each named evidence term, and the fitted spatial
-    contribution.  Posterior means are intentionally rejected because a mean
-    probability generally cannot be decomposed into a single linear predictor.
-    """
-    _validate_gblk_config(cfg)
-    if cfg.inference.gblk_bayesian.enabled:
-        raise GEOPFAValueError(
-            "freeze_gblk_forward_state requires a deterministic GBLK MAP fit; "
-            "Bayesian posterior means need a separate draw-level contract"
-        )
-    if result.skipped or not result.components:
-        raise GEOPFAValueError("cannot freeze an empty GBLK result")
-
-    adapter = PFAGridAdapter(pfa, criteria=criteria, dimensions=cfg.dimensions)
-    grid_gdf = _canonical_prediction_grid(adapter, cfg)
-    require_same_grid(
-        grid_gdf,
-        result.combined,
-        context="frozen result combined surface",
-    )
-    for name, component in result.components.items():
-        require_same_grid(
-            grid_gdf,
-            component.probability,
-            context=f"frozen result component {name!r}",
-        )
-    loaded_labels = load_labels(cfg.labels)
-    alphas: dict[str, AlphaCResult] = {}
-    for name in adapter.components():
-        if name in cfg.alpha:
-            component_data = adapter.component_data(name)
-            alphas[name] = build_alpha_c(
-                component_data,
-                cfg.alpha[name],
-                grid_gdf=adapter.pr_norm(name),
-            )
-    prior_only_names = tuple(
-        name
-        for name, alpha_cfg in cfg.alpha.items()
-        if name in alphas and alpha_cfg.force_prior_predictive
-    )
-    fit_alphas = {
-        name: alpha
-        for name, alpha in alphas.items()
-        if name not in prior_only_names
-    }
-    fitted_labels = LoadedLabels(
-        gdf=loaded_labels.gdf,
-        config=_fitted_label_config(loaded_labels.config, fit_alphas),
-    )
-    if not fit_alphas:
-        raise GEOPFAValueError(
-            "frozen GBLK state requires at least one data-informed component"
-        )
-    assembled = assemble_gblk_inputs(
-        adapter,
-        fitted_labels,
-        fit_alphas,
-        evidence_config=cfg.evidence,
-        reference_grid=grid_gdf,
-    )
-    evidence_design = _prepare_joint_evidence(assembled, cfg)
-    component_names = tuple(sorted(result.components))
-    n_cells = assembled.n_grid
-    prior_logit = np.zeros((n_cells, len(component_names)), dtype=np.float64)
-    spatial_logit = np.zeros_like(prior_logit)
-    baseline = np.column_stack(
-        [
-            result.components[name]
-            .probability["probability"]
-            .to_numpy(dtype=np.float64)
-            for name in component_names
-        ]
-    )
-    evidence_names: list[str] = []
-    evidence_components: list[int] = []
-    evidence_columns: list[NDArray[np.float64]] = []
-
-    for component_index, name in enumerate(component_names):
-        if name in prior_only_names:
-            prior_logit[:, component_index] = _component_values_on_reference(
-                grid_gdf,
-                adapter.pr_norm(name),
-                alphas[name].grid_offset,
-                context=f"component {name!r} frozen prior grid",
-            )
-            continue
-        if name not in assembled.component_names:
-            raise GEOPFAValueError(
-                f"result component {name!r} is absent from assembled fitted inputs"
-            )
-        fitted_index = assembled.component_names.index(name)
-        prior_logit[:, component_index] = assembled.grid_offsets[
-            :, fitted_index
-        ]
-        width = len(assembled.layer_names[name])
-        component = result.components[name]
-        if width:
-            if evidence_design.prediction is None:
-                raise RuntimeError(
-                    "fitted evidence is missing its prediction design"
-                )
-            if component.model is not None:
-                fixed_coef = component.model.fixed_coef
-                if fixed_coef is None:
-                    raise RuntimeError(
-                        "joint GBLK model omitted fitted evidence coefficients"
-                    )
-                beta = np.asarray(fixed_coef, dtype=np.float64)[
-                    :width, fitted_index
-                ]
-            else:
-                beta = np.asarray(
-                    component.diagnostics["evidence_beta"], dtype=np.float64
-                )
-            for feature_index, feature_name in enumerate(
-                assembled.layer_names[name]
-            ):
-                evidence_names.append(f"{name}:{feature_name}")
-                evidence_components.append(component_index)
-                evidence_columns.append(
-                    evidence_design.prediction[:, feature_index, fitted_index]
-                    * beta[feature_index]
-                )
-        evidence_sum = np.zeros(n_cells, dtype=np.float64)
-        for term, term_component in zip(
-            evidence_columns, evidence_components, strict=True
-        ):
-            if term_component == component_index:
-                evidence_sum += term
-        clipped = np.clip(baseline[:, component_index], 1e-15, 1.0 - 1e-15)
-        fitted_logit = np.log(clipped) - np.log1p(-clipped)
-        spatial_logit[:, component_index] = (
-            fitted_logit - prior_logit[:, component_index] - evidence_sum
-        )
-
-    combined = result.combined["probability"].to_numpy(dtype=np.float64)
-    product = np.prod(baseline, axis=1)
-    if not np.allclose(combined, product, rtol=0.0, atol=1e-12):
-        raise GEOPFAValueError(
-            "result combined surface is not the declared component product"
-        )
-    coordinate_names = ("x", "y", "z")[: assembled.grid_coords.shape[1]]
-    return FrozenGBLKForwardState(
-        coordinates=assembled.grid_coords,
-        coordinate_names=coordinate_names,
-        coordinate_units=coordinate_units,
-        component_names=component_names,
-        prior_only_components=tuple(
-            name for name in component_names if name in prior_only_names
-        ),
-        prior_logit=prior_logit,
-        evidence_logit_contribution=(
-            np.column_stack(evidence_columns)
-            if evidence_columns
-            else np.empty((n_cells, 0), dtype=np.float64)
-        ),
-        evidence_term_names=tuple(evidence_names),
-        evidence_term_component=np.asarray(
-            evidence_components, dtype=np.int64
-        ),
-        spatial_logit=spatial_logit,
-        baseline_component_probability=baseline,
-        structural_scenario=structural_scenario,
-    )
-
-
 def _assemble_from_config(
     pfa: dict, cfg: ProbabilisticConfig, criteria: str
 ) -> AssembledInputs:
@@ -4636,7 +4456,6 @@ def run_gblk_calibration_cv(  # noqa: PLR0912, PLR0913, PLR0914, PLR0915
 
 
 __all__ = [
-    "freeze_gblk_forward_state",
     "run_gblk_calibration_cv",
     "run_gblk_probabilistic",
 ]

@@ -1,7 +1,7 @@
 """Region-agnostic 2D plotter helpers for the probabilistic method.
 
 Every helper takes a ``style: PlotStyle | None`` for color / theme overrides
-so downstream applications (e.g., NREL-themed presentation figures) can
+so downstream applications can
 re-skin the outputs without touching the plotting logic.
 """
 

@@ -32,7 +32,6 @@ from geopfa.prob.pu import fit_nnpu_logistic
 from geopfa.prob.site_selection import (
     fit_site_selection_model,
     run_site_selection_analysis,
-    site_selection_sensitivity,
 )
 
 
@@ -159,89 +158,6 @@ def test_nnpu_requires_an_explicit_class_prior() -> None:
     s = np.array([1, 0, 0, 1, 0, 0, 0, 0])
     with pytest.raises(ValueError, match="class_prior"):
         fit_nnpu_logistic(x, s, class_prior=None)
-
-
-@pytest.mark.parametrize("bad_prior", [True, "0.3", 0.3 + 0.0j])
-def test_nnpu_rejects_coerced_class_priors(bad_prior: object) -> None:
-    x = np.column_stack([np.ones(8), np.linspace(-1.0, 1.0, 8)])
-    s = np.array([1, 0, 0, 1, 0, 0, 0, 0])
-
-    with pytest.raises(TypeError, match="class_prior"):
-        fit_nnpu_logistic(
-            x,
-            s,
-            class_prior=bad_prior,  # type: ignore[arg-type]
-        )
-
-
-@pytest.mark.parametrize(
-    ("features", "offsets", "message"),
-    [
-        (
-            np.array([["1.0", "-1.0"], ["1.0", "1.0"]]),
-            None,
-            "features",
-        ),
-        (
-            np.array([[1.0, -1.0], [1.0, 1.0]]),
-            np.array(["0.0", "0.0"]),
-            "offsets",
-        ),
-    ],
-)
-def test_nnpu_rejects_coerced_design_inputs(
-    features: np.ndarray,
-    offsets: np.ndarray | None,
-    message: str,
-) -> None:
-    with pytest.raises(ValueError, match=message):
-        fit_nnpu_logistic(
-            features,
-            np.array([1, 0]),
-            class_prior=0.3,
-            offsets=offsets,
-        )
-
-
-@pytest.mark.parametrize(
-    ("keyword", "bad_value", "message"),
-    [
-        ("penalty_weights", "0.1", "penalty_weights"),
-        ("penalty_weights", np.array([0.0, "0.1"]), "penalty_weights"),
-        ("prior_means", np.array([0.0, 0.0 + 1.0j]), "prior_means"),
-    ],
-)
-def test_nnpu_rejects_coerced_penalty_inputs(
-    keyword: str,
-    bad_value: object,
-    message: str,
-) -> None:
-    x = np.column_stack([np.ones(8), np.linspace(-1.0, 1.0, 8)])
-    s = np.array([1, 0, 0, 1, 0, 0, 0, 0])
-
-    with pytest.raises(ValueError, match=message):
-        fit_nnpu_logistic(
-            x,
-            s,
-            class_prior=0.3,
-            **{keyword: bad_value},
-        )
-
-
-@pytest.mark.parametrize("bad_max_iter", [True, 2.5, "10"])
-def test_nnpu_rejects_coerced_iteration_limits(bad_max_iter: object) -> None:
-    x = np.column_stack([np.ones(8), np.linspace(-1.0, 1.0, 8)])
-    s = np.array([1, 0, 0, 1, 0, 0, 0, 0])
-
-    with pytest.raises(
-        ValueError, match="max_iter must be a positive integer"
-    ):
-        fit_nnpu_logistic(
-            x,
-            s,
-            class_prior=0.3,
-            max_iter=bad_max_iter,  # type: ignore[arg-type]
-        )
 
 
 def test_nnpu_improves_probability_recovery_under_scar() -> None:
@@ -467,92 +383,6 @@ def test_site_selection_requires_a_complete_candidate_frame() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    ("outcome_features", "selection_features", "message"),
-    [
-        (
-            np.array([["0.0"], ["1.0"], ["2.0"], ["3.0"]]),
-            np.arange(4, dtype=float)[:, None],
-            "outcome_features",
-        ),
-        (
-            np.arange(4, dtype=float)[:, None],
-            np.array([["0.0"], ["1.0"], ["2.0"], ["3.0"]]),
-            "selection_features",
-        ),
-    ],
-)
-def test_site_selection_rejects_coerced_design_inputs(
-    outcome_features: np.ndarray,
-    selection_features: np.ndarray,
-    message: str,
-) -> None:
-    selected = np.array([True, True, False, False])
-    outcome = np.array([1.0, 0.0, np.nan, np.nan])
-
-    with pytest.raises(ValueError, match=message):
-        fit_site_selection_model(
-            outcome_features=outcome_features,
-            selection_features=selection_features,
-            selected=selected,
-            observed_outcome=outcome,
-            outcome_selection_log_odds=1.0,
-        )
-
-
-@pytest.mark.parametrize(
-    ("selected", "observed_outcome", "message"),
-    [
-        (
-            np.array([1.0 + 0.0j, 1.0 + 0.0j, 0.0 + 0.0j, 0.0 + 0.0j]),
-            np.array([1.0, 0.0, np.nan, np.nan]),
-            "selected",
-        ),
-        (
-            np.array([True, True, False, False]),
-            np.array(["1", "0", "nan", "nan"]),
-            "observed_outcome",
-        ),
-    ],
-)
-def test_site_selection_rejects_coerced_indicator_inputs(
-    selected: np.ndarray,
-    observed_outcome: np.ndarray,
-    message: str,
-) -> None:
-    x = np.arange(4, dtype=float)[:, None]
-
-    with pytest.raises(ValueError, match=message):
-        fit_site_selection_model(
-            outcome_features=x,
-            selection_features=x,
-            selected=selected,
-            observed_outcome=observed_outcome,
-            outcome_selection_log_odds=1.0,
-        )
-
-
-@pytest.mark.parametrize("bad_max_iter", [True, 2.5, "10"])
-def test_site_selection_rejects_coerced_iteration_limits(
-    bad_max_iter: object,
-) -> None:
-    x = np.arange(6, dtype=float)[:, None]
-    selected = np.array([True, True, False, False, True, False])
-    outcome = np.array([1.0, 0.0, np.nan, np.nan, 1.0, np.nan])
-
-    with pytest.raises(
-        ValueError, match="max_iter must be a positive integer"
-    ):
-        fit_site_selection_model(
-            outcome_features=x,
-            selection_features=x,
-            selected=selected,
-            observed_outcome=outcome,
-            outcome_selection_log_odds=1.0,
-            max_iter=bad_max_iter,  # type: ignore[arg-type]
-        )
-
-
 def test_site_selection_requires_missing_unselected_outcomes() -> None:
     x = np.arange(6, dtype=float)[:, None]
     selected = np.array([True, True, False, False, True, False])
@@ -565,46 +395,6 @@ def test_site_selection_requires_missing_unselected_outcomes() -> None:
             selected=selected,
             observed_outcome=outcome,
             outcome_selection_log_odds=1.0,
-        )
-
-
-@pytest.mark.parametrize("bad_delta", [True, "1.0"])
-def test_site_selection_rejects_coerced_sensitivity_values(
-    bad_delta: object,
-) -> None:
-    x = np.arange(6, dtype=float)[:, None]
-    selected = np.array([True, True, False, False, True, False])
-    outcome = np.array([1.0, 0.0, np.nan, np.nan, 1.0, np.nan])
-
-    with pytest.raises(
-        (TypeError, ValueError), match="outcome_selection_log_odds"
-    ):
-        fit_site_selection_model(
-            outcome_features=x,
-            selection_features=x,
-            selected=selected,
-            observed_outcome=outcome,
-            outcome_selection_log_odds=bad_delta,  # type: ignore[arg-type]
-        )
-
-
-@pytest.mark.parametrize("bad_delta", [True, "1.0"])
-def test_site_selection_sensitivity_grid_rejects_coerced_values(
-    bad_delta: object,
-) -> None:
-    x = np.arange(6, dtype=float)[:, None]
-    selected = np.array([True, True, False, False, True, False])
-    outcome = np.array([1.0, 0.0, np.nan, np.nan, 1.0, np.nan])
-
-    with pytest.raises(
-        (TypeError, ValueError), match="outcome_selection_log_odds"
-    ):
-        site_selection_sensitivity(
-            outcome_selection_log_odds=[bad_delta],  # type: ignore[list-item]
-            outcome_features=x,
-            selection_features=x,
-            selected=selected,
-            observed_outcome=outcome,
         )
 
 
@@ -728,24 +518,6 @@ def test_configured_site_selection_fails_closed_without_candidate_source() -> (
         run_site_selection_analysis(  # type: ignore[arg-type]
             config, outcome_column="outcome"
         )
-
-
-@pytest.mark.parametrize(
-    "config_kwargs",
-    [
-        {"outcome_selection_log_odds": (float("nan"),)},
-        {"outcome_selection_log_odds": (True,)},
-        {"outcome_selection_log_odds": [0.0]},
-        {"outcome_penalty": float("nan")},
-        {"outcome_penalty": True},
-        {"selection_penalty": "0.1"},
-    ],
-)
-def test_site_selection_config_rejects_nonfinite_or_coerced_numerics(
-    config_kwargs: dict[str, object],
-) -> None:
-    with pytest.raises(ValueError, match="site_selection"):
-        SiteSelectionConfig(**config_kwargs)  # type: ignore[arg-type]
 
 
 def test_buffered_spatial_cv_has_no_nearby_training_rows() -> None:

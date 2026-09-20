@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import shutil
-import subprocess
 import warnings
 from dataclasses import replace
 from pathlib import Path
@@ -33,15 +31,12 @@ from geopfa.prob.config import (
 from geopfa.prob.io import (
     PosteriorDrawBlockWriter,
     _gdf_to_raster,
-    _git_source_provenance,
-    _require_version_matches_source,
     load_posterior_draw_state,
     write_geotiff_outputs,
     write_manifest,
     write_parquet_outputs,
     write_probability_outputs,
     write_vtk_outputs,
-    verify_manifest,
     verify_posterior_draw_bundle,
 )
 from geopfa.prob.runner import run_probabilistic
@@ -438,181 +433,18 @@ def test_write_manifest_records_files_and_hashes(tmp_path: Path) -> None:
     assert data["schema_version"] == 1
     assert data["producer"]["package"] == "geoPFA"
     assert data["producer"]["version"]
-    producer_revision = data["producer"]["source"]["revision"]
-    assert len(producer_revision) == 40
-    int(producer_revision, 16)
-    assert isinstance(data["producer"]["source"]["clean"], bool)
+    assert "source" not in data["producer"]
     dependency = data["producer"]["dependencies"][0]
     assert dependency["package"] == "latticekrigx"
     assert dependency["version"] == "0.1.0.dev0"
     assert len(dependency["implementation_sha256"]) == 64
-    dependency_source = dependency["source"]
-    dependency_revision = dependency_source["revision"]
-    if dependency_revision is None:
-        assert dependency_source["clean"] is None
-    else:
-        assert len(dependency_revision) == 40
-        int(dependency_revision, 16)
-        assert isinstance(dependency_source["clean"], bool)
+    assert "source" not in dependency
     assert data["config"] == cfg.to_dict()
     config_record = next(
         record for record in data["inputs"] if record["name"] == "config"
     )
     assert config_record["sha256"] == _sha256(config_source)
     assert config_record["size_bytes"] == config_source.stat().st_size
-    audit = verify_manifest(
-        out_dir,
-        config=cfg,
-        input_artifacts={"config": config_source},
-        require_current_implementation=True,
-    )
-    assert audit == {
-        "schema_version": 1,
-        "files_verified": 1,
-        "inputs_verified": 2,
-        "config_verified": True,
-        "implementation_verified": True,
-    }
-
-    (out_dir / "unlisted.txt").write_text("stale\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="unlisted or missing output files"):
-        verify_manifest(
-            out_dir,
-            config=cfg,
-            input_artifacts={"config": config_source},
-        )
-
-
-def test_version_source_check_accepts_matching_development_revision(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    revision = "e24dd74" + "0" * 33
-    monkeypatch.setattr(
-        "geopfa.prob.io._release_version_at_head", lambda _root: None
-    )
-
-    _require_version_matches_source(
-        "0.0.22.dev20+ge24dd74",
-        {"revision": revision, "clean": True},
-        Path("/unused"),
-    )
-
-
-@pytest.mark.skipif(shutil.which("git") is None, reason="Git is unavailable")
-def test_git_provenance_rejects_untracked_package_in_enclosing_repo(
-    tmp_path: Path,
-) -> None:
-    git_executable = shutil.which("git")
-    assert git_executable is not None
-    application_root = tmp_path / "application"
-    application_root.mkdir()
-    (application_root / "README.md").write_text("application\n")
-    for command in (
-        ("init",),
-        ("config", "user.email", "test@example.invalid"),
-        ("config", "user.name", "Test User"),
-        ("add", "README.md"),
-        ("commit", "-m", "initial"),
-    ):
-        subprocess.run(
-            [git_executable, *command],
-            cwd=application_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    installed_package = application_root / ".venv" / "site-packages" / "geopfa"
-    installed_package.mkdir(parents=True)
-    (installed_package / "__init__.py").write_text("__version__ = '1.0.0'\n")
-
-    assert _git_source_provenance(installed_package) == {
-        "revision": None,
-        "clean": None,
-    }
-
-
-def test_version_source_check_rejects_stale_development_revision(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    revision = "e24dd74" + "0" * 33
-    monkeypatch.setattr(
-        "geopfa.prob.io._release_version_at_head", lambda _root: None
-    )
-
-    with pytest.raises(
-        RuntimeError, match="does not identify clean Git source"
-    ):
-        _require_version_matches_source(
-            "0.0.22.dev18+g904e78b2f.d20260913",
-            {"revision": revision, "clean": True},
-            Path("/unused"),
-        )
-
-
-def test_write_manifest_rejects_stale_installed_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    fixture = make_synthetic_pfa(grid_n=4, n_wells=8, seed=0)
-    wells_path = tmp_path / "wells.gpkg"
-    fixture.wells.to_file(wells_path, layer="wells", driver="GPKG")
-    cfg = _2d_cfg(wells_path, tmp_path / "out", formats=("csv",))
-    revision = "e24dd74" + "0" * 33
-    monkeypatch.setattr(
-        "geopfa.prob.io._probabilistic_implementation_hash", lambda: "a" * 64
-    )
-    monkeypatch.setattr(
-        "geopfa.prob.io._git_source_provenance",
-        lambda _root: {"revision": revision, "clean": True},
-    )
-    monkeypatch.setattr(
-        "geopfa.prob.io._release_version_at_head", lambda _root: None
-    )
-    monkeypatch.setattr(
-        "geopfa.__version__", "0.0.22.dev18+g904e78b2f.d20260913"
-    )
-
-    with pytest.raises(
-        RuntimeError, match="does not identify clean Git source"
-    ):
-        write_manifest(cfg.output_dir, config=cfg)
-    assert not (cfg.output_dir / "manifest.json").exists()
-
-
-def test_version_source_check_accepts_exact_release_tag(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    revision = "a" * 40
-    monkeypatch.setattr(
-        "geopfa.prob.io._release_version_at_head", lambda _root: "0.0.22"
-    )
-
-    _require_version_matches_source(
-        "0.0.22",
-        {"revision": revision, "clean": True},
-        Path("/unused"),
-    )
-
-
-def test_version_source_check_skips_non_git_and_dirty_sources(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def fail_if_called(_root: Path) -> None:
-        raise AssertionError("release tag lookup should not run")
-
-    monkeypatch.setattr(
-        "geopfa.prob.io._release_version_at_head", fail_if_called
-    )
-
-    _require_version_matches_source(
-        "installed-wheel",
-        {"revision": None, "clean": None},
-        Path("/unused"),
-    )
-    _require_version_matches_source(
-        "dirty-development-tree",
-        {"revision": "b" * 40, "clean": False},
-        Path("/unused"),
-    )
 
 
 def test_manifest_omits_absent_prior_only_label_source(
@@ -642,7 +474,6 @@ def test_manifest_omits_absent_prior_only_label_source(
         (cfg.output_dir / "manifest.json").read_text(encoding="utf-8")
     )
     assert {record["name"] for record in manifest["inputs"]} == set()
-    assert verify_manifest(cfg.output_dir, config=cfg)["inputs_verified"] == 0
 
 
 def test_manifest_binds_complete_shapefile_input_bundles(
@@ -703,21 +534,6 @@ def test_manifest_binds_complete_shapefile_input_bundles(
         if Path(records[logical_name]["path"]).with_suffix(".cpg").is_file()
     }
     assert cpg_names <= records.keys()
-    audit = verify_manifest(
-        cfg.output_dir,
-        config=cfg,
-        input_artifacts={"caller.supplied": supplied_path},
-    )
-    assert audit["inputs_verified"] == len(records)
-
-    candidates_path.with_suffix(".dbf").write_bytes(b"tampered")
-    with pytest.raises(ValueError, match="input (size|digest) differs"):
-        verify_manifest(
-            cfg.output_dir,
-            config=cfg,
-            input_artifacts={"caller.supplied": supplied_path},
-        )
-
     supplied_path.with_suffix(".shx").unlink()
     with pytest.raises(FileNotFoundError, match=r"supplied\.shx"):
         write_manifest(
@@ -831,7 +647,7 @@ def test_incremental_posterior_writer_persists_state_and_decomposed_blocks(
     expected = np.concatenate(all_components)
     expected_combined = np.prod(expected, axis=2)
 
-    assert index["schema_version"] == 2
+    assert index["schema_version"] == 1
     assert index["combination_rule"] == "product"
     assert index["combination_estimand"] == "within_draw_component_product"
     assert index["scope"] == "scenario:physical_isotropic"
@@ -928,7 +744,7 @@ def test_incremental_writer_persists_mixed_family_predictive_blocks(
     index = json.loads(summary.index_path.read_text(encoding="utf-8"))
     audit = verify_posterior_draw_bundle(summary.index_path)
 
-    assert index["schema_version"] == 3
+    assert index["schema_version"] == 1
     assert index["component_models"] == [
         {"family": "gaussian", "event_threshold_scaled": 8.0},
         {"family": "bernoulli"},
@@ -937,8 +753,7 @@ def test_incremental_writer_persists_mixed_family_predictive_blocks(
         "prior_linear_predictor + evidence_linear_predictor + "
         "spatial_linear_predictor"
     )
-    assert audit["schema_version"] == 3
-    assert audit["decomposition_verified"] is True
+    assert audit["schema_version"] == 1
     np.testing.assert_allclose(
         summary.component_mean, probability.mean(axis=0)
     )
@@ -1320,58 +1135,6 @@ def test_incremental_posterior_writer_detects_corrupt_resume_block(
 
     with pytest.raises(ValueError, match="payload (size|hash) mismatch"):
         PosteriorDrawBlockWriter(grid, tmp_path, **kwargs)
-
-
-def test_verify_incremental_posterior_bundle_audits_decomposition_and_hashes(
-    tmp_path: Path,
-) -> None:
-    grid = gpd.GeoDataFrame(
-        geometry=gpd.points_from_xy([0.0, 1.0], [2.0, 3.0]),
-        crs="EPSG:32610",
-    )
-    prior = np.zeros((2, 1))
-    writer = PosteriorDrawBlockWriter(
-        grid,
-        tmp_path,
-        component_names=("heat",),
-        n_draws=2,
-        block_size=1,
-        seed=3,
-        combination_rule="product",
-        scope="baseline",
-        state_arrays={"prior_logit": prior},
-        state_metadata=_posterior_metadata(("heat",), model="test"),
-    )
-    for start in range(2):
-        evidence = np.full((1, 2, 1), float(start))
-        probability = 1.0 / (1.0 + np.exp(-evidence))
-        writer.write_block(
-            start,
-            component_probability=probability,
-            prior_logit=prior,
-            evidence_logit=evidence,
-            spatial_logit=np.zeros_like(evidence),
-        )
-    summary = writer.finalize(ci_level=0.9)
-
-    audit = verify_posterior_draw_bundle(summary.index_path)
-
-    assert audit == {
-        "schema_version": 2,
-        "scope": "baseline",
-        "n_draws": 2,
-        "n_cells": 2,
-        "n_components": 1,
-        "n_blocks": 2,
-        "uncertainty_semantics": (
-            "paired_bayesian_posterior_probability_draws"
-        ),
-        "hashes_verified": True,
-        "draw_partition_verified": True,
-        "probability_bounds_verified": True,
-        "decomposition_verified": True,
-        "combination_verified": True,
-    }
 
 
 def test_load_posterior_draw_state_reopens_incomplete_exact_state(

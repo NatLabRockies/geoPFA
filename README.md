@@ -103,10 +103,6 @@ probability map.
   hash-bound cell subset while exact full-grid summaries are retained. Only a
   verified incomplete posterior workspace may resume its completed block prefix
   after an ordinary execution error.
-- Frozen forward-state export — deterministic GBLK MAP fits can be decomposed
-  into prior, named evidence, and spatial logit contributions and evaluated in
-  vectorized batches by downstream sensitivity studies without refitting.
-
 **Quick start:**
 
 The GBLK dependency is LatticeKrigX (Python 3.11–3.12). The Pixi lock pins an

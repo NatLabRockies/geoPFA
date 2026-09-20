@@ -261,10 +261,9 @@ notebooks:
 | Nevada 3-km thermal mean and standard deviation | `GEOPFA_NEVADA_3KM_MEAN`, `GEOPFA_NEVADA_3KM_SD` |
 | Nevada 7-km thermal mean and standard deviation | `GEOPFA_NEVADA_7KM_MEAN`, `GEOPFA_NEVADA_7KM_SD` |
 
-The Newberry notebook is an illustrative run, not the publication convergence
-campaign. It retains full-grid posterior summaries but disables raw full-grid
-draw blocks. Publication runs must predeclare both a Monte Carlo convergence
-gate and the retained-draw cell subset or other storage contract.
+The Newberry notebook is an illustrative run. It retains full-grid posterior
+summaries but disables raw full-grid draw blocks. Large analyses should choose
+a retained-draw cell subset or another storage contract before execution.
 
 ## Config reference
 
@@ -502,20 +501,16 @@ execution error, only a verified incomplete posterior workspace can resume; it
 reopens the exact hash-verified state and completed block prefix before
 projecting the missing draw blocks.
 It never appends draws from a second posterior fit. Abrupt termination inside
-state or final-product publication is rejected rather than repaired or silently
+state or final-output publication is rejected rather than repaired or silently
 mixed.
 
 The posterior `index.json` fixes the run/scenario scope, component order,
 coordinate columns and CRS, posterior seed, draw IDs, product-combination
 contract, and SHA-256 hash of every coordinate, state, draw, and summary
-payload. Schema version 2 stores all-Bernoulli draws, version 3 adds Gaussian
-predictive draws, and version 4 stores draw-level payloads only at a hash-bound
-cell subset while retaining exact full-grid component and combined means and
-intervals. Each `.npz` block contains the family-appropriate prior, evidence,
-and spatial decomposition plus component and combined probabilities. The
-writer and `verify_posterior_draw_bundle` independently verify the predictor
-decomposition, Gaussian exceedance calculation where applicable, and the
-within-draw product. Its
+payload. Each `.npz` block contains the family-appropriate prior, evidence,
+and spatial decomposition plus component and combined probabilities. Internal
+validation checks the predictor decomposition, Gaussian exceedance calculation
+where applicable, and the within-draw product. Its
 `uncertainty_semantics` is derived from the component roles and distinguishes
 posterior, prior-predictive, and mixed draws. Exact draw means and
 quantiles are reconstructed through disk-backed cell chunks, not a resident
@@ -582,7 +577,7 @@ Region-agnostic 2D plotter helpers in `geopfa.prob.plotting`:
 - `plot_top_n_curve(y, p, path, style=None)` — top-N targeting curve with random + oracle baselines.
 - `plot_confusion_matrix(y, p, threshold=0.5, path, style=None)` — 2×2 heatmap.
 
-Every helper accepts a `PlotStyle` dataclass for theme overrides (cmaps, point colours, CI color). Applications can subclass `PlotStyle` to inject NREL / corporate palettes without touching the plotter logic.
+Every helper accepts a `PlotStyle` dataclass for theme overrides (cmaps, point colours, CI color). Applications can subclass `PlotStyle` to inject project-specific palettes without touching the plotter logic.
 
 ## 3D usage
 
@@ -640,12 +635,7 @@ from geopfa.prob import (
     write_probability_outputs,
     write_geotiff_outputs,
     write_parquet_outputs,
-    PosteriorDrawBlockWriter,
-    load_posterior_draw_state,
-    verify_manifest,
-    verify_posterior_draw_bundle,
     write_vtk_outputs,
-    write_manifest,
 
     # plotting
     PlotStyle,

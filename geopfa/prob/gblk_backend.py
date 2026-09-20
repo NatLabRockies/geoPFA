@@ -569,10 +569,10 @@ def fit_gblk_bayesian_posterior_state(  # noqa: PLR0912, PLR0913, PLR0914, PLR09
     """Fit geoPFA's canonical Bayesian GBLK model without a full draw cube.
 
     This is the array-level entry point shared by the config-driven workflow
-    and manuscript simulations. It selects LatticeKrigX's public
+    and simulation studies. It selects LatticeKrigX's public
     ``fit_joint(..., inference="inla")`` Paige model and summarizes the paired
     posterior coefficient draws returned by that model. Supplied alpha offsets
-    are fixed. Grid probabilities are projected separately so publication runs
+    are fixed. Grid probabilities are projected separately so large runs
     can bound memory by a configured draw block.
 
     The LatticeKrigX Paige interface supports one or two components on either

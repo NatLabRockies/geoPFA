@@ -2102,7 +2102,7 @@ def test_gaussian_heat_streams_with_prior_predictive_binary_component(
     result = run_gblk_probabilistic(fixture.pfa, cfg, nc=3)
     index = json.loads(result.posterior_draw_index.read_text(encoding="utf-8"))
 
-    assert index["schema_version"] == 3
+    assert index["schema_version"] == 1
     assert index["component_models"] == [
         {"family": "gaussian", "event_threshold_scaled": 4.0},
         {"family": "bernoulli"},
@@ -2119,8 +2119,7 @@ def test_gaussian_heat_streams_with_prior_predictive_binary_component(
         == "gaussian"
     )
     audit = verify_posterior_draw_bundle(result.posterior_draw_index)
-    assert audit["schema_version"] == 3
-    assert audit["decomposition_verified"] is True
+    assert audit["schema_version"] == 1
 
 
 def test_mixed_family_runner_fits_two_bernoulli_and_one_gaussian_component(
@@ -2535,7 +2534,7 @@ def test_top_level_bayesian_runner_persists_audited_draw_blocks(
     assert index_path.is_file()
     assert manifest_path.is_file()
     index = json.loads(index_path.read_text(encoding="utf-8"))
-    assert index["schema_version"] == 2
+    assert index["schema_version"] == 1
     assert len(index["blocks"]) == 3
     assert index["n_draws"] == _N_DRAWS
     assert index["seed"] == 42
@@ -2613,7 +2612,7 @@ def test_bayesian_runner_uses_hash_bound_draw_cell_subset(
     result = run_gblk_probabilistic(fixture.pfa, cfg, nc=3)
     index = json.loads(result.posterior_draw_index.read_text(encoding="utf-8"))
 
-    assert index["schema_version"] == 4
+    assert index["schema_version"] == 1
     assert index["n_cells"] == 36
     assert index["materialized_n_cells"] == 3
     with np.load(
@@ -2781,7 +2780,7 @@ def test_streamed_fixed_gaussian_prior_reports_response_distribution(
         "response_interval_includes_likelihood_variance"
     ]
     index = json.loads(result.posterior_draw_index.read_text(encoding="utf-8"))
-    assert index["schema_version"] == 3
+    assert index["schema_version"] == 1
     assert index["component_models"][0] == {
         "family": "gaussian",
         "event_threshold_scaled": 200.0,
@@ -2809,7 +2808,7 @@ def test_streamed_fixed_gaussian_prior_reports_response_distribution(
             ),
         )
     audit = verify_posterior_draw_bundle(result.posterior_draw_index)
-    assert audit["schema_version"] == 3
+    assert audit["schema_version"] == 1
 
 
 @pytest.mark.parametrize("use_cell_subset", [False, True])
@@ -2922,7 +2921,7 @@ def test_top_level_bayesian_runner_resumes_missing_block_without_refit(  # noqa:
             combined_blocks.append(payload["combined_probability"])
     block_mean = np.concatenate(combined_blocks).mean(axis=0)
     if use_cell_subset:
-        assert index["schema_version"] == 4
+        assert index["schema_version"] == 1
         np.testing.assert_allclose(
             resumed.combined["probability"][selected],
             block_mean,

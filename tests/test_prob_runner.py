@@ -34,7 +34,6 @@ from geopfa.prob.fitting import ComponentProbability
 from geopfa.prob.io import (
     PosteriorDrawBlockWriter,
     _probabilistic_implementation_hash,
-    verify_manifest,
 )
 from geopfa.prob.runner import (
     ProbabilisticResult,
@@ -212,52 +211,6 @@ def test_run_probabilistic_rejects_unmanifested_existing_outputs(
     cfg = _minimal_config(wells_path, output_dir)
 
     with pytest.raises(GEOPFAValueError, match="not a fresh or resumable"):
-        run_probabilistic(fixture.pfa, cfg)
-
-
-def test_run_probabilistic_rejects_outputs_from_different_config(
-    tmp_path: Path,
-) -> None:
-    fixture = make_synthetic_pfa(grid_n=6, n_wells=20, seed=2)
-    wells_path = _save_fixture_wells_as_gpkg(tmp_path)
-    output_dir = tmp_path / "out"
-    output_dir.mkdir()
-    (output_dir / "manifest.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "config_hash": "not-the-current-config",
-                "implementation_sha256": "not-the-current-code",
-                "inputs": [],
-                "files": [],
-            }
-        ),
-        encoding="utf-8",
-    )
-    cfg = _minimal_config(wells_path, output_dir)
-
-    with pytest.raises(GEOPFAValueError, match="different effective config"):
-        run_probabilistic(fixture.pfa, cfg)
-
-
-def test_run_probabilistic_rejects_outputs_from_different_implementation(
-    tmp_path: Path,
-) -> None:
-    fixture = make_synthetic_pfa(grid_n=6, n_wells=20, seed=2)
-    wells_path = _save_fixture_wells_as_gpkg(tmp_path)
-    output_dir = tmp_path / "out"
-    cfg = _minimal_config(wells_path, output_dir)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        run_probabilistic(fixture.pfa, cfg)
-    manifest_path = output_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["implementation_sha256"] = "not-the-current-code"
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-
-    with pytest.raises(
-        GEOPFAValueError, match="different probabilistic implementation"
-    ):
         run_probabilistic(fixture.pfa, cfg)
 
 
@@ -1000,15 +953,6 @@ def test_gblk_streamed_scenario_resumes_one_exact_run(  # noqa: PLR0915
     }
     assert not marker_path.exists()
     assert (cfg.output_dir / "manifest.json").is_file()
-    assert (
-        verify_manifest(
-            cfg.output_dir,
-            config=cfg,
-            input_artifacts=inputs,
-            require_current_implementation=True,
-        )["implementation_verified"]
-        is True
-    )
 
 
 def test_gblk_streamed_baseline_finalizes_after_interruption(
@@ -1114,14 +1058,6 @@ def test_gblk_streamed_baseline_finalizes_after_interruption(
 
     assert calls == 2
     assert not marker.exists()
-    assert (
-        verify_manifest(
-            cfg.output_dir,
-            config=cfg,
-            require_current_implementation=True,
-        )["implementation_verified"]
-        is True
-    )
 
 
 def test_gblk_scenario_writes_the_paired_draw_combined_surface(

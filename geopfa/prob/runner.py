@@ -635,11 +635,7 @@ def run_probabilistic(  # noqa: PLR0912, PLR0914, PLR0915
             expected_implementation_sha256=implementation_sha256,
         )
     else:
-        validate_output_namespace(
-            config.output_dir,
-            config,
-            input_artifacts=input_artifacts,
-        )
+        validate_output_namespace(config.output_dir, config)
 
     if config.inference.backend == "gblk":
         if config.calibration.method != "none":
