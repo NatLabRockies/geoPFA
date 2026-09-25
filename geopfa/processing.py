@@ -3328,11 +3328,16 @@ class Processing:
         nz : int
             Number of vertical layers (stored as metadata).
         strike : float, optional
-            Global strike azimuth in degrees, clockwise from North.
-            If None or used with dip=None, extrusion is vertical.
+            Global strike azimuth in degrees, clockwise from North, applied
+            to every feature in the layer. If None and dip is given, each
+            feature's strike is instead estimated from its own endpoint-to-
+            endpoint bearing, so differently oriented traces dip along
+            their own strike rather than one shared direction.
         dip : float, optional
-            Global dip angle in degrees from horizontal (0 to 90).
-            If None or dip ~ 90°, extrusion is vertical.
+            Dip angle in degrees from horizontal (0 to 90), applied at
+            either the global strike (if given) or each feature's own
+            auto-estimated strike. If None or dip ~ 90°, extrusion is
+            vertical.
         target_z_meas : any, optional
             Stored in layer_dict["z_meas"] for downstream use.
         """
@@ -3384,8 +3389,29 @@ class Processing:
             dy = horiz * math.cos(dip_az)
             return dx, dy
 
-        # Global offset for bottom surfaces (same z_min/z_max for all features)
+        # Global offset for bottom surfaces (only meaningful when an
+        # explicit strike is given; per-feature offsets are used instead
+        # when strike=None so each trace dips along its own orientation)
         dx_dip, dy_dip = _dip_offset(z_max, z_min, strike, dip)
+
+        def _auto_strike(coords):
+            """Approximate a trace's strike (deg from North) from its
+            endpoint-to-endpoint bearing, dropping a duplicated closing
+            point for closed rings."""
+            pts = coords[:-1] if coords[0] == coords[-1] else coords
+            (x0, y0), (x1, y1) = pts[0], pts[-1]
+            if x0 == x1 and y0 == y1:
+                return None
+            return math.degrees(math.atan2(x1 - x0, y1 - y0)) % 360
+
+        def _feature_dip_offset(coords):
+            """Per-feature (dx, dy) dip offset: uses the global offset when
+            an explicit strike was given, otherwise derives strike from the
+            feature's own coordinates."""
+            if strike is not None or dip is None:
+                return dx_dip, dy_dip
+            auto_strike = _auto_strike(coords)
+            return _dip_offset(z_max, z_min, auto_strike, dip)
 
         # Helper to safely get x,y from a coordinate (supports 2D or 3D coords)
         def _xy(coord):
@@ -3410,13 +3436,14 @@ class Processing:
                 )
                 for line in parts:
                     coords = [_xy(c) for c in line.coords]
+                    line_dx, line_dy = _feature_dip_offset(coords)
 
                     # Top trace at z_max
                     top = [(x, y, z_max) for x, y in coords]
 
                     # Bottom trace at z_min, shifted along dip direction
                     bot = [
-                        (x + dx_dip, y + dy_dip, z_min)
+                        (x + line_dx, y + line_dy, z_min)
                         for x, y in reversed(coords)
                     ]
 
@@ -3432,10 +3459,11 @@ class Processing:
                 )
                 for poly in polys:
                     ext = [_xy(c) for c in poly.exterior.coords]
+                    poly_dx, poly_dy = _feature_dip_offset(ext)
 
                     top_ext = [(x, y, z_max) for x, y in ext]
                     bot_ext = [
-                        (x + dx_dip, y + dy_dip, z_min)
+                        (x + poly_dx, y + poly_dy, z_min)
                         for x, y in reversed(ext)
                     ]
 
@@ -3444,7 +3472,7 @@ class Processing:
                         hc = [_xy(c) for c in hole.coords]
                         top_h = [(x, y, z_max) for x, y in hc]
                         bot_h = [
-                            (x + dx_dip, y + dy_dip, z_min)
+                            (x + poly_dx, y + poly_dy, z_min)
                             for x, y in reversed(hc)
                         ]
                         holes3.append(top_h + bot_h)
@@ -3480,6 +3508,98 @@ class Processing:
         return pfa
 
     @staticmethod
+    def _is_single_contiguous_trace(ordered_points, gap_factor=5.0):
+        """Check for one contiguous XY path (no large jumps between points)."""
+        if len(ordered_points) < 3:
+            return True
+
+        xy = np.array([(x, y) for x, y, _ in ordered_points])
+        seg_lengths = np.linalg.norm(np.diff(xy, axis=0), axis=1)
+        return seg_lengths.max() <= gap_factor * np.median(seg_lengths)
+
+    @staticmethod
+    def _align_bottom_to_top(top, bottom):
+        """Reorder ``bottom`` so index ``i`` matches the same trace position
+        as ``top[i]``.
+
+        ``bottom`` is assumed to trace the same path as ``top``, but not
+        necessarily in the same direction, so whichever of ``bottom`` or its
+        reverse lines up index-for-index with ``top`` (lower total XY
+        pairing distance) is returned.
+        """
+        top_xy = np.array([(x, y) for x, y, _ in top])
+        bottom_xy = np.array([(x, y) for x, y, _ in bottom])
+
+        aligned_cost = np.linalg.norm(top_xy - bottom_xy, axis=1).sum()
+        reversed_cost = np.linalg.norm(top_xy - bottom_xy[::-1], axis=1).sum()
+
+        return (
+            bottom if aligned_cost <= reversed_cost else list(reversed(bottom))
+        )
+
+    @staticmethod
+    def _fault_surface_from_points(coords):
+        """Build a fault surface from an ordered list of 3D points.
+
+        Notes
+        -----
+        A plain XY convex hull of every point in a fault trace only
+        reconstructs the true (possibly concave) shape when the trace
+        itself is convex. For curved, multi-vertex traces swept between a
+        top and bottom layer (e.g. Micromine mesh exports), the hull
+        instead connects far-apart hull-extreme points from the top and
+        bottom layers in an order that ignores which layer they came
+        from, producing a self-intersecting ("twisted") polygon.
+
+        Stitching the whole trace into a single ring polygon instead (top
+        trace forward, bottom trace back) fixes that self-intersection, but
+        for a long, curving trace the single ring is far from planar, and
+        renderers/consumers that treat a polygon's vertices as one flat
+        face (e.g. ``matplotlib``'s ``Poly3DCollection``) still draw it as
+        a twisted sheet.
+
+        When the points form exactly two equal-sized layers -- a top and a
+        bottom trace, each a single contiguous path -- this instead builds
+        a strip of small quads, one per consecutive pair of trace points
+        (``top[i]``, ``top[i+1]`` and their corresponding bottom points).
+        Each quad is a near-planar patch that follows the local strike of
+        the trace, so the strip as a whole follows the true swept shape
+        without any single face spanning (and twisting across) the entire
+        curve. Any other point arrangement (including traces with more
+        than one disjoint segment) falls back to the XY convex hull.
+
+        Consecutive quads share a full edge, which strict OGC MultiPolygon
+        validity disallows (element boundaries may only touch at finitely
+        many points), so the returned ``MultiPolygon``'s ``is_valid`` may
+        be ``False`` even though each individual quad, and the strip as a
+        whole, is well-formed and not self-intersecting.
+        """
+        zs = [round(z, 3) for _, _, z in coords]
+        unique_zs = sorted(set(zs))
+
+        if len(unique_zs) == 2:
+            z_bottom, z_top = unique_zs
+            bottom = [pt for pt in coords if round(pt[2], 3) == z_bottom]
+            top = [pt for pt in coords if round(pt[2], 3) == z_top]
+
+            if (
+                len(top) == len(bottom)
+                and len(top) >= 2
+                and Processing._is_single_contiguous_trace(top)
+                and Processing._is_single_contiguous_trace(bottom)
+            ):
+                bottom = Processing._align_bottom_to_top(top, bottom)
+                quads = [
+                    shapely.geometry.Polygon(
+                        [top[i], top[i + 1], bottom[i + 1], bottom[i]]
+                    )
+                    for i in range(len(top) - 1)
+                ]
+                return shapely.geometry.MultiPolygon(quads)
+
+        return shapely.geometry.MultiPoint(coords).convex_hull
+
+    @staticmethod
     def create_fault_surfaces_from_points(gdf_points, fault_number_col):
         """Create surfaces representing faults from point data.
 
@@ -3504,9 +3624,10 @@ class Processing:
             points = group.geometry
             coords = [(point.x, point.y, point.z) for point in points]
 
-            # Create a surface (e.g., convex hull) for the fault
+            # Build a top/bottom ribbon surface, falling back to a
+            # convex hull when the points don't fit that pattern
             try:
-                surface = shapely.geometry.MultiPoint(coords).convex_hull
+                surface = Processing._fault_surface_from_points(coords)
                 fault_surfaces.append(
                     {"fault_number": fault_number, "geometry": surface}
                 )
@@ -3530,8 +3651,9 @@ class Processing:
 
         Parameters
         ----------
-        geom3d : shapely Polygon
-            3D solid polygon geometry with z-coordinates in its vertices.
+        geom3d : shapely Polygon or MultiPolygon
+            3D solid polygon (or multi-polygon, e.g. a strip of quads) with
+            z-coordinates in its vertices.
         z : float
             Target elevation for slicing the geometry.
         z_tol : float, optional
@@ -3542,6 +3664,14 @@ class Processing:
         shapely geometry or None
             2D Polygon or LineString footprint at elevation z, or None if outside range.
         """
+        if geom3d.geom_type == "MultiPolygon":
+            parts = [
+                Processing.slice_geometry_at_z(part, z, z_tol=z_tol)
+                for part in geom3d.geoms
+            ]
+            parts = [p for p in parts if p is not None and not p.is_empty]
+            return unary_union(parts) if parts else None
+
         if not hasattr(geom3d, "exterior"):
             return None
         coords3 = list(geom3d.exterior.coords)

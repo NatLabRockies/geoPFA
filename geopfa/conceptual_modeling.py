@@ -94,6 +94,22 @@ def _apply_slices(arr, x_slice=None, y_slice=None, z_slice=None):
     return arr[mask]
 
 
+def _clip_pts_to_bounds(arr, bounds):
+    """Clip an (N, 3) point array to a (xmin, xmax, ymin, ymax, zmin, zmax) bounding box."""
+    if arr is None or len(arr) == 0:
+        return arr
+    xmin, xmax, ymin, ymax, zmin, zmax = bounds
+    mask = (
+        (arr[:, 0] >= xmin)
+        & (arr[:, 0] <= xmax)
+        & (arr[:, 1] >= ymin)
+        & (arr[:, 1] <= ymax)
+        & (arr[:, 2] >= zmin)
+        & (arr[:, 2] <= zmax)
+    )
+    return arr[mask]
+
+
 def _infer_spacing(arr):
     unique = np.unique(np.sort(arr))
     if len(unique) <= 1:
@@ -276,6 +292,7 @@ class ConceptualModeling:
         well_cmap="magma",
         well_vmin=None,
         well_vmax=None,
+        overlay_points=None,
         extent=None,
         x_slice=None,
         y_slice=None,
@@ -320,6 +337,8 @@ class ConceptualModeling:
             Colormap for the well-path scalars.
         well_vmin, well_vmax : float, optional
             Colorbar limits for the well-path scalars.
+        overlay_points : geopandas.GeoDataFrame, optional
+            Point-Z GeoDataFrame rendered as small black spheres (e.g. earthquakes).
         extent : list, optional
             Bounding box ``[xmin, ymin, zmin, xmax, ymax, zmax]``.
         x_slice, y_slice, z_slice : float, optional
@@ -436,6 +455,22 @@ class ConceptualModeling:
             colorbar_label_font_size=colorbar_label_font_size,
         )
 
+        if overlay_points is not None:
+            op = _clip_pts_to_bounds(
+                _apply_slices(
+                    _build_well_pts(overlay_points), x_slice, y_slice, z_slice
+                ),
+                grid.bounds,
+            )
+            if op is not None and len(op) > 0:
+                p.add_mesh(
+                    pv.PolyData(op),
+                    color="black",
+                    render_points_as_spheres=True,
+                    point_size=4,
+                    show_scalar_bar=False,
+                )
+
         if area_outline is not None:
             outline_mesh = _build_outline_mesh(area_outline, grid.bounds[5])
             if outline_mesh is not None:
@@ -488,6 +523,7 @@ class ConceptualModeling:
         well_vmin=None,
         well_vmax=None,
         show_well_colorbar=True,
+        overlay_points=None,
         extent=None,
         x_slice=None,
         y_slice=None,
@@ -542,6 +578,8 @@ class ConceptualModeling:
             Colorbar limits for the well-path scalars.
         show_well_colorbar : bool, optional
             Display the well-path scalar colorbar.
+        overlay_points : geopandas.GeoDataFrame, optional
+            Point-Z GeoDataFrame rendered as small black spheres (e.g. earthquakes).
         extent : list, optional
             Bounding box ``[xmin, ymin, zmin, xmax, ymax, zmax]``.
         x_slice, y_slice, z_slice : float, optional
@@ -767,6 +805,22 @@ class ConceptualModeling:
             colorbar_title_font_size=colorbar_title_font_size,
             colorbar_label_font_size=colorbar_label_font_size,
         )
+
+        if overlay_points is not None:
+            op = _clip_pts_to_bounds(
+                _apply_slices(
+                    _build_well_pts(overlay_points), x_slice, y_slice, z_slice
+                ),
+                grid.bounds,
+            )
+            if op is not None and len(op) > 0:
+                p.add_mesh(
+                    pv.PolyData(op),
+                    color="black",
+                    render_points_as_spheres=True,
+                    point_size=4,
+                    show_scalar_bar=False,
+                )
 
         if area_outline is not None:
             outline_mesh = _build_outline_mesh(area_outline, grid_c.bounds[5])

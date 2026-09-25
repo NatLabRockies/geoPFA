@@ -47,6 +47,7 @@ dependencies = [
   "statsmodels>=0.14",
   "tqdm>=4.67",
   "pyvista>=0.43",
+  "nest-asyncio2>=1.7.2,<2",
 ]
 [project.optional-dependencies]
 dev = ["ipython>=8.29.0", "twine>=5.1", "pre-commit>=4.0"]
@@ -136,6 +137,7 @@ trame = ">=3.13.0,<4"
 trame-vtk = ">=2.11.8,<3"
 trame-vuetify = ">=3.2.2,<4"
 json5 = ">=0.14.0,<0.15"
+seaborn = ">=0.13.2,<0.14"
 
 [tool.pixi.feature.build.dependencies]
 uv = ">=0.7.22,<0.8"
