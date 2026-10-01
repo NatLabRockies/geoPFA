@@ -71,8 +71,12 @@ def test_study_notebooks_use_processed_inputs_and_final_surfaces() -> None:
 
         assert "load_processed_pfa" in source
         assert "run_probabilistic" in source
-        assert 'pfa_vv["pr_norm"]' in source
         assert "model_result.combined" in source
+        if path == NOTEBOOKS[0]:
+            assert "voterveto" not in normalized
+            assert 'pfa_vv["pr_norm"]' not in source
+        else:
+            assert 'pfa_vv["pr_norm"]' in source
         assert "/users/" not in normalized
         assert "pickle" not in normalized
         assert "fpa.pkl" not in normalized

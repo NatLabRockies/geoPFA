@@ -1,0 +1,16 @@
+{
+  "profile_id": "newberry-2d-150c-priors-v1",
+  "default": {
+    "mean_log_odds": 0.0,
+    "sd_log_odds": 0.5,
+    "rationale": "Neutral proper prior for an evidence layer without a reviewed directional effect."
+  },
+  "components": {
+    "insulation": {
+      "temperature_model_500m": {
+        "fixed_value": 0.0,
+        "rationale": "The temperature model defines the heat target and is excluded from the insulation evidence effect to avoid double counting."
+      }
+    }
+  }
+}

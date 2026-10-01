@@ -1196,6 +1196,7 @@ class RegularizationConfig:
     per_feature_weights: Mapping[str, float] = field(default_factory=dict)
     prior_means: Mapping[str, float] = field(default_factory=dict)
     prior_precisions: Mapping[str, float] = field(default_factory=dict)
+    fixed_coefficients: Mapping[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         """Validate explicit Gaussian coefficient-prior parameters."""
@@ -1215,6 +1216,12 @@ class RegularizationConfig:
                     f"strictly positive (got {name}={numeric})"
                 )
 
+        for name, value in self.fixed_coefficients.items():
+            _require_finite_real_value(
+                value,
+                context=f"evidence.regularization.fixed_coefficients.{name}",
+            )
+
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any] | None) -> RegularizationConfig:
         """Build from a parsed-JSON mapping."""
@@ -1229,6 +1236,7 @@ class RegularizationConfig:
                     "per_feature_weights": "real_mapping",
                     "prior_means": "real_mapping",
                     "prior_precisions": "real_mapping",
+                    "fixed_coefficients": "real_mapping",
                 },
                 context="evidence.regularization",
             )
@@ -1236,7 +1244,10 @@ class RegularizationConfig:
 
     def to_dict(self) -> dict[str, Any]:
         """Return a plain-dict representation."""
-        return _config_to_dict(self)
+        payload = _config_to_dict(self)
+        if not self.fixed_coefficients:
+            payload.pop("fixed_coefficients")
+        return payload
 
 
 @dataclass(frozen=True)

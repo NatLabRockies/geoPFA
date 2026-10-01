@@ -731,7 +731,7 @@ def _qualified_prior_values(  # noqa: PLR0913
     return np.asarray(resolved, dtype=np.float64)
 
 
-def _prior_predictive_evidence_state(  # noqa: PLR0913
+def _prior_predictive_evidence_state(  # noqa: PLR0913, PLR0914
     adapter: PFAGridAdapter,
     component: str,
     alpha: AlphaCResult,
@@ -775,8 +775,25 @@ def _prior_predictive_evidence_state(  # noqa: PLR0913
         )
     standardized = (evidence - center) / scale
     regularization = cfg.evidence.regularization
+    fixed_values = np.asarray(
+        [
+            regularization.fixed_coefficients.get(
+                f"{component}:{layer_name}",
+                regularization.fixed_coefficients.get(layer_name, np.nan),
+            )
+            for layer_name in layer_names
+        ],
+        dtype=np.float64,
+    )
+    fixed_mask = np.isfinite(fixed_values)
+    prior_means = dict(regularization.prior_means)
+    prior_precisions = dict(regularization.prior_precisions)
+    for index in np.flatnonzero(fixed_mask):
+        key = f"{component}:{layer_names[index]}"
+        prior_means.setdefault(key, float(fixed_values[index]))
+        prior_precisions.setdefault(key, 1.0)
     prior_mean = _qualified_prior_values(
-        regularization.prior_means,
+        prior_means,
         component=component,
         layer_names=layer_names,
         prior_name="mean",
@@ -784,7 +801,7 @@ def _prior_predictive_evidence_state(  # noqa: PLR0913
         default=0.0,
     )
     prior_precision = _qualified_prior_values(
-        regularization.prior_precisions,
+        prior_precisions,
         component=component,
         layer_names=layer_names,
         prior_name="precision",
@@ -807,6 +824,7 @@ def _prior_predictive_evidence_state(  # noqa: PLR0913
         scale=prior_sd,
         size=(cfg.inference.gblk_bayesian.n_draws, len(layer_names)),
     )
+    coefficient_draws[:, fixed_mask] = fixed_values[fixed_mask]
     return PriorPredictiveEvidenceState(
         standardized_evidence=standardized,
         coefficient_draws=coefficient_draws,
@@ -823,6 +841,12 @@ def _prior_predictive_evidence_state(  # noqa: PLR0913
             "evidence_scale": scale.tolist(),
             "coefficient_prior_mean": prior_mean.tolist(),
             "coefficient_prior_sd": prior_sd.tolist(),
+            "coefficient_fixed_value": [
+                None if not is_fixed else float(value)
+                for value, is_fixed in zip(
+                    fixed_values, fixed_mask, strict=True
+                )
+            ],
             "n_draws": cfg.inference.gblk_bayesian.n_draws,
             "seed": seed,
         },

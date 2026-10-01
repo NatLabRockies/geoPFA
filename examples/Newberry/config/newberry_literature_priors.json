@@ -1,0 +1,27 @@
+{
+  "profile_id": "newberry-400c-literature-priors-v1",
+  "default": {
+    "mean_log_odds": 0.0,
+    "sd_log_odds": 0.5,
+    "rationale": "Neutral proper prior for an evidence layer without a reviewed directional effect."
+  },
+  "components": {
+    "reservoir": {
+      "ring_faults": {
+        "mean_log_odds": 0.4054651081081644,
+        "sd_log_odds": 0.6,
+        "references": [
+          "https://doi.org/10.3133/pp1578",
+          "https://doi.org/10.1016/j.geothermics.2017.10.019"
+        ],
+        "rationale": "Weak positive association of ring-fault proximity with permeable reservoir structure; uncertainty remains deliberately broad."
+      }
+    },
+    "insulation": {
+      "temperature_model_500m": {
+        "fixed_value": 0.0,
+        "rationale": "The temperature model defines the heat target and is excluded from the insulation evidence effect to avoid double counting."
+      }
+    }
+  }
+}
