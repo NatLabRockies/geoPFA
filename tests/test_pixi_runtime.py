@@ -16,5 +16,5 @@ def test_probabilistic_runtime_pins_current_latticekrigx_source() -> None:
     dependency = metadata["tool"]["pixi"]["pypi-dependencies"]["latticekrigx"]
     assert dependency == {
         "git": "https://github.com/dhetting/latticekrigx.git",
-        "rev": "8b85044fae79e2f4e0f543e41bb7e389874c6916",
+        "rev": "8ba4f3869db3d59420535dc6b5c3690ba44e0ee2",
     }
