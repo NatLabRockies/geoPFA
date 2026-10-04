@@ -43,7 +43,9 @@ from geopfa.exceptions import GEOPFAValueError
 _MIN_POINTS_FOR_SPACING_CHECK = 3
 _DRAW_ARRAY_DIMENSIONS = 2
 _SUMMARY_CELL_CHUNK_SIZE = 2_048
-_POSTERIOR_DRAW_SCHEMA_VERSION = 1
+# Schema v4 records both exact predictor decomposition and full-grid summaries
+# when a selected subset of paired posterior draws is materialized.
+_POSTERIOR_DRAW_SCHEMA_VERSION = 4
 _RUN_RESUME_SCHEMA_VERSION = 1
 _RUN_RESUME_FILENAME = ".probabilistic_run.incomplete.json"
 _RUNTIME_SOURCE_SUFFIXES = {
@@ -1911,6 +1913,7 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
             raise ValueError(
                 "posterior full-grid materialization metadata is inconsistent"
             )
+        materialized_indices = np.arange(n_cells, dtype=np.int64)
     else:
         if (
             not isinstance(materialization, Mapping)
@@ -2059,6 +2062,57 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
                 raise ValueError(
                     "posterior block probabilities lie outside [0, 1]"
                 )
+            eta = prior[np.newaxis, :, :] + evidence + spatial
+            reconstructed = np.empty_like(probability)
+            for component_index, model in enumerate(component_models):
+                family = model.get("family")
+                if family == "bernoulli":
+                    reconstructed[:, :, component_index] = np.exp(
+                        -np.logaddexp(0.0, -eta[:, :, component_index])
+                    )
+                    continue
+                threshold = model.get("event_threshold_scaled")
+                invalid_threshold = (
+                    isinstance(threshold, bool)
+                    or not isinstance(threshold, Real)
+                    or not np.isfinite(float(threshold))
+                )
+                probability_min, probability_max = (
+                    _gaussian_component_probability_bounds(model)
+                )
+                component_precision = (
+                    None
+                    if precision is None
+                    else (
+                        precision[:, component_index, np.newaxis]
+                        if precision.ndim == _DRAW_ARRAY_DIMENSIONS
+                        else precision[:, :, component_index]
+                    )
+                )
+                if (
+                    family != "gaussian"
+                    or invalid_threshold
+                    or component_precision is None
+                    or np.any(component_precision <= 0.0)
+                ):
+                    raise ValueError(
+                        "posterior draw index has an invalid component model"
+                    )
+                reconstructed[:, :, component_index] = ndtr(
+                    (eta[:, :, component_index] - float(threshold))
+                    * np.sqrt(component_precision)
+                )
+                reconstructed[:, :, component_index] = np.clip(
+                    reconstructed[:, :, component_index],
+                    probability_min,
+                    probability_max,
+                )
+            if not np.allclose(
+                probability, reconstructed, rtol=1e-12, atol=1e-15
+            ):
+                raise ValueError(
+                    "posterior block predictor decomposition is inconsistent"
+                )
             expected_combined, _ = _combined_draw_estimand(
                 probability, combination_rule=index["combination_rule"]
             )
@@ -2115,6 +2169,73 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
                 > summary_arrays["combined_interval"][1]
             ):
                 raise ValueError("posterior full-grid intervals are invalid")
+            tail = (1.0 - float(index["ci_level"])) / 2.0
+            for cell_start in range(
+                0, materialized_n_cells, _SUMMARY_CELL_CHUNK_SIZE
+            ):
+                cell_stop = min(
+                    cell_start + _SUMMARY_CELL_CHUNK_SIZE,
+                    materialized_n_cells,
+                )
+                draw_chunk = np.empty(
+                    (
+                        n_draws,
+                        cell_stop - cell_start,
+                        n_components + 1,
+                    ),
+                    dtype=np.float64,
+                )
+                for block in index["blocks"]:
+                    draw_start = int(block["draw_start"])
+                    draw_stop = int(block["draw_stop"])
+                    with np.load(
+                        root / block["path"], allow_pickle=False
+                    ) as payload:
+                        draw_chunk[draw_start:draw_stop, :, :n_components] = (
+                            payload["component_probability"][
+                                :, cell_start:cell_stop, :
+                            ]
+                        )
+                        draw_chunk[draw_start:draw_stop, :, n_components] = (
+                            payload["combined_probability"][
+                                :, cell_start:cell_stop
+                            ]
+                        )
+                full_indices = materialized_indices[cell_start:cell_stop]
+                expected_mean = draw_chunk.mean(axis=0)
+                expected_interval = np.quantile(
+                    draw_chunk, [tail, 1.0 - tail], axis=0
+                )
+                if not np.allclose(
+                    summary_arrays["component_mean"][full_indices],
+                    expected_mean[:, :n_components],
+                    rtol=1e-12,
+                    atol=1e-15,
+                ) or not np.allclose(
+                    summary_arrays["combined_mean"][full_indices],
+                    expected_mean[:, n_components],
+                    rtol=1e-12,
+                    atol=1e-15,
+                ):
+                    raise ValueError(
+                        "posterior full-grid summary means differ from "
+                        "materialized draws"
+                    )
+                if not np.allclose(
+                    summary_arrays["component_interval"][:, full_indices],
+                    expected_interval[:, :, :n_components],
+                    rtol=1e-12,
+                    atol=1e-15,
+                ) or not np.allclose(
+                    summary_arrays["combined_interval"][:, full_indices],
+                    expected_interval[:, :, n_components],
+                    rtol=1e-12,
+                    atol=1e-15,
+                ):
+                    raise ValueError(
+                        "posterior full-grid summary intervals differ from "
+                        "materialized draws"
+                    )
     audit = {
         "schema_version": schema_version,
         "n_cells": n_cells,
@@ -2126,6 +2247,7 @@ def verify_posterior_draw_bundle(  # noqa: PLR0912, PLR0914, PLR0915
         "hashes_verified": True,
         "draw_partition_verified": True,
         "probability_bounds_verified": True,
+        "decomposition_verified": True,
         "combination_verified": True,
     }
     if materialization is not None:

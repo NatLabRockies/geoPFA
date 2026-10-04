@@ -647,7 +647,7 @@ def test_incremental_posterior_writer_persists_state_and_decomposed_blocks(
     expected = np.concatenate(all_components)
     expected_combined = np.prod(expected, axis=2)
 
-    assert index["schema_version"] == 1
+    assert index["schema_version"] == 4
     assert index["combination_rule"] == "product"
     assert index["combination_estimand"] == "within_draw_component_product"
     assert index["scope"] == "scenario:physical_isotropic"
@@ -691,6 +691,50 @@ def test_incremental_posterior_writer_persists_state_and_decomposed_blocks(
                     )
                 ),
             )
+
+
+def test_schema_v4_bundle_verification_rejects_tampered_decomposition(
+    tmp_path: Path,
+) -> None:
+    """Schema v4 verifies persisted probabilities against their predictors."""
+    grid = gpd.GeoDataFrame(
+        geometry=gpd.points_from_xy([0.0], [1.0]), crs="EPSG:32610"
+    )
+    writer = PosteriorDrawBlockWriter(
+        grid,
+        tmp_path,
+        component_names=("heat",),
+        n_draws=1,
+        block_size=1,
+        seed=17,
+        combination_rule="product",
+        scope="baseline",
+        state_arrays={"prior_logit": np.zeros((1, 1))},
+        state_metadata=_posterior_metadata(("heat",)),
+    )
+    writer.write_block(
+        0,
+        component_probability=np.full((1, 1, 1), 0.5),
+        prior_logit=np.zeros((1, 1)),
+        evidence_logit=np.zeros((1, 1, 1)),
+        spatial_logit=np.zeros((1, 1, 1)),
+    )
+    summary = writer.finalize(ci_level=0.9)
+    index = json.loads(summary.index_path.read_text(encoding="utf-8"))
+    assert index["schema_version"] == 4
+
+    block_path = summary.index_path.parent / index["blocks"][0]["path"]
+    with np.load(block_path, allow_pickle=False) as payload:
+        altered = {name: payload[name] for name in payload.files}
+    altered["component_probability"] = np.full((1, 1, 1), 0.9)
+    altered["combined_probability"] = np.full((1, 1), 0.9)
+    np.savez_compressed(block_path, **altered)
+    index["blocks"][0]["size_bytes"] = block_path.stat().st_size
+    index["blocks"][0]["sha256"] = _sha256(block_path)
+    summary.index_path.write_text(json.dumps(index), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="predictor decomposition"):
+        verify_posterior_draw_bundle(summary.index_path)
 
 
 def test_incremental_writer_persists_mixed_family_predictive_blocks(
@@ -744,7 +788,7 @@ def test_incremental_writer_persists_mixed_family_predictive_blocks(
     index = json.loads(summary.index_path.read_text(encoding="utf-8"))
     audit = verify_posterior_draw_bundle(summary.index_path)
 
-    assert index["schema_version"] == 1
+    assert index["schema_version"] == 4
     assert index["component_models"] == [
         {"family": "gaussian", "event_threshold_scaled": 8.0},
         {"family": "bernoulli"},
@@ -753,7 +797,8 @@ def test_incremental_writer_persists_mixed_family_predictive_blocks(
         "prior_linear_predictor + evidence_linear_predictor + "
         "spatial_linear_predictor"
     )
-    assert audit["schema_version"] == 1
+    assert audit["schema_version"] == 4
+    assert audit["decomposition_verified"] is True
     np.testing.assert_allclose(
         summary.component_mean, probability.mean(axis=0)
     )
